@@ -1,0 +1,23 @@
+{
+  "name": "localagent",
+  "version": "0.1.0",
+  "description": "Local-first autonomous coding agent prototype (vertical slice: Phases 1-5)",
+  "type": "module",
+  "bin": {
+    "localagent": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js",
+    "demo": "node dist/demo.js",
+    "test": "node dist/test/agent.test.js"
+  },
+  "dependencies": {
+    "node-llama-cpp": "^3.20.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "typescript": "^5.5.4"
+  }
+}
