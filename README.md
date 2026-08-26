@@ -1,9 +1,9 @@
 # localagent — working prototype
 
-A small but *real*, runnable slice of the local-first autonomous coding agent
-spec: provider abstraction, tool registry, permission engine, and an actual
-agent loop — not a mockup. It corresponds to Phases 1–5 of the roadmap
-(foundation, repository access, agent loop, editing, terminal + verification).
+A small, runnable slice of the local-first autonomous coding agent spec:
+provider abstraction, tool registry, permission engine, and a working agent
+loop. It corresponds to Phases 1–5 of the roadmap (foundation, repository
+access, agent loop, editing, terminal + verification).
 
 ## What's actually implemented
 
@@ -41,9 +41,22 @@ agent loop — not a mockup. It corresponds to Phases 1–5 of the roadmap
   stream (`status`, `tool.start`, `tool.result`, `permission.request`,
   `text`, `done`, `error`).
 - **CLI** (`src/cli.ts`) — connects the above to a real local model server.
-- **Tests** (`src/test/agent.test.ts`) — 11 assertions covering command risk
-  classification, permission decisions across all modes, and a full scripted
-  agent run.
+- **Electron desktop app — "Foundation"** (`src/electron/`) — a Mac/Windows
+  shell around the same core, zero changes to `agent.ts` (see
+  `docs/superpowers/specs/2026-08-25-electron-foundation-design.md`).
+  `sessionRegistry.ts` holds the provider/session logic (unit-tested, no
+  Electron imports); `main.ts` owns the one `AgentSession` and exposes it to
+  the renderer over IPC; `preload.cjs` is a hand-written CommonJS bridge
+  (`contextIsolation: true`, `nodeIntegration: false`); `renderer/` is a
+  vanilla-TS single-window UI: workspace picker, provider/mode selection,
+  task input, and a live event log with inline permission approve/deny.
+  One session at a time — multi-session, a diff viewer, and settings
+  persistence are follow-on sub-projects, not built here.
+- **Tests** (`src/test/agent.test.ts`, `src/test/sessionRegistry.test.ts`) —
+  covering command risk classification, permission decisions across all
+  modes, a full scripted agent run, and the Electron session-registry logic
+  (session start/provider selection, event streaming, permission
+  unblocking, cancellation) via `MockProvider`.
 - **Working end-to-end demo** (`src/demo.ts` + `fixture-repo/`) — a tiny repo
   with an intentionally broken `add()` function and a failing test. The demo
   scripts a fake model that reads the file, runs the failing test, fixes the
@@ -64,7 +77,10 @@ npm run demo
 npm test
 
 # Embedded mode — no server, no other app. Downloads and caches a GGUF
-# model on first run (default: Qwen2.5-Coder-1.5B-Instruct, ~1GB):
+# model on first run (default: Qwen2.5-Coder-1.5B-Instruct, ~1GB) to
+# node-llama-cpp's default models directory, ~/.node-llama-cpp/models —
+# delete that folder to clear the cache, or pre-seed it offline before a
+# machine goes air-gapped.
 node dist/cli.js "explain how add() works in math.js" \
   --workspace ./fixture-repo \
   --mode DEFAULT
@@ -77,7 +93,7 @@ node dist/cli.js "explain how add() works in math.js" \
   --mode DEFAULT
 ```
 
-`--mode PLAN` will refuse all writes/exec; `--mode ACCEPT_EDITS` auto-allows
+`--mode PLAN` refuses all writes/exec; `--mode ACCEPT_EDITS` auto-allows
 file edits but still asks before running shell commands; `DEFAULT` asks
 before both.
 
@@ -86,15 +102,40 @@ with it, `--model` is the id the server expects (e.g. `qwen2.5-coder:latest`);
 without it (embedded mode), `--model` picks `small` (default) / `medium` /
 `large` from the curated list in `src/models.ts`.
 
+### Desktop app
+
+```bash
+npm run build      # also copies src/electron's static assets into dist/electron/
+npm run electron
+```
+
+Pick a workspace (e.g. `fixture-repo`), choose embedded or external
+provider, pick a mode, type a task, hit Run — the event log renders tool
+calls/results live, with inline Approve/Deny buttons for anything the
+permission engine asks about.
+
+> **If you're running this from inside a sandboxed agent CLI** (e.g. Claude
+> Code) rather than a normal terminal: some sandboxes set
+> `ELECTRON_RUN_AS_NODE=1` so their own bundled Electron binary can double as
+> a plain Node runtime internally. That env var makes *any* Electron binary
+> skip its app/window machinery entirely and just run the entry file as
+> plain Node — `import ... from "electron"` then fails or resolves to `{}`,
+> and no window ever opens. It's not a bug in this app; unset it for the
+> `electron` process specifically: `env -u ELECTRON_RUN_AS_NODE npm run
+> electron`. A normal user terminal won't have this variable set at all.
+
 ## What's deliberately out of scope here
 
 This is a vertical slice proving the harness is real and correct, not the
-full spec. Not built: VS Code extension/UI, Tree-sitter/LSP symbol
-intelligence, subagents, MCP client, hooks, model router / hardware
-detection, checkpoints/undo via git worktrees, sandboxed execution, licensing.
+full spec. Not built: VS Code extension, Tree-sitter/LSP symbol
+intelligence, subagents, MCP client, hooks, checkpoints/undo via git
+worktrees, sandboxed execution, licensing, and — within the Electron app
+itself — packaging/installers, multi-session/tabs, a diff viewer, and
+settings persistence.
 The architecture (provider interface, tool interface, permission engine,
 typed event stream) is intentionally the part designed to extend into those
 without rework — see the original build prompt's Section 68 boundary rule:
 none of `agent.ts`, `permissions.ts`, `toolRegistry.ts`, or the tools import
-any UI-specific code, so a VS Code extension or CLI can sit on top
-interchangeably.
+any UI-specific code, so a VS Code extension, the CLI, and the Electron app
+all sit on top interchangeably — the Electron desktop app now proves that
+in practice, with zero changes to `agent.ts`.

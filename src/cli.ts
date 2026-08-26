@@ -4,6 +4,7 @@ import { AgentSession } from "./agent.js";
 import { defaultToolRegistry } from "./toolRegistry.js";
 import { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
 import { EmbeddedLlamaProvider } from "./providers/embeddedLlama.js";
+import { AnthropicProvider } from "./providers/anthropicProvider.js";
 import { isEmbeddedModelSize } from "./models.js";
 import type { ModelProvider, PermissionMode, ToolCall } from "./types.js";
 
@@ -29,9 +30,10 @@ async function main() {
   const task = positional.join(" ");
   if (!task) {
     console.error(
-      'Usage: localagent "<task description>" [--workspace <dir>] [--base-url <url>] [--model <name>] [--mode DEFAULT|PLAN|ACCEPT_EDITS|AUTO_SAFE]\n' +
-        "  --base-url given    → talk to that OpenAI-compatible server (Ollama/LM Studio/etc), --model is its model id.\n" +
-        "  --base-url omitted  → run a model in-process, no server needed. --model selects small|medium|large (default small)."
+      'Usage: localagent "<task description>" [--workspace <dir>] [--base-url <url>] [--model <name>] [--mode DEFAULT|PLAN|ACCEPT_EDITS|AUTO_SAFE] [--provider anthropic]\n' +
+        "  --base-url given     → talk to that OpenAI-compatible server (Ollama/LM Studio/etc), --model is its model id.\n" +
+        "  --base-url omitted   → run a model in-process, no server needed. --model selects small|medium|large (default small).\n" +
+        "  --provider anthropic → use the real Claude Sonnet 5 API instead — sends code over the network, needs ANTHROPIC_API_KEY."
     );
     process.exit(1);
   }
@@ -43,7 +45,17 @@ async function main() {
   let provider: ModelProvider;
   let model: string;
 
-  if (baseUrl) {
+  if (args.provider === "anthropic") {
+    model = "claude-sonnet-5";
+    provider = new AnthropicProvider();
+    console.log("\n[localagent] using the Claude Sonnet 5 API — code and task context will be sent to Anthropic over the network…");
+    const healthy = await provider.healthCheck();
+    if (!healthy) {
+      console.error("\nCould not reach the Anthropic API with the current credentials.");
+      console.error("Set ANTHROPIC_API_KEY, or run `ant auth login`, then try again.\n");
+      process.exit(1);
+    }
+  } else if (baseUrl) {
     model = args.model ?? "qwen2.5-coder:latest";
     provider = new OpenAICompatibleProvider({ baseUrl, local: true });
     const healthy = await provider.healthCheck();
