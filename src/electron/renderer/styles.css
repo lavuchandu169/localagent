@@ -358,6 +358,9 @@ input:disabled {
   flex-direction: column;
   gap: 6px;
   font-family: var(--font-mono);
+  /* Tool arguments/results can contain long unbreakable tokens (paths, blobs) —
+     wrap them instead of overflowing the window with a horizontal scrollbar. */
+  overflow-wrap: anywhere;
 }
 
 #event-log:has(#empty-state:not([hidden])) {
@@ -391,15 +394,27 @@ input:disabled {
 }
 
 .log-task {
-  color: var(--signal);
-  font-weight: 500;
+  align-self: flex-end;
+  max-width: 75%;
+  background: color-mix(in srgb, var(--signal) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--signal) 30%, var(--line));
+  color: var(--text);
+  font-family: var(--font-sans);
+  padding: 10px 14px;
+  border-radius: 14px 14px 4px 14px;
+  white-space: pre-wrap;
 }
 
 .log-text {
+  align-self: flex-start;
+  max-width: 85%;
   white-space: pre-wrap;
-  border-left: 2px solid var(--signal-dim);
-  padding-left: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 12px 16px;
+  border-radius: 14px 14px 14px 4px;
   font-family: var(--font-sans);
+  line-height: 1.6;
 }
 
 .log-done {
@@ -434,7 +449,7 @@ input:disabled {
 .tool-card-header {
   color: var(--text);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
 }
 

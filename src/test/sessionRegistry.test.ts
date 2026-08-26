@@ -1,4 +1,5 @@
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   createSessionRegistry,
@@ -36,6 +37,16 @@ await (async () => {
       { providerFactory: () => new MockProvider([]) }
     );
     check("startSession returns a sessionId and registers it", registry.sessions.has(sessionId));
+  }
+
+  {
+    const registry = createSessionRegistry();
+    const { workspaceRoot: resolved } = await startSession(
+      registry,
+      { provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([]) }
+    );
+    check("startSession defaults workspaceRoot to the home directory when none is given", resolved === os.homedir());
   }
 
   {

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import os from "node:os";
 import { AgentSession } from "../agent.js";
 import { defaultToolRegistry } from "../toolRegistry.js";
 import { OpenAICompatibleProvider } from "../providers/openaiCompatible.js";
@@ -13,7 +14,8 @@ export type ProviderConfig =
   | { kind: "anthropic" };
 
 export interface SessionConfig {
-  workspaceRoot: string;
+  /** Omit to chat without file access — defaults to the home directory. */
+  workspaceRoot?: string;
   provider: ProviderConfig;
   mode: PermissionMode;
 }
@@ -54,7 +56,7 @@ export async function startSession(
     providerFactory?: (c: ProviderConfig, onDownloadProgress?: (status: ModelDownloadProgress) => void) => ModelProvider;
     onDownloadProgress?: (status: ModelDownloadProgress) => void;
   } = {}
-): Promise<{ sessionId: string }> {
+): Promise<{ sessionId: string; workspaceRoot: string }> {
   const provider = (deps.providerFactory ?? buildProvider)(config.provider, deps.onDownloadProgress);
   const healthy = await provider.healthCheck();
   if (!healthy) {
@@ -63,9 +65,10 @@ export async function startSession(
 
   const sessionId = crypto.randomUUID();
   const pendingApprovals = new Map<string, (approved: boolean) => void>();
+  const workspaceRoot = config.workspaceRoot ?? os.homedir();
 
   const session = new AgentSession({
-    workspaceRoot: config.workspaceRoot,
+    workspaceRoot,
     model:
       config.provider.kind === "openai-compatible"
         ? config.provider.model
@@ -82,7 +85,7 @@ export async function startSession(
   });
 
   registry.sessions.set(sessionId, { session, pendingApprovals });
-  return { sessionId };
+  return { sessionId, workspaceRoot };
 }
 
 export async function runTask(

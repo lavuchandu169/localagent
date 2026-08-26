@@ -16,7 +16,7 @@ interface DownloadProgress {
 }
 
 interface AgentBridge {
-  startSession(config: SessionConfig): Promise<{ sessionId: string }>;
+  startSession(config: SessionConfig): Promise<{ sessionId: string; workspaceRoot: string }>;
   runTask(sessionId: string, task: string): Promise<void>;
   respondPermission(sessionId: string, callId: string, approved: boolean): Promise<void>;
   cancelSession(sessionId: string): Promise<void>;
@@ -248,10 +248,6 @@ window.agent.onDownloadProgress((status) => {
 
 startSessionBtn.addEventListener("click", async () => {
   startError.textContent = "";
-  if (!workspaceRoot) {
-    startError.textContent = "Choose a workspace folder first.";
-    return;
-  }
 
   const useAnthropic = advancedDisclosure.open && advancedProviderAnthropic.checked;
   const useExternal = advancedDisclosure.open && advancedProviderExternal.checked && baseUrlInput.value.trim().length > 0;
@@ -261,12 +257,19 @@ startSessionBtn.addEventListener("click", async () => {
       ? { kind: "openai-compatible", baseUrl: baseUrlInput.value.trim(), model: externalModelInput.value.trim() }
       : { kind: "embedded", size: embeddedSizeSelect.value };
 
-  const config: SessionConfig = { workspaceRoot, provider, mode: modeSelect.value as PermissionMode };
+  // workspaceRoot omitted entirely when none was picked — startSession defaults
+  // it to the home directory and hands back whichever path it actually used.
+  const config: SessionConfig = { ...(workspaceRoot ? { workspaceRoot } : {}), provider, mode: modeSelect.value as PermissionMode };
 
   startSessionBtn.disabled = true;
   try {
     const result = await window.agent.startSession(config);
     sessionId = result.sessionId;
+    if (!workspaceRoot) {
+      workspaceRoot = result.workspaceRoot;
+      workspacePathEl.textContent = `${result.workspaceRoot} (default — no folder chosen)`;
+      aboutWorkspace.textContent = result.workspaceRoot;
+    }
     taskInput.disabled = false;
     runTaskBtn.disabled = false;
     logLine(`Session started (${provider.kind}, mode=${config.mode})`, "log-status");
@@ -309,7 +312,7 @@ runTaskBtn.addEventListener("click", async () => {
   toolCards.clear();
   runTaskBtn.disabled = true;
   const task = taskInput.value;
-  logLine(`> ${task}`, "log-task");
+  logLine(task, "log-task");
   await window.agent.runTask(sessionId, task);
 });
 
