@@ -51,7 +51,12 @@ access, agent loop, editing, terminal + verification).
   vanilla-TS single-window UI: workspace picker, provider/mode selection,
   task input, and a live event log with inline permission approve/deny.
   One session at a time — multi-session, a diff viewer, and settings
-  persistence are follow-on sub-projects, not built here.
+  persistence are follow-on sub-projects, not built here. `googleAuth.ts`
+  adds optional Google sign-in (system browser + PKCE + a loopback
+  redirect server, see
+  `docs/superpowers/specs/2026-08-26-google-apple-signin-design.md`) —
+  identity only, nothing is gated by it; Apple sign-in is a disabled UI
+  stub pending an Apple Developer account and a registered domain.
 - **Tests** (`src/test/agent.test.ts`, `src/test/sessionRegistry.test.ts`) —
   covering command risk classification, permission decisions across all
   modes, a full scripted agent run, and the Electron session-registry logic
@@ -113,6 +118,29 @@ Pick a workspace (e.g. `fixture-repo`), choose embedded or external
 provider, pick a mode, type a task, hit Run — the event log renders tool
 calls/results live, with inline Approve/Deny buttons for anything the
 permission engine asks about.
+
+Optionally, sign in with a Google account from the header control — this is
+identity only right now (nothing in the app is gated by it). It needs a
+Google Cloud OAuth Client ID, which you create yourself:
+
+1. https://console.cloud.google.com/ → create/select a project.
+2. APIs & Services → OAuth consent screen → configure (External or
+   Internal) with an app name and support email.
+3. APIs & Services → Credentials → Create Credentials → OAuth client ID →
+   Application type: **Desktop app**.
+4. Copy the generated Client ID.
+5. Set it as `GOOGLE_OAUTH_CLIENT_ID` in the environment the Electron app
+   launches from — same pattern as `ANTHROPIC_API_KEY`, no UI field,
+   nothing committed to the repo:
+   ```bash
+   GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com npm run electron
+   ```
+
+Without `GOOGLE_OAUTH_CLIENT_ID` set, "Sign in with Google" shows an inline
+error instead of opening a browser. "Sign in with Apple" is a disabled stub
+for now — it needs a paid Apple Developer account and a registered web
+domain, neither of which exists for this project yet (see
+`docs/superpowers/specs/2026-08-26-google-apple-signin-design.md`).
 
 > **If you're running this from inside a sandboxed agent CLI** (e.g. Claude
 > Code) rather than a normal terminal: some sandboxes set

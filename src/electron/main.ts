@@ -5,9 +5,9 @@ import { createSessionRegistry, startSession, runTask, respondPermission, cancel
 import type { SessionConfig } from "./sessionRegistry.js";
 import { checkCachedModels } from "./modelCache.js";
 import { detectHardware, recommendModelSize } from "./hardwareInfo.js";
+import { signInWithGoogle, signOut, getAuthStatus } from "./googleAuth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 const registry = createSessionRegistry();
 
 function createWindow(): BrowserWindow {
@@ -28,6 +28,7 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  const authFilePath = path.join(app.getPath("userData"), "auth.json");
   const win = createWindow();
 
   ipcMain.handle("agent:start-session", (event, config: SessionConfig) =>
@@ -60,7 +61,9 @@ app.whenReady().then(() => {
     if (result.canceled) return null;
     return result.filePaths[0] ?? null;
   });
-
+  ipcMain.handle("agent:google-sign-in", () => signInWithGoogle(process.env.GOOGLE_OAUTH_CLIENT_ID ?? "", authFilePath));
+  ipcMain.handle("agent:sign-out", () => signOut(authFilePath));
+  ipcMain.handle("agent:auth-status", () => getAuthStatus(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID));
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

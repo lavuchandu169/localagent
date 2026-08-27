@@ -24,4 +24,7 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.on("agent:model-progress", listener);
     return () => ipcRenderer.removeListener("agent:model-progress", listener);
   },
+  googleSignIn: () => ipcRenderer.invoke("agent:google-sign-in"),
+  signOut: () => ipcRenderer.invoke("agent:sign-out"),
+  getAuthStatus: () => ipcRenderer.invoke("agent:auth-status"),
 });
