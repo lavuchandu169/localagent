@@ -152,6 +152,12 @@ export class AgentSession {
         content: response.turn.content ?? "",
         tool_calls: response.turn.toolCalls,
       });
+      // Tool-call ids aren't guaranteed unique across turns (the embedded
+      // provider mints them as call_0, call_1, ... reset per turn), so the
+      // backfill below must only look at replies pushed for *this* turn —
+      // scanning the whole history would treat a same-numbered id answered
+      // in an earlier turn as already answering this turn's call too.
+      const turnRepliesStart = this.messages.length;
 
       for (const call of response.turn.toolCalls) {
         if (this.cancelled) break;
@@ -232,9 +238,12 @@ export class AgentSession {
       // tool_calls entry makes the persisted history invalid for a strict
       // provider (Anthropic rejects tool_use with no matching tool_result)
       // if this session is ever resumed. Backfill a synthetic reply for
-      // anything left unanswered.
+      // anything left unanswered, looking only at this turn's own replies.
       const answeredCallIds = new Set(
-        this.messages.filter((m) => m.role === "tool" && m.tool_call_id).map((m) => m.tool_call_id)
+        this.messages
+          .slice(turnRepliesStart)
+          .filter((m) => m.role === "tool" && m.tool_call_id)
+          .map((m) => m.tool_call_id)
       );
       for (const call of response.turn.toolCalls) {
         if (answeredCallIds.has(call.id)) continue;

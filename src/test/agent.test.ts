@@ -4,10 +4,10 @@ import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
 import { PermissionEngine, classifyCommand } from "../permissions.js";
 import { AgentSession } from "../agent.js";
-import { defaultToolRegistry } from "../toolRegistry.js";
+import { defaultToolRegistry, ToolRegistry } from "../toolRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { toLlamaHistory, toLlamaFunctions, fromLlamaResult } from "../providers/embeddedLlama.js";
-import type { ChatResponse, ToolCall } from "../types.js";
+import type { ChatResponse, Tool, ToolCall } from "../types.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -276,6 +276,78 @@ await (async () => {
   check(
     "without initialMessages, a session still starts with just the system prompt",
     freshSession.getMessages().length === 1 && freshSession.getMessages()[0]?.role === "system"
+  );
+})();
+
+console.log("\nMid-turn cancellation backfill doesn't over-scope to earlier turns:");
+await (async () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const workspaceRoot = path.resolve(__dirname, "..", "..", "fixture-repo");
+
+  let session: AgentSession;
+  const cancelTool: Tool = {
+    name: "trigger_cancel",
+    description: "test-only tool that cancels the session as a side effect of executing",
+    permission: "READ",
+    inputSchema: {},
+    execute: async () => {
+      session.cancel();
+      return { ok: true, output: "cancelled" };
+    },
+  };
+  const noopTool: Tool = {
+    name: "noop",
+    description: "test-only tool that should never actually run once cancelled",
+    permission: "READ",
+    inputSchema: {},
+    execute: async () => ({ ok: true, output: "noop" }),
+  };
+
+  const script: ChatResponse[] = [
+    // Task 1: a single tool call using id "call_1", answered normally.
+    { turn: { type: "tool_calls", toolCalls: [{ id: "call_1", name: "noop", arguments: {} }] } },
+    { turn: { type: "final", content: "task 1 done" } },
+    // Task 2: two calls in one turn. The first (id "call_0") triggers
+    // cancellation as a side effect and still gets a real reply, since the
+    // cancelled check only runs at the top of each loop iteration. The
+    // second reuses id "call_1" — the SAME id task 1 already answered — and
+    // must still get its own backfilled reply for *this* turn, not be
+    // skipped because a call with that id was answered in an earlier turn.
+    {
+      turn: {
+        type: "tool_calls",
+        toolCalls: [
+          { id: "call_0", name: "trigger_cancel", arguments: {} },
+          { id: "call_1", name: "noop", arguments: {} },
+        ],
+      },
+    },
+  ];
+
+  session = new AgentSession({
+    workspaceRoot,
+    model: "mock",
+    provider: new MockProvider(script),
+    tools: new ToolRegistry([cancelTool, noopTool]),
+    permissionMode: "DEFAULT",
+  });
+
+  for await (const _event of session.run("first task")) {
+    // drain
+  }
+  for await (const _event of session.run("second task")) {
+    // drain
+  }
+
+  const messages = session.getMessages();
+  const toolReplies = messages.filter((m) => m.role === "tool");
+  const call1Replies = toolReplies.filter((m) => m.tool_call_id === "call_1");
+
+  check("id 'call_1' is answered once per turn it appears in, not deduped across turns", call1Replies.length === 2);
+  check(
+    "the second turn's reused call_1 gets a synthetic 'cancelled before execution' reply, not silently dropped",
+    (call1Replies[1]?.content ?? "").includes("Cancelled before execution")
   );
 })();
 
