@@ -89,9 +89,135 @@ body {
   color: var(--ink);
   font-family: var(--font-sans);
   font-size: 13px;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#app-shell {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+}
+
+#sidebar {
+  width: 220px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  gap: 8px;
+  padding: 10px;
+  border-right: 1px solid var(--line);
+  background: var(--surface-2);
+  overflow-y: auto;
+}
+
+#sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#sidebar-title {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+#new-session-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+#new-session-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink-dim);
+}
+
+#session-search {
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+#session-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#session-list-empty {
+  font-size: 11px;
+  padding: 8px 4px;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 4px 4px 9px;
+}
+
+.session-item:hover {
+  border-color: var(--ink-dim);
+}
+
+.session-item.active {
+  border-color: var(--accent-strong);
+  background: var(--surface-2);
+}
+
+.session-item-label {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-item-delete {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.session-item-delete:hover {
+  color: var(--danger);
+}
+
+#app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 

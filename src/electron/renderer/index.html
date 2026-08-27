@@ -6,124 +6,139 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <header id="app-header">
-      <div id="brand">
-        <svg id="brand-mark" viewBox="0 0 100 100" aria-hidden="true">
-          <rect x="2" y="2" width="96" height="96" rx="22" fill="#F5F3EC" stroke="#E4E0D3" stroke-width="2" />
-          <rect x="24" y="24" width="52" height="52" rx="12" fill="none" stroke="#C15F3C" stroke-width="3" opacity="0.55" />
-          <circle cx="50" cy="50" r="11" fill="#C15F3C" />
-        </svg>
-        <span id="brand-name">localagent</span>
-      </div>
-      <div id="header-right">
-        <div id="auth-control">
-          <div id="auth-signed-out" class="row">
-            <button id="google-sign-in">Sign in with Google</button>
-            <button id="apple-sign-in" disabled title="Coming soon — needs an Apple Developer account and a registered domain">Sign in with Apple</button>
-          </div>
-          <div id="auth-signed-in" class="row" hidden>
-            <span id="auth-avatar"></span>
-            <span id="auth-name"></span>
-            <button id="sign-out-btn">Sign out</button>
-          </div>
-          <div id="auth-error" class="error-text"></div>
+    <div id="app-shell">
+      <aside id="sidebar">
+        <div id="sidebar-header">
+          <span id="sidebar-title">History</span>
+          <button id="new-session-btn" title="New session">+</button>
         </div>
-        <button id="about-toggle" aria-expanded="false" title="About">?</button>
-      </div>
-    </header>
+        <input id="session-search" type="search" placeholder="Search sessions…" />
+        <div id="session-list">
+          <div id="session-list-empty" class="hint-text">No saved sessions yet</div>
+        </div>
+      </aside>
 
-    <div id="about-panel" hidden>
-      <p>A local-first coding agent. Everything — the model, the file access, the shell commands — runs on this machine. Nothing is sent anywhere else, except an optional Google sign-in, which talks to Google's servers to confirm who you are.</p>
-      <dl>
-        <dt>Embedded model cache</dt>
-        <dd>~/.node-llama-cpp/models</dd>
-        <dt>Workspace</dt>
-        <dd id="about-workspace">(none selected)</dd>
-        <dt>Your machine</dt>
-        <dd id="about-hardware">Detecting…</dd>
-      </dl>
-      <button id="about-close">Close</button>
+      <div id="app-main">
+        <header id="app-header">
+          <div id="brand">
+            <svg id="brand-mark" viewBox="0 0 100 100" aria-hidden="true">
+              <rect x="2" y="2" width="96" height="96" rx="22" fill="#F5F3EC" stroke="#E4E0D3" stroke-width="2" />
+              <rect x="24" y="24" width="52" height="52" rx="12" fill="none" stroke="#C15F3C" stroke-width="3" opacity="0.55" />
+              <circle cx="50" cy="50" r="11" fill="#C15F3C" />
+            </svg>
+            <span id="brand-name">localagent</span>
+          </div>
+          <div id="header-right">
+            <div id="auth-control">
+              <div id="auth-signed-out" class="row">
+                <button id="google-sign-in">Sign in with Google</button>
+                <button id="apple-sign-in" disabled title="Coming soon — needs an Apple Developer account and a registered domain">Sign in with Apple</button>
+              </div>
+              <div id="auth-signed-in" class="row" hidden>
+                <span id="auth-avatar"></span>
+                <span id="auth-name"></span>
+                <button id="sign-out-btn">Sign out</button>
+              </div>
+              <div id="auth-error" class="error-text"></div>
+            </div>
+            <button id="about-toggle" aria-expanded="false" title="About">?</button>
+          </div>
+        </header>
+
+        <div id="about-panel" hidden>
+          <p>A local-first coding agent. Everything — the model, the file access, the shell commands — runs on this machine. Nothing is sent anywhere else, except an optional Google sign-in, which talks to Google's servers to confirm who you are.</p>
+          <dl>
+            <dt>Embedded model cache</dt>
+            <dd>~/.node-llama-cpp/models</dd>
+            <dt>Workspace</dt>
+            <dd id="about-workspace">(none selected)</dd>
+            <dt>Your machine</dt>
+            <dd id="about-hardware">Detecting…</dd>
+          </dl>
+          <button id="about-close">Close</button>
+        </div>
+
+        <section id="setup">
+          <div class="row">
+            <button id="choose-workspace">Choose workspace…</button>
+            <span id="workspace-path">No workspace selected — optional, you can just chat</span>
+          </div>
+
+          <div id="embedded-fields" class="row">
+            <label>
+              Model size
+              <select id="embedded-size">
+                <option value="small">Small — fastest, lowest memory</option>
+                <option value="medium">Medium — better quality</option>
+                <option value="large">Large — best quality, needs a capable machine</option>
+              </select>
+            </label>
+          </div>
+
+          <details id="advanced-disclosure">
+            <summary>Advanced: use a different provider</summary>
+            <div class="row">
+              <label class="radio-label">
+                <input type="radio" name="advanced-provider" id="advanced-provider-external" value="external" checked />
+                External server
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="advanced-provider" id="advanced-provider-anthropic" value="anthropic" />
+                Claude API (Sonnet 5)
+              </label>
+            </div>
+            <div id="external-fields" class="row">
+              <label>
+                Base URL
+                <input id="base-url" type="text" placeholder="http://localhost:11434/v1" />
+              </label>
+              <label>
+                Model
+                <input id="external-model" type="text" placeholder="qwen2.5-coder:latest" />
+              </label>
+            </div>
+            <div id="anthropic-fields" class="row" hidden>
+              <span class="hint-text">Sends file contents and task context to Anthropic over the network. Needs <code>ANTHROPIC_API_KEY</code> set in your environment (or <code>ant auth login</code>) — no key is entered here.</span>
+            </div>
+          </details>
+
+          <div class="row">
+            <label>
+              Mode
+              <select id="mode"></select>
+            </label>
+            <span id="mode-description" class="hint-text"></span>
+          </div>
+
+          <div class="row">
+            <button id="start-session" class="primary">Start session</button>
+            <div id="start-error" class="error-text"></div>
+          </div>
+
+          <div id="download-progress" class="row" hidden>
+            <div id="download-bar-track">
+              <div id="download-bar-fill"></div>
+            </div>
+            <span id="download-label"></span>
+          </div>
+        </section>
+
+        <section id="run">
+          <div id="active-model-badge" hidden></div>
+          <div class="row">
+            <textarea id="task-input" placeholder="Describe the task…" disabled></textarea>
+            <button id="run-task" class="primary" disabled>Run</button>
+          </div>
+          <div id="task-input-hint" class="hint-text">Enter to run · Shift+Enter for a new line</div>
+        </section>
+
+        <section id="log-section">
+          <div id="event-log">
+            <div id="empty-state">Start a session, then describe a task — every read, edit, and command the agent runs will show up here.</div>
+          </div>
+        </section>
+      </div>
     </div>
-
-    <section id="setup">
-      <div class="row">
-        <button id="choose-workspace">Choose workspace…</button>
-        <span id="workspace-path">No workspace selected — optional, you can just chat</span>
-      </div>
-
-      <div id="embedded-fields" class="row">
-        <label>
-          Model size
-          <select id="embedded-size">
-            <option value="small">Small — fastest, lowest memory</option>
-            <option value="medium">Medium — better quality</option>
-            <option value="large">Large — best quality, needs a capable machine</option>
-          </select>
-        </label>
-      </div>
-
-      <details id="advanced-disclosure">
-        <summary>Advanced: use a different provider</summary>
-        <div class="row">
-          <label class="radio-label">
-            <input type="radio" name="advanced-provider" id="advanced-provider-external" value="external" checked />
-            External server
-          </label>
-          <label class="radio-label">
-            <input type="radio" name="advanced-provider" id="advanced-provider-anthropic" value="anthropic" />
-            Claude API (Sonnet 5)
-          </label>
-        </div>
-        <div id="external-fields" class="row">
-          <label>
-            Base URL
-            <input id="base-url" type="text" placeholder="http://localhost:11434/v1" />
-          </label>
-          <label>
-            Model
-            <input id="external-model" type="text" placeholder="qwen2.5-coder:latest" />
-          </label>
-        </div>
-        <div id="anthropic-fields" class="row" hidden>
-          <span class="hint-text">Sends file contents and task context to Anthropic over the network. Needs <code>ANTHROPIC_API_KEY</code> set in your environment (or <code>ant auth login</code>) — no key is entered here.</span>
-        </div>
-      </details>
-
-      <div class="row">
-        <label>
-          Mode
-          <select id="mode"></select>
-        </label>
-        <span id="mode-description" class="hint-text"></span>
-      </div>
-
-      <div class="row">
-        <button id="start-session" class="primary">Start session</button>
-        <div id="start-error" class="error-text"></div>
-      </div>
-
-      <div id="download-progress" class="row" hidden>
-        <div id="download-bar-track">
-          <div id="download-bar-fill"></div>
-        </div>
-        <span id="download-label"></span>
-      </div>
-    </section>
-
-    <section id="run">
-      <div id="active-model-badge" hidden></div>
-      <div class="row">
-        <textarea id="task-input" placeholder="Describe the task…" disabled></textarea>
-        <button id="run-task" class="primary" disabled>Run</button>
-      </div>
-      <div id="task-input-hint" class="hint-text">Enter to run · Shift+Enter for a new line</div>
-    </section>
-
-    <section id="log-section">
-      <div id="event-log">
-        <div id="empty-state">Start a session, then describe a task — every read, edit, and command the agent runs will show up here.</div>
-      </div>
-    </section>
 
     <script type="module" src="./renderer.js"></script>
   </body>
