@@ -111,19 +111,39 @@ export async function clearStoredIdentity(authFilePath: string): Promise<void> {
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v3/userinfo";
 
-async function exchangeCodeForTokens(clientId: string, code: string, codeVerifier: string, redirectUri: string): Promise<StoredTokens> {
-  // If Google rejects this with invalid_client on first live verification, a
-  // GOOGLE_OAUTH_CLIENT_SECRET may be required for this client type despite PKCE — see spec.
+/**
+ * Google's OAuth consent screen setup lets a "Desktop app" client be created
+ * either as a legacy type that still requires client_secret on every token
+ * request, or a newer type that doesn't. There's no way to tell which one a
+ * given Client ID is without trying — so client_secret is sent whenever the
+ * caller has one (via GOOGLE_OAUTH_CLIENT_SECRET), and omitted otherwise.
+ */
+export function buildTokenRequestBody(params: Record<string, string>, clientSecret?: string): URLSearchParams {
+  const body = new URLSearchParams(params);
+  if (clientSecret) body.set("client_secret", clientSecret);
+  return body;
+}
+
+async function exchangeCodeForTokens(
+  clientId: string,
+  code: string,
+  codeVerifier: string,
+  redirectUri: string,
+  clientSecret?: string
+): Promise<StoredTokens> {
   const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      code,
-      code_verifier: codeVerifier,
-      grant_type: "authorization_code",
-      redirect_uri: redirectUri,
-    }),
+    body: buildTokenRequestBody(
+      {
+        client_id: clientId,
+        code,
+        code_verifier: codeVerifier,
+        grant_type: "authorization_code",
+        redirect_uri: redirectUri,
+      },
+      clientSecret
+    ),
   });
   if (!response.ok) {
     throw new Error(`Google token exchange failed: ${response.status} ${(await response.text()).slice(0, 200)}`);
@@ -144,7 +164,7 @@ async function fetchUserInfo(accessToken: string): Promise<GoogleUserInfoRespons
 
 export type SignInResult = { email: string; name: string; pictureUrl: string | null } | { error: string };
 
-export async function signInWithGoogle(clientId: string, authFilePath: string): Promise<SignInResult> {
+export async function signInWithGoogle(clientId: string, authFilePath: string, clientSecret?: string): Promise<SignInResult> {
   if (!clientId) {
     return { error: "GOOGLE_OAUTH_CLIENT_ID is not set — see README for how to create one." };
   }
@@ -200,7 +220,7 @@ export async function signInWithGoogle(clientId: string, authFilePath: string): 
     });
     const { code } = await Promise.race([redirectPromise, timeoutPromise]);
 
-    const tokens = await exchangeCodeForTokens(clientId, code, codeVerifier, redirectUri);
+    const tokens = await exchangeCodeForTokens(clientId, code, codeVerifier, redirectUri, clientSecret);
     const userInfo = await fetchUserInfo(tokens.accessToken);
     const identity = mapUserInfo(userInfo, tokens.refreshToken);
 
@@ -223,15 +243,18 @@ export function classifyRefreshResponse(status: number): RefreshOutcome {
 }
 
 /** Resolves to fresh tokens on success, null only on confirmed revocation (caller should sign out), or throws on a transient failure (caller should keep the cached identity). */
-export async function refreshAccessToken(clientId: string, refreshToken: string): Promise<StoredTokens | null> {
+export async function refreshAccessToken(clientId: string, refreshToken: string, clientSecret?: string): Promise<StoredTokens | null> {
   const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
+    body: buildTokenRequestBody(
+      {
+        client_id: clientId,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      },
+      clientSecret
+    ),
     signal: AbortSignal.timeout(10_000),
   });
   const outcome = classifyRefreshResponse(response.status);
@@ -247,7 +270,7 @@ export async function refreshAccessToken(clientId: string, refreshToken: string)
 
 export type AuthStatus = { signedIn: false } | { signedIn: true; email: string; name: string; pictureUrl: string | null };
 
-export async function getAuthStatus(authFilePath: string, clientId: string | undefined): Promise<AuthStatus> {
+export async function getAuthStatus(authFilePath: string, clientId: string | undefined, clientSecret?: string): Promise<AuthStatus> {
   const identity = await loadStoredIdentity(authFilePath);
   if (!identity) return { signedIn: false };
 
@@ -256,7 +279,7 @@ export async function getAuthStatus(authFilePath: string, clientId: string | und
   // silently and fall back to signed-out — no scheduled refresh, per spec.
   if (identity.refreshToken && clientId) {
     try {
-      const refreshed = await refreshAccessToken(clientId, identity.refreshToken);
+      const refreshed = await refreshAccessToken(clientId, identity.refreshToken, clientSecret);
       if (!refreshed) {
         await clearStoredIdentity(authFilePath);
         return { signedIn: false };

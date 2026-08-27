@@ -61,9 +61,13 @@ app.whenReady().then(() => {
     if (result.canceled) return null;
     return result.filePaths[0] ?? null;
   });
-  ipcMain.handle("agent:google-sign-in", () => signInWithGoogle(process.env.GOOGLE_OAUTH_CLIENT_ID ?? "", authFilePath));
+  ipcMain.handle("agent:google-sign-in", () =>
+    signInWithGoogle(process.env.GOOGLE_OAUTH_CLIENT_ID ?? "", authFilePath, process.env.GOOGLE_OAUTH_CLIENT_SECRET)
+  );
   ipcMain.handle("agent:sign-out", () => signOut(authFilePath));
-  ipcMain.handle("agent:auth-status", () => getAuthStatus(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID));
+  ipcMain.handle("agent:auth-status", () =>
+    getAuthStatus(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID, process.env.GOOGLE_OAUTH_CLIENT_SECRET)
+  );
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
