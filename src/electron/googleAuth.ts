@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import http from "node:http";
+import { shell } from "electron";
 
 export interface PkcePair {
   codeVerifier: string;
@@ -101,4 +103,140 @@ export async function saveStoredIdentity(authFilePath: string, identity: StoredI
 
 export async function clearStoredIdentity(authFilePath: string): Promise<void> {
   await fs.rm(authFilePath, { force: true });
+}
+
+const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const GOOGLE_USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v3/userinfo";
+
+async function exchangeCodeForTokens(clientId: string, code: string, codeVerifier: string, redirectUri: string): Promise<StoredTokens> {
+  const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      code,
+      code_verifier: codeVerifier,
+      grant_type: "authorization_code",
+      redirect_uri: redirectUri,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Google token exchange failed: ${response.status} ${await response.text()}`);
+  }
+  const raw = (await response.json()) as GoogleTokenResponse;
+  return mapTokenResponse(raw);
+}
+
+async function fetchUserInfo(accessToken: string): Promise<GoogleUserInfoResponse> {
+  const response = await fetch(GOOGLE_USERINFO_ENDPOINT, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new Error(`Google userinfo request failed: ${response.status} ${await response.text()}`);
+  }
+  return (await response.json()) as GoogleUserInfoResponse;
+}
+
+export type SignInResult = { email: string; name: string; pictureUrl: string | null } | { error: string };
+
+export async function signInWithGoogle(clientId: string, authFilePath: string): Promise<SignInResult> {
+  if (!clientId) {
+    return { error: "GOOGLE_OAUTH_CLIENT_ID is not set — see README for how to create one." };
+  }
+
+  try {
+    const { codeVerifier, codeChallenge } = generatePkcePair();
+    const state = generateState();
+
+    // Bind first so the real assigned port is known before building the
+    // auth URL and opening the browser.
+    const server = http.createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", resolve);
+      server.on("error", reject);
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("Loopback server failed to bind a port");
+    }
+    const redirectUri = `http://127.0.0.1:${address.port}/callback`;
+
+    const redirectPromise = new Promise<{ code: string }>((resolve, reject) => {
+      server.on("request", (req, res) => {
+        const url = new URL(req.url ?? "/", redirectUri);
+        if (url.pathname !== "/callback") {
+          res.writeHead(404).end();
+          return;
+        }
+        const error = url.searchParams.get("error");
+        const code = url.searchParams.get("code");
+        const returnedState = url.searchParams.get("state");
+
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end("<html><body>You can close this tab and return to localagent.</body></html>");
+        server.close();
+
+        if (error) reject(new Error(`Google returned an error: ${error}`));
+        else if (returnedState !== state) reject(new Error("OAuth state mismatch — possible CSRF, aborting sign-in"));
+        else if (!code) reject(new Error("Google redirect had no authorization code"));
+        else resolve({ code });
+      });
+    });
+
+    const authUrl = buildGoogleAuthUrl({ clientId, redirectUri, codeChallenge, state });
+    await shell.openExternal(authUrl);
+
+    const { code } = await redirectPromise;
+    const tokens = await exchangeCodeForTokens(clientId, code, codeVerifier, redirectUri);
+    const userInfo = await fetchUserInfo(tokens.accessToken);
+    const identity = mapUserInfo(userInfo, tokens.refreshToken);
+
+    await saveStoredIdentity(authFilePath, identity);
+    return { email: identity.email, name: identity.name, pictureUrl: identity.pictureUrl };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function refreshAccessToken(clientId: string, refreshToken: string): Promise<StoredTokens | null> {
+  try {
+    const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+    if (!response.ok) return null;
+    const raw = (await response.json()) as GoogleTokenResponse;
+    return mapTokenResponse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export type AuthStatus = { signedIn: false } | { signedIn: true; email: string; name: string; pictureUrl: string | null };
+
+export async function getAuthStatus(authFilePath: string, clientId: string | undefined): Promise<AuthStatus> {
+  const identity = await loadStoredIdentity(authFilePath);
+  if (!identity) return { signedIn: false };
+
+  // Opportunistic re-establishment: if we can still refresh, keep the
+  // session; if the refresh token is gone or revoked, drop the stale file
+  // silently and fall back to signed-out — no scheduled refresh, per spec.
+  if (identity.refreshToken && clientId) {
+    const refreshed = await refreshAccessToken(clientId, identity.refreshToken);
+    if (!refreshed) {
+      await clearStoredIdentity(authFilePath);
+      return { signedIn: false };
+    }
+  }
+
+  return { signedIn: true, email: identity.email, name: identity.name, pictureUrl: identity.pictureUrl };
+}
+
+export async function signOut(authFilePath: string): Promise<void> {
+  await clearStoredIdentity(authFilePath);
 }
