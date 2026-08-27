@@ -21,7 +21,11 @@ function indexPath(sessionsDir: string): string {
   return path.join(sessionsDir, "index.json");
 }
 
+/** Session ids are always internally generated (crypto.randomUUID()) and never user-typed text, but this guards the file-path construction defensively in case a malformed id ever reaches here from the IPC boundary — a `/`, `\`, or `..` segment could otherwise escape sessionsDir. */
 function recordPath(sessionsDir: string, id: string): string {
+  if (!/^[A-Za-z0-9-]+$/.test(id)) {
+    throw new Error(`Invalid session id: ${id}`);
+  }
   return path.join(sessionsDir, `${id}.json`);
 }
 

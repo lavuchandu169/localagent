@@ -282,6 +282,39 @@ await (async () => {
     check("an in-flight task's terminal event does not resurrect a deleted record", record === null);
   })();
 
+  console.log("\nDelete/cancel resolve pending approvals instead of hanging:");
+  await (async () => {
+    const registry = createSessionRegistry(sessionsDir);
+    // A tool_calls turn with no matching final turn queued after it — the
+    // task stays parked awaiting permission approval until something resolves it.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "t1", name: "edit_file", arguments: { path: "x.txt", content: "y" } }] } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+
+    const events: AgentEvent[] = [];
+    const runPromise = runTask(registry, sessionId, "edit a file", (e) => events.push(e));
+    // Give the loop a tick to reach the ASK permission prompt and start awaiting it.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // removeSession must resolve the pending approval (with false) rather than
+    // leaving runTask hanging forever.
+    await Promise.race([
+      removeSession(registry, sessionId),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("removeSession did not resolve in time")), 5000)),
+    ]);
+    await Promise.race([
+      runPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("runTask hung after removeSession — pending approval was never resolved")), 5000)),
+    ]);
+
+    check("runTask completes instead of hanging after its session is deleted mid-approval", true);
+  })();
+
   await fs.rm(sessionsDir, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

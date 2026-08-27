@@ -404,6 +404,9 @@ async function resumeSession(id: string): Promise<void> {
   if (sessionId) {
     await window.agent.cancelSession(sessionId);
   }
+  sessionId = null;
+  taskInput.disabled = true;
+  runTaskBtn.disabled = true;
 
   clearEventLog();
   for (const event of record.events) {
@@ -477,6 +480,7 @@ runTaskBtn.addEventListener("click", async () => {
   const task = taskInput.value;
   logLine(task, "log-task");
   await window.agent.runTask(sessionId, task);
+  await refreshSessionList(sessionSearchInput.value.trim());
 });
 
 taskInput.addEventListener("keydown", (e) => {

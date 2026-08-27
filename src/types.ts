@@ -64,6 +64,8 @@ export interface ModelProvider {
   listModels(): Promise<ModelInfo[]>;
   healthCheck(): Promise<boolean>;
   chat(request: ChatRequest): Promise<ChatResponse>;
+  /** Releases any local native resources (loaded model weights, KV cache/context). Optional — only providers holding local resources (the embedded provider) implement it; remote providers have nothing to release. */
+  dispose?(): Promise<void>;
 }
 
 export type PermissionMode = "PLAN" | "DEFAULT" | "ACCEPT_EDITS" | "AUTO_SAFE";

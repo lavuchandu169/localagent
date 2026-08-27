@@ -226,6 +226,26 @@ export class AgentSession {
         });
       }
 
+      // If cancellation broke the loop above before every tool call got a
+      // reply, the assistant message already pushed for this turn still
+      // references all of response.turn.toolCalls — an unanswered
+      // tool_calls entry makes the persisted history invalid for a strict
+      // provider (Anthropic rejects tool_use with no matching tool_result)
+      // if this session is ever resumed. Backfill a synthetic reply for
+      // anything left unanswered.
+      const answeredCallIds = new Set(
+        this.messages.filter((m) => m.role === "tool" && m.tool_call_id).map((m) => m.tool_call_id)
+      );
+      for (const call of response.turn.toolCalls) {
+        if (answeredCallIds.has(call.id)) continue;
+        this.messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          name: call.name,
+          content: JSON.stringify({ ok: false, error: "Cancelled before execution." }),
+        });
+      }
+
       this.turn++;
       this.state = "THINKING";
     }

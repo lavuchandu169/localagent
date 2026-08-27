@@ -73,8 +73,20 @@ app.whenReady().then(() => {
   );
   ipcMain.handle("agent:list-sessions", () => listSessions(sessionsDir));
   ipcMain.handle("agent:search-sessions", (_event, query: string) => searchSessions(sessionsDir, query));
-  ipcMain.handle("agent:load-session", (_event, id: string) => loadSessionRecord(sessionsDir, id));
-  ipcMain.handle("agent:delete-session", (_event, id: string) => removeSession(registry, id));
+  ipcMain.handle("agent:load-session", async (_event, id: string) => {
+    try {
+      return await loadSessionRecord(sessionsDir, id);
+    } catch {
+      return null;
+    }
+  });
+  ipcMain.handle("agent:delete-session", async (_event, id: string) => {
+    try {
+      await removeSession(registry, id);
+    } catch {
+      // Invalid id — nothing to delete.
+    }
+  });
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

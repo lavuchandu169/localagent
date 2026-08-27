@@ -34,12 +34,14 @@ export interface ResumePayload {
 
 interface SessionEntry {
   session: AgentSession;
+  provider: ModelProvider;
   pendingApprovals: Map<string, (approved: boolean) => void>;
   events: AgentEvent[];
   title: string | null;
   createdAt: number;
   deleted: boolean;
-  persisting: Promise<void> | null;
+  /** The currently in-flight runTask() call, if any — awaited by finalizeEntry before disposing the provider, so a model's native resources are never freed while it's still mid-generation. */
+  running: Promise<void> | null;
 }
 
 export interface SessionRegistry {
@@ -84,6 +86,14 @@ export async function startSession(
   const pendingApprovals = new Map<string, (approved: boolean) => void>();
   const workspaceRoot = config.workspaceRoot ?? os.homedir();
 
+  // Starting a session under an id that's already live (a resume of a
+  // session whose previous in-memory entry was never cleaned up) must not
+  // leak the old entry's model — tear it down first.
+  const existing = registry.sessions.get(sessionId);
+  if (existing) {
+    await finalizeEntry(existing);
+  }
+
   const session = new AgentSession({
     workspaceRoot,
     model:
@@ -104,12 +114,13 @@ export async function startSession(
 
   registry.sessions.set(sessionId, {
     session,
+    provider,
     pendingApprovals,
     events: deps.resume ? [...deps.resume.priorEvents] : [],
     title: deps.resume?.title ?? null,
     createdAt: deps.resume?.createdAt ?? Date.now(),
     deleted: false,
-    persisting: null,
+    running: null,
   });
   return { sessionId, workspaceRoot };
 }
@@ -126,15 +137,13 @@ async function persistSession(registry: SessionRegistry, sessionId: string, entr
   });
 }
 
-export async function runTask(
+async function doRunTask(
   registry: SessionRegistry,
   sessionId: string,
+  entry: SessionEntry,
   task: string,
   onEvent: (event: AgentEvent) => void
 ): Promise<void> {
-  const entry = registry.sessions.get(sessionId);
-  if (!entry) throw new Error(`Unknown session: ${sessionId}`);
-
   if (entry.title === null) {
     entry.title = task.length > 60 ? `${task.slice(0, 60)}…` : task;
   }
@@ -149,8 +158,7 @@ export async function runTask(
       entry.events.push(event);
       onEvent(event);
       if (event.type === "done") {
-        entry.persisting = persistSession(registry, sessionId, entry).catch(() => {});
-        await entry.persisting;
+        await persistSession(registry, sessionId, entry).catch(() => {});
       }
     }
   } catch (err: any) {
@@ -159,8 +167,25 @@ export async function runTask(
     entry.events.push(errorEvent, doneEvent);
     onEvent(errorEvent);
     onEvent(doneEvent);
-    entry.persisting = persistSession(registry, sessionId, entry).catch(() => {});
-    await entry.persisting;
+    await persistSession(registry, sessionId, entry).catch(() => {});
+  }
+}
+
+export async function runTask(
+  registry: SessionRegistry,
+  sessionId: string,
+  task: string,
+  onEvent: (event: AgentEvent) => void
+): Promise<void> {
+  const entry = registry.sessions.get(sessionId);
+  if (!entry) throw new Error(`Unknown session: ${sessionId}`);
+
+  const runPromise = doRunTask(registry, sessionId, entry, task, onEvent);
+  entry.running = runPromise;
+  try {
+    await runPromise;
+  } finally {
+    if (entry.running === runPromise) entry.running = null;
   }
 }
 
@@ -174,25 +199,40 @@ export function respondPermission(registry: SessionRegistry, sessionId: string, 
   resolve(approved);
 }
 
-/** Cooperative: agent.ts checks the cancelled flag at loop boundaries, not mid-await. */
-export function cancelSession(registry: SessionRegistry, sessionId: string): void {
-  registry.sessions.get(sessionId)?.session.cancel();
+/**
+ * Shared teardown for a live entry: resolves any pending permission prompt
+ * with `false` (so a run awaiting approval can't hang forever once its
+ * session is being cancelled or deleted out from under it), cooperatively
+ * cancels the agent loop, waits for whatever task is currently in flight to
+ * actually finish (so the model's native resources are never freed mid
+ * generation), then disposes the provider's local resources.
+ */
+async function finalizeEntry(entry: SessionEntry): Promise<void> {
+  for (const resolve of entry.pendingApprovals.values()) resolve(false);
+  entry.pendingApprovals.clear();
+  entry.session.cancel();
+  await entry.running?.catch(() => {});
+  await entry.provider.dispose?.().catch(() => {});
+}
+
+/** Cooperative: agent.ts checks the cancelled flag at loop boundaries, not mid-await. Frees the session's model resources once any in-flight task actually stops. */
+export async function cancelSession(registry: SessionRegistry, sessionId: string): Promise<void> {
+  const entry = registry.sessions.get(sessionId);
+  if (!entry) return;
+  await finalizeEntry(entry);
 }
 
 /**
- * Deletes the persisted record and, if the session is currently live, cancels
- * it and marks it deleted so an in-flight task's terminal event can't
- * resurrect the record by saving right after this delete completes. Awaits
- * any persist already in flight before deleting, so a write that already
- * passed the `deleted` check can't land after (or interleave with) the
- * delete's own file removal.
+ * Deletes the persisted record and, if the session is currently live, tears
+ * it down first (see finalizeEntry) and marks it deleted so an in-flight
+ * task's terminal event can't resurrect the record by saving right after
+ * this delete completes.
  */
 export async function removeSession(registry: SessionRegistry, sessionId: string): Promise<void> {
   const entry = registry.sessions.get(sessionId);
   if (entry) {
     entry.deleted = true;
-    entry.session.cancel();
-    await entry.persisting?.catch(() => {});
+    await finalizeEntry(entry);
   }
   await deleteSession(registry.sessionsDir, sessionId);
   registry.sessions.delete(sessionId);
