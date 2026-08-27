@@ -1,10 +1,18 @@
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs/promises";
 import {
   generatePkcePair,
   buildGoogleAuthUrl,
   generateState,
   mapTokenResponse,
   mapUserInfo,
+  loadStoredIdentity,
+  saveStoredIdentity,
+  clearStoredIdentity,
 } from "../electron/googleAuth.js";
+
+type StoredIdentityForTest = { email: string; name: string; pictureUrl: string | null; refreshToken: string | null };
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -79,6 +87,31 @@ check("refreshToken param is carried through", identity.refreshToken === "rt-456
 const identityNoPicture = mapUserInfo({ email: "b@example.com", name: "Bea" }, null);
 check("missing picture maps to null, not undefined", identityNoPicture.pictureUrl === null);
 check("null refreshToken is carried through as null", identityNoPicture.refreshToken === null);
+
+console.log("\nIdentity storage (explicit path):");
+
+async function runStorageTests() {
+  const tmpFile = path.join(os.tmpdir(), `localagent-auth-test-${process.pid}-${Date.now()}.json`);
+
+  const loadedMissing = await loadStoredIdentity(tmpFile);
+  check("loading a nonexistent file returns null", loadedMissing === null);
+
+  const identity: StoredIdentityForTest = { email: "c@example.com", name: "Cy", pictureUrl: null, refreshToken: "rt-1" };
+  await saveStoredIdentity(tmpFile, identity);
+  const loaded = await loadStoredIdentity(tmpFile);
+  check("saved identity round-trips through load", JSON.stringify(loaded) === JSON.stringify(identity));
+
+  await clearStoredIdentity(tmpFile);
+  const loadedAfterClear = await loadStoredIdentity(tmpFile);
+  check("loading after clear returns null", loadedAfterClear === null);
+
+  await clearStoredIdentity(tmpFile);
+  check("clearing a nonexistent file does not throw", true);
+
+  await fs.rm(tmpFile, { force: true });
+}
+
+await runStorageTests();
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

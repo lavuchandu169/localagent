@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 
 export interface PkcePair {
   codeVerifier: string;
@@ -83,4 +84,21 @@ export function mapUserInfo(raw: GoogleUserInfoResponse, refreshToken: string | 
     pictureUrl: raw.picture ?? null,
     refreshToken,
   };
+}
+
+export async function loadStoredIdentity(authFilePath: string): Promise<StoredIdentity | null> {
+  try {
+    const raw = await fs.readFile(authFilePath, "utf-8");
+    return JSON.parse(raw) as StoredIdentity;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveStoredIdentity(authFilePath: string, identity: StoredIdentity): Promise<void> {
+  await fs.writeFile(authFilePath, JSON.stringify(identity, null, 2), "utf-8");
+}
+
+export async function clearStoredIdentity(authFilePath: string): Promise<void> {
+  await fs.rm(authFilePath, { force: true });
 }
