@@ -10,6 +10,7 @@ import {
   loadStoredIdentity,
   saveStoredIdentity,
   clearStoredIdentity,
+  classifyRefreshResponse,
 } from "../electron/googleAuth.js";
 
 type StoredIdentityForTest = { email: string; name: string; pictureUrl: string | null; refreshToken: string | null };
@@ -108,10 +109,22 @@ async function runStorageTests() {
   await clearStoredIdentity(tmpFile);
   check("clearing a nonexistent file does not throw", true);
 
+  const tmpShapeFile = path.join(os.tmpdir(), `localagent-auth-test-shape-${process.pid}-${Date.now()}.json`);
+  await fs.writeFile(tmpShapeFile, JSON.stringify({ foo: "bar" }), "utf-8");
+  check("malformed JSON (wrong shape) loads as null, not a bogus identity", (await loadStoredIdentity(tmpShapeFile)) === null);
+  await fs.rm(tmpShapeFile, { force: true });
+
   await fs.rm(tmpFile, { force: true });
 }
 
 await runStorageTests();
+
+console.log("\nRefresh response classification:");
+check("2xx is ok", classifyRefreshResponse(200) === "ok");
+check("400 is revoked", classifyRefreshResponse(400) === "revoked");
+check("401 is revoked", classifyRefreshResponse(401) === "revoked");
+check("500 is transient", classifyRefreshResponse(500) === "transient");
+check("network-adjacent 403 is transient (not Google's revocation signal)", classifyRefreshResponse(403) === "transient");
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

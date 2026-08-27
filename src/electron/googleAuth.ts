@@ -90,14 +90,18 @@ export function mapUserInfo(raw: GoogleUserInfoResponse, refreshToken: string | 
 export async function loadStoredIdentity(authFilePath: string): Promise<StoredIdentity | null> {
   try {
     const raw = await fs.readFile(authFilePath, "utf-8");
-    return JSON.parse(raw) as StoredIdentity;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const id = parsed as Partial<StoredIdentity>;
+    if (typeof id.email !== "string" || typeof id.name !== "string") return null;
+    return { email: id.email, name: id.name, pictureUrl: id.pictureUrl ?? null, refreshToken: id.refreshToken ?? null };
   } catch {
     return null;
   }
 }
 
 export async function saveStoredIdentity(authFilePath: string, identity: StoredIdentity): Promise<void> {
-  await fs.writeFile(authFilePath, JSON.stringify(identity, null, 2), "utf-8");
+  await fs.writeFile(authFilePath, JSON.stringify(identity, null, 2), { encoding: "utf-8", mode: 0o600 });
 }
 
 export async function clearStoredIdentity(authFilePath: string): Promise<void> {
@@ -108,6 +112,8 @@ const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v3/userinfo";
 
 async function exchangeCodeForTokens(clientId: string, code: string, codeVerifier: string, redirectUri: string): Promise<StoredTokens> {
+  // If Google rejects this with invalid_client on first live verification, a
+  // GOOGLE_OAUTH_CLIENT_SECRET may be required for this client type despite PKCE — see spec.
   const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -120,7 +126,7 @@ async function exchangeCodeForTokens(clientId: string, code: string, codeVerifie
     }),
   });
   if (!response.ok) {
-    throw new Error(`Google token exchange failed: ${response.status} ${await response.text()}`);
+    throw new Error(`Google token exchange failed: ${response.status} ${(await response.text()).slice(0, 200)}`);
   }
   const raw = (await response.json()) as GoogleTokenResponse;
   return mapTokenResponse(raw);
@@ -131,7 +137,7 @@ async function fetchUserInfo(accessToken: string): Promise<GoogleUserInfoRespons
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!response.ok) {
-    throw new Error(`Google userinfo request failed: ${response.status} ${await response.text()}`);
+    throw new Error(`Google userinfo request failed: ${response.status} ${(await response.text()).slice(0, 200)}`);
   }
   return (await response.json()) as GoogleUserInfoResponse;
 }
@@ -207,6 +213,16 @@ export async function signInWithGoogle(clientId: string, authFilePath: string): 
   }
 }
 
+export type RefreshOutcome = "ok" | "revoked" | "transient";
+
+/** Google's documented signal for a revoked/expired/invalid refresh token is 400/401; anything else failing is a transient problem (network, 5xx, etc.), not proof the token is dead. */
+export function classifyRefreshResponse(status: number): RefreshOutcome {
+  if (status >= 200 && status < 300) return "ok";
+  if (status === 400 || status === 401) return "revoked";
+  return "transient";
+}
+
+/** Resolves to fresh tokens on success, null only on confirmed revocation (caller should sign out), or throws on a transient failure (caller should keep the cached identity). */
 export async function refreshAccessToken(clientId: string, refreshToken: string): Promise<StoredTokens | null> {
   const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
     method: "POST",
@@ -216,16 +232,17 @@ export async function refreshAccessToken(clientId: string, refreshToken: string)
       refresh_token: refreshToken,
       grant_type: "refresh_token",
     }),
+    signal: AbortSignal.timeout(10_000),
   });
-  if (response.ok) {
+  const outcome = classifyRefreshResponse(response.status);
+  if (outcome === "ok") {
     const raw = (await response.json()) as GoogleTokenResponse;
     return mapTokenResponse(raw);
   }
-  if (response.status === 400 || response.status === 401) {
-    // Google's documented signal for a revoked/expired/invalid refresh token.
+  if (outcome === "revoked") {
     return null;
   }
-  throw new Error(`Google token refresh failed transiently: ${response.status} ${await response.text()}`);
+  throw new Error(`Google token refresh failed transiently: ${response.status} ${(await response.text()).slice(0, 200)}`);
 }
 
 export type AuthStatus = { signedIn: false } | { signedIn: true; email: string; name: string; pictureUrl: string | null };
