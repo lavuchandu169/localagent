@@ -226,6 +226,59 @@ await (async () => {
   }
 })();
 
+console.log("\nResumable message history:");
+await (async () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const workspaceRoot = path.resolve(__dirname, "..", "..", "fixture-repo");
+
+  const seeded: import("../types.js").ChatMessage[] = [
+    { role: "system", content: "custom system prompt from a prior session" },
+    { role: "user", content: "earlier task" },
+    { role: "assistant", content: "earlier response" },
+  ];
+
+  const script: ChatResponse[] = [{ turn: { type: "final", content: "new answer" } }];
+  const session = new AgentSession({
+    workspaceRoot,
+    model: "mock",
+    provider: new MockProvider(script),
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN",
+    initialMessages: seeded,
+  });
+
+  check(
+    "getMessages returns the seeded initial messages before any run",
+    JSON.stringify(session.getMessages()) === JSON.stringify(seeded)
+  );
+
+  const before = session.getMessages();
+  for await (const _event of session.run("new task")) {
+    // drain
+  }
+  const after = session.getMessages();
+
+  check("getMessages grows from the seeded history, not from scratch", after.length > seeded.length);
+  check(
+    "the seeded turns are preserved in order at the start of the history",
+    JSON.stringify(after.slice(0, seeded.length)) === JSON.stringify(seeded)
+  );
+  check("getMessages returns a copy, not the live array", before !== session.getMessages());
+
+  const freshSession = new AgentSession({
+    workspaceRoot,
+    model: "mock",
+    provider: new MockProvider([{ turn: { type: "final", content: "x" } }]),
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN",
+  });
+  check(
+    "without initialMessages, a session still starts with just the system prompt",
+    freshSession.getMessages().length === 1 && freshSession.getMessages()[0]?.role === "system"
+  );
+})();
+
 console.log("\nRead-before-write safety override:");
 await (async () => {
   const __filename = fileURLToPath(import.meta.url);

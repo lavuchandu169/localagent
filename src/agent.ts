@@ -18,6 +18,8 @@ export interface AgentSessionOptions {
   permissionMode: PermissionMode;
   maxTurns?: number;
   systemPrompt?: string;
+  /** Seeds the conversation from a prior session's history instead of starting fresh with just the system prompt — used to resume a saved session. */
+  initialMessages?: ChatMessage[];
   /** Called when a tool call needs ASK approval. Return true to allow. */
   onApprovalNeeded?: (call: ToolCall) => Promise<boolean>;
 }
@@ -49,7 +51,16 @@ export class AgentSession {
 
   constructor(private opts: AgentSessionOptions) {
     this.permissions = new PermissionEngine(opts.permissionMode);
-    this.messages.push({ role: "system", content: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT });
+    if (opts.initialMessages && opts.initialMessages.length > 0) {
+      this.messages = [...opts.initialMessages];
+    } else {
+      this.messages.push({ role: "system", content: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT });
+    }
+  }
+
+  /** A copy of the current conversation history, safe to persist or inspect without risking mutation of the live session. */
+  getMessages(): ChatMessage[] {
+    return [...this.messages];
   }
 
   cancel() {
