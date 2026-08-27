@@ -163,6 +163,8 @@ export function fromLlamaResult(result: LlamaGenerateResult): ChatResponse {
 export class EmbeddedLlamaProvider implements ModelProvider {
   id = "embedded-llama";
   private chatPromise: Promise<import("node-llama-cpp").LlamaChat> | undefined;
+  private model: import("node-llama-cpp").LlamaModel | undefined;
+  private context: import("node-llama-cpp").LlamaContext | undefined;
 
   constructor(
     private opts: { size: EmbeddedModelSize; onDownloadProgress?: (status: { totalSize: number; downloadedSize: number }) => void }
@@ -181,6 +183,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     });
     const llama = await getLlama();
     const model = await llama.loadModel({ modelPath });
+    this.model = model;
     // contextSize defaults to "auto", which on a model with a large trained
     // context (e.g. this 7B model's 128K) can allocate a KV cache sized for
     // that whole window regardless of how much is actually used — measured
@@ -189,8 +192,15 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     // turns don't need anywhere near that; capping it keeps the KV cache
     // proportional to what a few files plus conversation history actually need.
     const context = await model.createContext({ contextSize: { max: 8192 } });
+    this.context = context;
     const sequence = context.getSequence();
     return new LlamaChat({ contextSequence: sequence });
+  }
+
+  /** Frees the loaded model weights and KV cache/context. Safe to call even if loadChat() never ran or already failed. */
+  async dispose(): Promise<void> {
+    if (this.context && !this.context.disposed) await this.context.dispose();
+    if (this.model && !this.model.disposed) await this.model.dispose();
   }
 
   async listModels(): Promise<ModelInfo[]> {

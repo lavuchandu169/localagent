@@ -1,4 +1,4 @@
-import type { AgentEvent, PermissionMode, ToolCall } from "../../types.js";
+import type { AgentEvent, ChatMessage, PermissionMode, ToolCall } from "../../types.js";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS } from "../../models.js";
@@ -23,8 +23,31 @@ interface AuthIdentity {
 type SignInResult = AuthIdentity | { error: string };
 type AuthStatus = { signedIn: false } | ({ signedIn: true } & AuthIdentity);
 
+interface SessionIndexEntry {
+  id: string;
+  title: string;
+  updatedAt: number;
+}
+
+interface SessionRecord {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  events: AgentEvent[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface ResumePayload {
+  sessionId: string;
+  initialMessages: ChatMessage[];
+  priorEvents: AgentEvent[];
+  title: string;
+  createdAt: number;
+}
+
 interface AgentBridge {
-  startSession(config: SessionConfig): Promise<{ sessionId: string; workspaceRoot: string }>;
+  startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string }>;
   runTask(sessionId: string, task: string): Promise<void>;
   respondPermission(sessionId: string, callId: string, approved: boolean): Promise<void>;
   cancelSession(sessionId: string): Promise<void>;
@@ -36,6 +59,10 @@ interface AgentBridge {
   googleSignIn(): Promise<SignInResult>;
   signOut(): Promise<void>;
   getAuthStatus(): Promise<AuthStatus>;
+  listSessions(): Promise<SessionIndexEntry[]>;
+  searchSessions(query: string): Promise<SessionIndexEntry[]>;
+  loadSession(id: string): Promise<SessionRecord | null>;
+  deleteSession(id: string): Promise<void>;
 }
 
 declare global {
@@ -84,6 +111,10 @@ const downloadProgressRow = byId<HTMLDivElement>("download-progress");
 const downloadBarFill = byId<HTMLDivElement>("download-bar-fill");
 const downloadLabel = byId<HTMLSpanElement>("download-label");
 const activeModelBadge = byId<HTMLDivElement>("active-model-badge");
+const sidebarSessionList = byId<HTMLDivElement>("session-list");
+const sessionListEmpty = byId<HTMLDivElement>("session-list-empty");
+const sessionSearchInput = byId<HTMLInputElement>("session-search");
+const newSessionBtn = byId<HTMLButtonElement>("new-session-btn");
 
 let workspaceRoot: string | null = null;
 let sessionId: string | null = null;
@@ -264,7 +295,7 @@ window.agent.onDownloadProgress((status) => {
   downloadLabel.textContent = `Downloading model: ${formatBytes(status.downloadedSize)} / ${formatBytes(status.totalSize)}${speedText}`;
 });
 
-startSessionBtn.addEventListener("click", async () => {
+async function beginSession(resume?: ResumePayload): Promise<void> {
   startError.textContent = "";
 
   const useAnthropic = advancedDisclosure.open && advancedProviderAnthropic.checked;
@@ -281,7 +312,7 @@ startSessionBtn.addEventListener("click", async () => {
 
   startSessionBtn.disabled = true;
   try {
-    const result = await window.agent.startSession(config);
+    const result = await window.agent.startSession(config, resume);
     sessionId = result.sessionId;
     if (!workspaceRoot) {
       workspaceRoot = result.workspaceRoot;
@@ -290,7 +321,10 @@ startSessionBtn.addEventListener("click", async () => {
     }
     taskInput.disabled = false;
     runTaskBtn.disabled = false;
-    logLine(`Session started (${provider.kind}, mode=${config.mode})`, "log-status");
+    logLine(
+      resume ? `Resumed session (${provider.kind}, mode=${config.mode})` : `Session started (${provider.kind}, mode=${config.mode})`,
+      "log-status"
+    );
     // All setup controls lock here, not just Start: Foundation has no way to
     // apply a changed workspace/provider/mode to an already-running session,
     // so leaving them interactive would let the displayed value silently
@@ -316,6 +350,7 @@ startSessionBtn.addEventListener("click", async () => {
     activeModelBadge.appendChild(dot);
     activeModelBadge.appendChild(document.createTextNode(`${modelText}${gpuText}`));
     activeModelBadge.hidden = false;
+    await refreshSessionList(sessionSearchInput.value.trim());
   } catch (err: any) {
     startError.textContent = err?.message ?? String(err);
     startSessionBtn.disabled = false;
@@ -323,7 +358,120 @@ startSessionBtn.addEventListener("click", async () => {
     downloadProgressRow.hidden = true;
     progressLastTime = 0;
   }
+}
+
+startSessionBtn.addEventListener("click", () => void beginSession());
+
+function clearEventLog(): void {
+  toolCards.clear();
+  eventLog.innerHTML = "";
+  emptyState.hidden = false;
+  eventLog.appendChild(emptyState);
+}
+
+function resetToSetup(): void {
+  if (sessionId) void window.agent.cancelSession(sessionId);
+  sessionId = null;
+  workspaceRoot = null;
+  clearEventLog();
+  taskInput.value = "";
+  taskInput.disabled = true;
+  runTaskBtn.disabled = true;
+  activeModelBadge.hidden = true;
+  startError.textContent = "";
+  workspacePathEl.textContent = "No workspace selected — optional, you can just chat";
+  aboutWorkspace.textContent = "(none selected)";
+  chooseWorkspaceBtn.disabled = false;
+  embeddedSizeSelect.disabled = false;
+  modeSelect.disabled = false;
+  baseUrlInput.disabled = false;
+  externalModelInput.disabled = false;
+  advancedProviderExternal.disabled = false;
+  advancedProviderAnthropic.disabled = false;
+  startSessionBtn.disabled = false;
+  void refreshSessionList(sessionSearchInput.value.trim());
+}
+
+newSessionBtn.addEventListener("click", resetToSetup);
+
+async function resumeSession(id: string): Promise<void> {
+  const record = await window.agent.loadSession(id);
+  if (!record) {
+    startError.textContent = "Couldn't load this session — the saved file looks corrupted.";
+    return;
+  }
+
+  if (sessionId) {
+    await window.agent.cancelSession(sessionId);
+  }
+  sessionId = null;
+  taskInput.disabled = true;
+  runTaskBtn.disabled = true;
+
+  clearEventLog();
+  for (const event of record.events) {
+    renderEvent(event);
+  }
+
+  await beginSession({
+    sessionId: record.id,
+    initialMessages: record.messages,
+    priorEvents: record.events,
+    title: record.title,
+    createdAt: record.createdAt,
+  });
+}
+
+function renderSessionList(entries: SessionIndexEntry[]): void {
+  for (const el of Array.from(sidebarSessionList.querySelectorAll(".session-item"))) {
+    el.remove();
+  }
+  sessionListEmpty.hidden = entries.length > 0;
+  for (const entry of entries) {
+    const item = document.createElement("div");
+    item.className = "session-item";
+    if (entry.id === sessionId) item.classList.add("active");
+
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "session-item-label";
+    label.textContent = entry.title;
+    label.title = entry.title;
+    label.addEventListener("click", () => void resumeSession(entry.id));
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "session-item-delete";
+    deleteBtn.title = "Delete session";
+    deleteBtn.textContent = "×";
+    deleteBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void (async () => {
+        await window.agent.deleteSession(entry.id);
+        if (entry.id === sessionId) {
+          resetToSetup();
+        } else {
+          await refreshSessionList(sessionSearchInput.value.trim());
+        }
+      })();
+    });
+
+    item.appendChild(label);
+    item.appendChild(deleteBtn);
+    sidebarSessionList.appendChild(item);
+  }
+}
+
+async function refreshSessionList(query: string): Promise<void> {
+  const entries = query ? await window.agent.searchSessions(query) : await window.agent.listSessions();
+  renderSessionList(entries);
+}
+
+sessionSearchInput.addEventListener("input", () => {
+  void refreshSessionList(sessionSearchInput.value.trim());
 });
+
+void refreshSessionList("");
 
 runTaskBtn.addEventListener("click", async () => {
   if (!sessionId || !taskInput.value.trim()) return;
@@ -332,6 +480,7 @@ runTaskBtn.addEventListener("click", async () => {
   const task = taskInput.value;
   logLine(task, "log-task");
   await window.agent.runTask(sessionId, task);
+  await refreshSessionList(sessionSearchInput.value.trim());
 });
 
 taskInput.addEventListener("keydown", (e) => {

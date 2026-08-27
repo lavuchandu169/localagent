@@ -57,6 +57,11 @@ access, agent loop, editing, terminal + verification).
   `docs/superpowers/specs/2026-08-26-google-apple-signin-design.md`) —
   identity only, nothing is gated by it; Apple sign-in is a disabled UI
   stub pending an Apple Developer account and a registered domain.
+  `sessionStore.ts` adds persistent session history — every completed task
+  autosaves to `app.getPath('userData')/sessions/`, a left sidebar lists
+  and full-text-searches past sessions, and clicking one resumes it with
+  full model context (not just a read-only transcript) — see
+  `docs/superpowers/specs/2026-08-27-session-persistence-design.md`.
 - **Tests** (`src/test/agent.test.ts`, `src/test/sessionRegistry.test.ts`) —
   covering command risk classification, permission decisions across all
   modes, a full scripted agent run, and the Electron session-registry logic

@@ -1,14 +1,14 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession } from "./sessionRegistry.js";
-import type { SessionConfig } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession } from "./sessionRegistry.js";
+import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import { checkCachedModels } from "./modelCache.js";
 import { detectHardware, recommendModelSize } from "./hardwareInfo.js";
 import { signInWithGoogle, signOut, getAuthStatus } from "./googleAuth.js";
+import { listSessions, searchSessions, loadSessionRecord } from "../sessionStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const registry = createSessionRegistry();
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -29,11 +29,14 @@ function createWindow(): BrowserWindow {
 
 app.whenReady().then(() => {
   const authFilePath = path.join(app.getPath("userData"), "auth.json");
+  const sessionsDir = path.join(app.getPath("userData"), "sessions");
+  const registry = createSessionRegistry(sessionsDir);
   const win = createWindow();
 
-  ipcMain.handle("agent:start-session", (event, config: SessionConfig) =>
+  ipcMain.handle("agent:start-session", (event, config: SessionConfig, resume?: ResumePayload) =>
     startSession(registry, config, {
       onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
+      resume,
     })
   );
 
@@ -68,6 +71,22 @@ app.whenReady().then(() => {
   ipcMain.handle("agent:auth-status", () =>
     getAuthStatus(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID, process.env.GOOGLE_OAUTH_CLIENT_SECRET)
   );
+  ipcMain.handle("agent:list-sessions", () => listSessions(sessionsDir));
+  ipcMain.handle("agent:search-sessions", (_event, query: string) => searchSessions(sessionsDir, query));
+  ipcMain.handle("agent:load-session", async (_event, id: string) => {
+    try {
+      return await loadSessionRecord(sessionsDir, id);
+    } catch {
+      return null;
+    }
+  });
+  ipcMain.handle("agent:delete-session", async (_event, id: string) => {
+    try {
+      await removeSession(registry, id);
+    } catch {
+      // Invalid id — nothing to delete.
+    }
+  });
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

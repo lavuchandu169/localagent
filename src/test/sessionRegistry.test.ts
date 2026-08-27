@@ -1,5 +1,6 @@
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import {
   createSessionRegistry,
@@ -7,9 +8,11 @@ import {
   runTask,
   respondPermission,
   cancelSession,
+  removeSession,
   buildProvider,
 } from "../electron/sessionRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
+import { loadSessionRecord } from "../sessionStore.js";
 import type { AgentEvent, ChatResponse } from "../types.js";
 
 let failures = 0;
@@ -25,12 +28,13 @@ function check(name: string, cond: boolean) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const workspaceRoot = path.resolve(__dirname, "..", "..", "fixture-repo");
+const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-registry-test-"));
 
 console.log("Session registry:");
 
 await (async () => {
   {
-    const registry = createSessionRegistry();
+    const registry = createSessionRegistry(sessionsDir);
     const { sessionId } = await startSession(
       registry,
       { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
@@ -40,7 +44,7 @@ await (async () => {
   }
 
   {
-    const registry = createSessionRegistry();
+    const registry = createSessionRegistry(sessionsDir);
     const { workspaceRoot: resolved } = await startSession(
       registry,
       { provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
@@ -50,7 +54,7 @@ await (async () => {
   }
 
   {
-    const registry = createSessionRegistry();
+    const registry = createSessionRegistry(sessionsDir);
     let threw = false;
     try {
       await startSession(
@@ -65,7 +69,7 @@ await (async () => {
   }
 
   {
-    const registry = createSessionRegistry();
+    const registry = createSessionRegistry(sessionsDir);
     let receivedCallback: unknown;
     await startSession(
       registry,
@@ -93,7 +97,7 @@ await (async () => {
   }
 
   {
-    const registry = createSessionRegistry();
+    const registry = createSessionRegistry(sessionsDir);
     const script: ChatResponse[] = [{ turn: { type: "final", content: "all done" } }];
     const { sessionId } = await startSession(
       registry,
@@ -108,7 +112,7 @@ await (async () => {
   }
 
   {
-    const registry = createSessionRegistry();
+    const registry = createSessionRegistry(sessionsDir);
     let threw = false;
     try {
       await runTask(registry, "not-a-real-session", "task", () => {});
@@ -119,7 +123,7 @@ await (async () => {
   }
 
   {
-    const registry = createSessionRegistry();
+    const registry = createSessionRegistry(sessionsDir);
     check(
       "respondPermission on an unknown session/callId is a silent no-op",
       (() => {
@@ -134,7 +138,7 @@ await (async () => {
   }
 
   {
-    const registry = createSessionRegistry();
+    const registry = createSessionRegistry(sessionsDir);
     const script: ChatResponse[] = [
       { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "echo hi" } }] } },
       { turn: { type: "final", content: "ran it" } },
@@ -163,7 +167,7 @@ await (async () => {
   }
 
   {
-    const registry = createSessionRegistry();
+    const registry = createSessionRegistry(sessionsDir);
     const script: ChatResponse[] = [
       { turn: { type: "final", content: "first turn done (unused, cancelled first)" } },
     ];
@@ -183,6 +187,135 @@ await (async () => {
       done?.type === "done" && done.success === false && done.summary === "Cancelled by user."
     );
   }
+
+  console.log("\nEvent buffering and persistence:");
+  await (async () => {
+    const registry = createSessionRegistry(sessionsDir);
+    // Multi-turn: a tool_calls turn (list_directory) followed by a final turn —
+    // exercises that events accumulate across every turn of one task, not just
+    // the last one.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "t1", name: "list_directory", arguments: { path: "." } }] } },
+      { turn: { type: "final", content: "the answer" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+
+    const streamed: AgentEvent[] = [];
+    await runTask(registry, sessionId, "what does math.js do", (e) => streamed.push(e));
+
+    check("the multi-turn task produced more than one event", streamed.length > 1);
+    check("a tool.start event was emitted for the tool_calls turn", streamed.some((e) => e.type === "tool.start"));
+    check("a tool.result event was emitted for the tool_calls turn", streamed.some((e) => e.type === "tool.result"));
+
+    const entry = registry.sessions.get(sessionId);
+    check("events accumulate in the registry entry across every turn of the run", (entry?.events.length ?? 0) === streamed.length);
+
+    const record = await loadSessionRecord(sessionsDir, sessionId);
+    check("a completed task persists a session record", record !== null);
+    check("the persisted title is the truncated first task", record?.title === "what does math.js do");
+    check("the persisted events match what streamed to the renderer", JSON.stringify(record?.events) === JSON.stringify(streamed));
+
+    await runTask(registry, sessionId, "a second task", () => {});
+    const recordAfterSecond = await loadSessionRecord(sessionsDir, sessionId);
+    check("title is set once and not overwritten by a later task", recordAfterSecond?.title === "what does math.js do");
+    check(
+      "events keep accumulating across multiple tasks",
+      (recordAfterSecond?.events.length ?? 0) > (record?.events.length ?? 0)
+    );
+  })();
+
+  console.log("\nResume reuses the original session id:");
+  await (async () => {
+    const registry = createSessionRegistry(sessionsDir);
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "continuing" } }];
+    const fixedId = "resume-test-fixed-id";
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      {
+        providerFactory: () => new MockProvider(script),
+        resume: {
+          sessionId: fixedId,
+          initialMessages: [{ role: "system", content: "sys" }, { role: "user", content: "earlier" }],
+          priorEvents: [{ type: "text", text: "earlier response" }],
+          title: "earlier task title",
+          createdAt: 12345,
+        },
+      }
+    );
+
+    check("resume reuses the provided sessionId instead of minting a new one", sessionId === fixedId);
+    check("the registry entry starts seeded with the prior events", registry.sessions.get(fixedId)?.events.length === 1);
+
+    await runTask(registry, fixedId, "continued task", () => {});
+    const record = await loadSessionRecord(sessionsDir, fixedId);
+    check("resumed session's persisted record keeps the original title", record?.title === "earlier task title");
+    check("resumed session's persisted record keeps the original createdAt", record?.createdAt === 12345);
+    check(
+      "resumed session's persisted events include both the prior transcript and the new task's events",
+      (record?.events.length ?? 0) > 1
+    );
+  })();
+
+  console.log("\nDelete prevents resurrection of an active session:");
+  await (async () => {
+    const registry = createSessionRegistry(sessionsDir);
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "first" } }, { turn: { type: "final", content: "second" } }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    await runTask(registry, sessionId, "first task", () => {});
+    check("a record exists before deletion", (await loadSessionRecord(sessionsDir, sessionId)) !== null);
+
+    // Race: delete while a second task is still in flight.
+    const runPromise = runTask(registry, sessionId, "second task", () => {});
+    await removeSession(registry, sessionId);
+    await runPromise;
+
+    const record = await loadSessionRecord(sessionsDir, sessionId);
+    check("an in-flight task's terminal event does not resurrect a deleted record", record === null);
+  })();
+
+  console.log("\nDelete/cancel resolve pending approvals instead of hanging:");
+  await (async () => {
+    const registry = createSessionRegistry(sessionsDir);
+    // A tool_calls turn with no matching final turn queued after it — the
+    // task stays parked awaiting permission approval until something resolves it.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "t1", name: "edit_file", arguments: { path: "x.txt", content: "y" } }] } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+
+    const events: AgentEvent[] = [];
+    const runPromise = runTask(registry, sessionId, "edit a file", (e) => events.push(e));
+    // Give the loop a tick to reach the ASK permission prompt and start awaiting it.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // removeSession must resolve the pending approval (with false) rather than
+    // leaving runTask hanging forever.
+    await Promise.race([
+      removeSession(registry, sessionId),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("removeSession did not resolve in time")), 5000)),
+    ]);
+    await Promise.race([
+      runPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("runTask hung after removeSession — pending approval was never resolved")), 5000)),
+    ]);
+
+    check("runTask completes instead of hanging after its session is deleted mid-approval", true);
+  })();
+
+  await fs.rm(sessionsDir, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
   process.exit(failures === 0 ? 0 : 1);

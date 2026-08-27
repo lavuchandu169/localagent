@@ -18,6 +18,8 @@ export interface AgentSessionOptions {
   permissionMode: PermissionMode;
   maxTurns?: number;
   systemPrompt?: string;
+  /** Seeds the conversation from a prior session's history instead of starting fresh with just the system prompt — used to resume a saved session. */
+  initialMessages?: ChatMessage[];
   /** Called when a tool call needs ASK approval. Return true to allow. */
   onApprovalNeeded?: (call: ToolCall) => Promise<boolean>;
 }
@@ -49,7 +51,16 @@ export class AgentSession {
 
   constructor(private opts: AgentSessionOptions) {
     this.permissions = new PermissionEngine(opts.permissionMode);
-    this.messages.push({ role: "system", content: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT });
+    if (opts.initialMessages && opts.initialMessages.length > 0) {
+      this.messages = [...opts.initialMessages];
+    } else {
+      this.messages.push({ role: "system", content: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT });
+    }
+  }
+
+  /** A copy of the current conversation history, safe to persist or inspect without risking mutation of the live session. */
+  getMessages(): ChatMessage[] {
+    return [...this.messages];
   }
 
   cancel() {
@@ -212,6 +223,26 @@ export class AgentSession {
           tool_call_id: call.id,
           name: call.name,
           content: JSON.stringify(result).slice(0, 6000),
+        });
+      }
+
+      // If cancellation broke the loop above before every tool call got a
+      // reply, the assistant message already pushed for this turn still
+      // references all of response.turn.toolCalls — an unanswered
+      // tool_calls entry makes the persisted history invalid for a strict
+      // provider (Anthropic rejects tool_use with no matching tool_result)
+      // if this session is ever resumed. Backfill a synthetic reply for
+      // anything left unanswered.
+      const answeredCallIds = new Set(
+        this.messages.filter((m) => m.role === "tool" && m.tool_call_id).map((m) => m.tool_call_id)
+      );
+      for (const call of response.turn.toolCalls) {
+        if (answeredCallIds.has(call.id)) continue;
+        this.messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          name: call.name,
+          content: JSON.stringify({ ok: false, error: "Cancelled before execution." }),
         });
       }
 
