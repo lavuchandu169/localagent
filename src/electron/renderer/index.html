@@ -15,7 +15,21 @@
         </svg>
         <span id="brand-name">localagent</span>
       </div>
-      <button id="about-toggle" aria-expanded="false" title="About">?</button>
+      <div id="header-right">
+        <div id="auth-control">
+          <div id="auth-signed-out" class="row">
+            <button id="google-sign-in">Sign in with Google</button>
+            <button id="apple-sign-in" disabled title="Coming soon — needs an Apple Developer account and a registered domain">Sign in with Apple</button>
+          </div>
+          <div id="auth-signed-in" class="row" hidden>
+            <span id="auth-avatar"></span>
+            <span id="auth-name"></span>
+            <button id="sign-out-btn">Sign out</button>
+          </div>
+          <div id="auth-error" class="error-text"></div>
+        </div>
+        <button id="about-toggle" aria-expanded="false" title="About">?</button>
+      </div>
     </header>
 
     <div id="about-panel" hidden>

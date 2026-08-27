@@ -15,6 +15,14 @@ interface DownloadProgress {
   downloadedSize: number;
 }
 
+interface AuthIdentity {
+  email: string;
+  name: string;
+  pictureUrl: string | null;
+}
+type SignInResult = AuthIdentity | { error: string };
+type AuthStatus = { signedIn: false } | ({ signedIn: true } & AuthIdentity);
+
 interface AgentBridge {
   startSession(config: SessionConfig): Promise<{ sessionId: string; workspaceRoot: string }>;
   runTask(sessionId: string, task: string): Promise<void>;
@@ -25,6 +33,9 @@ interface AgentBridge {
   onDownloadProgress(callback: (status: DownloadProgress) => void): () => void;
   listCachedModels(): Promise<Record<string, boolean>>;
   getHardwareInfo(): Promise<HardwareInfo>;
+  googleSignIn(): Promise<SignInResult>;
+  signOut(): Promise<void>;
+  getAuthStatus(): Promise<AuthStatus>;
 }
 
 declare global {
@@ -62,6 +73,13 @@ const aboutPanel = byId<HTMLDivElement>("about-panel");
 const aboutClose = byId<HTMLButtonElement>("about-close");
 const aboutWorkspace = byId<HTMLSpanElement>("about-workspace");
 const aboutHardware = byId<HTMLSpanElement>("about-hardware");
+const googleSignInBtn = byId<HTMLButtonElement>("google-sign-in");
+const signOutBtn = byId<HTMLButtonElement>("sign-out-btn");
+const authSignedOut = byId<HTMLDivElement>("auth-signed-out");
+const authSignedIn = byId<HTMLDivElement>("auth-signed-in");
+const authAvatar = byId<HTMLSpanElement>("auth-avatar");
+const authName = byId<HTMLSpanElement>("auth-name");
+const authError = byId<HTMLDivElement>("auth-error");
 const downloadProgressRow = byId<HTMLDivElement>("download-progress");
 const downloadBarFill = byId<HTMLDivElement>("download-bar-fill");
 const downloadLabel = byId<HTMLSpanElement>("download-label");
@@ -322,3 +340,44 @@ taskInput.addEventListener("keydown", (e) => {
     if (!runTaskBtn.disabled) runTaskBtn.click();
   }
 });
+
+function renderAuthState(status: AuthStatus): void {
+  authError.textContent = "";
+  if (status.signedIn) {
+    authSignedOut.hidden = true;
+    authSignedIn.hidden = false;
+    authName.textContent = `${status.name} · `;
+    if (status.pictureUrl) {
+      authAvatar.style.backgroundImage = `url(${JSON.stringify(status.pictureUrl)})`;
+      authAvatar.textContent = "";
+    } else {
+      authAvatar.style.backgroundImage = "";
+      authAvatar.textContent = status.name.slice(0, 1).toUpperCase();
+    }
+  } else {
+    authSignedOut.hidden = false;
+    authSignedIn.hidden = true;
+  }
+}
+
+googleSignInBtn.addEventListener("click", async () => {
+  authError.textContent = "";
+  googleSignInBtn.disabled = true;
+  try {
+    const result = await window.agent.googleSignIn();
+    if ("error" in result) {
+      authError.textContent = result.error;
+    } else {
+      renderAuthState({ signedIn: true, ...result });
+    }
+  } finally {
+    googleSignInBtn.disabled = false;
+  }
+});
+
+signOutBtn.addEventListener("click", async () => {
+  await window.agent.signOut();
+  renderAuthState({ signedIn: false });
+});
+
+window.agent.getAuthStatus().then(renderAuthState);

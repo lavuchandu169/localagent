@@ -150,6 +150,58 @@ summary:focus-visible {
   border-color: var(--ink-dim);
 }
 
+#header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+#auth-control .row {
+  margin-bottom: 0;
+  gap: 8px;
+}
+
+#auth-control button {
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+#auth-signed-in {
+  font-size: 12px;
+  color: var(--ink);
+}
+
+#auth-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  background-size: cover;
+  background-position: center;
+  color: var(--ink-dim);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+#auth-name {
+  font-family: var(--font-sans);
+  color: var(--ink);
+}
+
+#auth-error {
+  max-width: 220px;
+}
+
+#auth-error:empty {
+  display: none;
+}
+
 #about-panel {
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
@@ -301,6 +353,10 @@ input:disabled {
    regardless of specificity, so these need their own explicit override. */
 #external-fields[hidden],
 #anthropic-fields[hidden] {
+  display: none;
+}
+
+#auth-signed-in[hidden] {
   display: none;
 }
 
