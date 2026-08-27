@@ -6,7 +6,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("agent", {
-  startSession: (config) => ipcRenderer.invoke("agent:start-session", config),
+  startSession: (config, resume) => ipcRenderer.invoke("agent:start-session", config, resume),
   runTask: (sessionId, task) => ipcRenderer.invoke("agent:run-task", sessionId, task),
   respondPermission: (sessionId, callId, approved) =>
     ipcRenderer.invoke("agent:respond-permission", sessionId, callId, approved),
@@ -27,4 +27,8 @@ contextBridge.exposeInMainWorld("agent", {
   googleSignIn: () => ipcRenderer.invoke("agent:google-sign-in"),
   signOut: () => ipcRenderer.invoke("agent:sign-out"),
   getAuthStatus: () => ipcRenderer.invoke("agent:auth-status"),
+  listSessions: () => ipcRenderer.invoke("agent:list-sessions"),
+  searchSessions: (query) => ipcRenderer.invoke("agent:search-sessions", query),
+  loadSession: (id) => ipcRenderer.invoke("agent:load-session", id),
+  deleteSession: (id) => ipcRenderer.invoke("agent:delete-session", id),
 });
