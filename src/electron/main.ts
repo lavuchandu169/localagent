@@ -9,7 +9,6 @@ import { signInWithGoogle, signOut, getAuthStatus } from "./googleAuth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const registry = createSessionRegistry();
-const authFilePath = path.join(app.getPath("userData"), "auth.json");
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -29,6 +28,7 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  const authFilePath = path.join(app.getPath("userData"), "auth.json");
   const win = createWindow();
 
   ipcMain.handle("agent:start-session", (event, config: SessionConfig) =>

@@ -376,8 +376,16 @@ googleSignInBtn.addEventListener("click", async () => {
 });
 
 signOutBtn.addEventListener("click", async () => {
-  await window.agent.signOut();
-  renderAuthState({ signedIn: false });
+  authError.textContent = "";
+  signOutBtn.disabled = true;
+  try {
+    await window.agent.signOut();
+    renderAuthState({ signedIn: false });
+  } catch (err) {
+    authError.textContent = err instanceof Error ? err.message : String(err);
+  } finally {
+    signOutBtn.disabled = false;
+  }
 });
 
-window.agent.getAuthStatus().then(renderAuthState);
+window.agent.getAuthStatus().then(renderAuthState).catch(() => {});
