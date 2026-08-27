@@ -279,11 +279,7 @@ await (async () => {
     await runPromise;
 
     const record = await loadSessionRecord(sessionsDir, sessionId);
-    check("deleting an active session removes its record", record === null);
-    check(
-      "an in-flight task's terminal event does not resurrect a deleted record",
-      (await loadSessionRecord(sessionsDir, sessionId)) === null
-    );
+    check("an in-flight task's terminal event does not resurrect a deleted record", record === null);
   })();
 
   await fs.rm(sessionsDir, { recursive: true, force: true });

@@ -39,6 +39,7 @@ interface SessionEntry {
   title: string | null;
   createdAt: number;
   deleted: boolean;
+  persisting: Promise<void> | null;
 }
 
 export interface SessionRegistry {
@@ -108,6 +109,7 @@ export async function startSession(
     title: deps.resume?.title ?? null,
     createdAt: deps.resume?.createdAt ?? Date.now(),
     deleted: false,
+    persisting: null,
   });
   return { sessionId, workspaceRoot };
 }
@@ -147,7 +149,8 @@ export async function runTask(
       entry.events.push(event);
       onEvent(event);
       if (event.type === "done") {
-        await persistSession(registry, sessionId, entry);
+        entry.persisting = persistSession(registry, sessionId, entry).catch(() => {});
+        await entry.persisting;
       }
     }
   } catch (err: any) {
@@ -156,7 +159,8 @@ export async function runTask(
     entry.events.push(errorEvent, doneEvent);
     onEvent(errorEvent);
     onEvent(doneEvent);
-    await persistSession(registry, sessionId, entry);
+    entry.persisting = persistSession(registry, sessionId, entry).catch(() => {});
+    await entry.persisting;
   }
 }
 
@@ -178,13 +182,18 @@ export function cancelSession(registry: SessionRegistry, sessionId: string): voi
 /**
  * Deletes the persisted record and, if the session is currently live, cancels
  * it and marks it deleted so an in-flight task's terminal event can't
- * resurrect the record by saving right after this delete completes.
+ * resurrect the record by saving right after this delete completes. Awaits
+ * any persist already in flight before deleting, so a write that already
+ * passed the `deleted` check can't land after (or interleave with) the
+ * delete's own file removal.
  */
 export async function removeSession(registry: SessionRegistry, sessionId: string): Promise<void> {
   const entry = registry.sessions.get(sessionId);
   if (entry) {
     entry.deleted = true;
     entry.session.cancel();
+    await entry.persisting?.catch(() => {});
   }
   await deleteSession(registry.sessionsDir, sessionId);
+  registry.sessions.delete(sessionId);
 }
