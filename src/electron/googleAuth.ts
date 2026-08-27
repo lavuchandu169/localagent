@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
-import { shell } from "electron";
 
 export interface PkcePair {
   codeVerifier: string;
@@ -184,6 +183,7 @@ export async function signInWithGoogle(clientId: string, authFilePath: string): 
     });
 
     const authUrl = buildGoogleAuthUrl({ clientId, redirectUri, codeChallenge, state });
+    const { shell } = await import("electron");
     await shell.openExternal(authUrl);
 
     const { code } = await redirectPromise;
