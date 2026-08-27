@@ -356,6 +356,7 @@ input:disabled {
   display: none;
 }
 
+#auth-signed-out[hidden],
 #auth-signed-in[hidden] {
   display: none;
 }
