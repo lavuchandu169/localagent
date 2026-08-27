@@ -143,13 +143,13 @@ export async function signInWithGoogle(clientId: string, authFilePath: string): 
     return { error: "GOOGLE_OAUTH_CLIENT_ID is not set — see README for how to create one." };
   }
 
-  try {
-    const { codeVerifier, codeChallenge } = generatePkcePair();
-    const state = generateState();
+  const { codeVerifier, codeChallenge } = generatePkcePair();
+  const state = generateState();
+  const server = http.createServer();
 
+  try {
     // Bind first so the real assigned port is known before building the
     // auth URL and opening the browser.
-    const server = http.createServer();
     await new Promise<void>((resolve, reject) => {
       server.listen(0, "127.0.0.1", resolve);
       server.on("error", reject);
@@ -181,12 +181,19 @@ export async function signInWithGoogle(clientId: string, authFilePath: string): 
         else resolve({ code });
       });
     });
+    // Prevents an unhandled rejection if this promise is abandoned (e.g.
+    // shell.openExternal throws below) before anything else awaits it.
+    redirectPromise.catch(() => {});
 
     const authUrl = buildGoogleAuthUrl({ clientId, redirectUri, codeChallenge, state });
     const { shell } = await import("electron");
     await shell.openExternal(authUrl);
 
-    const { code } = await redirectPromise;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("Sign-in timed out — no response from Google within 5 minutes")), 5 * 60 * 1000);
+    });
+    const { code } = await Promise.race([redirectPromise, timeoutPromise]);
+
     const tokens = await exchangeCodeForTokens(clientId, code, codeVerifier, redirectUri);
     const userInfo = await fetchUserInfo(tokens.accessToken);
     const identity = mapUserInfo(userInfo, tokens.refreshToken);
@@ -195,26 +202,30 @@ export async function signInWithGoogle(clientId: string, authFilePath: string): 
     return { email: identity.email, name: identity.name, pictureUrl: identity.pictureUrl };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    server.close();
   }
 }
 
 export async function refreshAccessToken(clientId: string, refreshToken: string): Promise<StoredTokens | null> {
-  try {
-    const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: clientId,
-        refresh_token: refreshToken,
-        grant_type: "refresh_token",
-      }),
-    });
-    if (!response.ok) return null;
+  const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+  if (response.ok) {
     const raw = (await response.json()) as GoogleTokenResponse;
     return mapTokenResponse(raw);
-  } catch {
+  }
+  if (response.status === 400 || response.status === 401) {
+    // Google's documented signal for a revoked/expired/invalid refresh token.
     return null;
   }
+  throw new Error(`Google token refresh failed transiently: ${response.status} ${await response.text()}`);
 }
 
 export type AuthStatus = { signedIn: false } | { signedIn: true; email: string; name: string; pictureUrl: string | null };
@@ -227,10 +238,15 @@ export async function getAuthStatus(authFilePath: string, clientId: string | und
   // session; if the refresh token is gone or revoked, drop the stale file
   // silently and fall back to signed-out — no scheduled refresh, per spec.
   if (identity.refreshToken && clientId) {
-    const refreshed = await refreshAccessToken(clientId, identity.refreshToken);
-    if (!refreshed) {
-      await clearStoredIdentity(authFilePath);
-      return { signedIn: false };
+    try {
+      const refreshed = await refreshAccessToken(clientId, identity.refreshToken);
+      if (!refreshed) {
+        await clearStoredIdentity(authFilePath);
+        return { signedIn: false };
+      }
+    } catch {
+      // Transient failure (offline, DNS, Google outage) — keep the cached
+      // identity rather than signing the user out; don't touch the file.
     }
   }
 
