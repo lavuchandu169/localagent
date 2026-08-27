@@ -40,3 +40,47 @@ export function buildGoogleAuthUrl(params: GoogleAuthUrlParams): string {
   url.searchParams.set("prompt", "consent");
   return url.toString();
 }
+
+export interface GoogleTokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in: number;
+  token_type: string;
+  id_token?: string;
+}
+
+export interface StoredTokens {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: number;
+}
+
+export function mapTokenResponse(raw: GoogleTokenResponse, now: number = Date.now()): StoredTokens {
+  return {
+    accessToken: raw.access_token,
+    refreshToken: raw.refresh_token ?? null,
+    expiresAt: now + raw.expires_in * 1000,
+  };
+}
+
+export interface GoogleUserInfoResponse {
+  email: string;
+  name: string;
+  picture?: string;
+}
+
+export interface StoredIdentity {
+  email: string;
+  name: string;
+  pictureUrl: string | null;
+  refreshToken: string | null;
+}
+
+export function mapUserInfo(raw: GoogleUserInfoResponse, refreshToken: string | null): StoredIdentity {
+  return {
+    email: raw.email,
+    name: raw.name,
+    pictureUrl: raw.picture ?? null,
+    refreshToken,
+  };
+}
