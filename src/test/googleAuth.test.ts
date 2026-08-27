@@ -11,6 +11,7 @@ import {
   saveStoredIdentity,
   clearStoredIdentity,
   classifyRefreshResponse,
+  buildTokenRequestBody,
 } from "../electron/googleAuth.js";
 
 type StoredIdentityForTest = { email: string; name: string; pictureUrl: string | null; refreshToken: string | null };
@@ -125,6 +126,19 @@ check("400 is revoked", classifyRefreshResponse(400) === "revoked");
 check("401 is revoked", classifyRefreshResponse(401) === "revoked");
 check("500 is transient", classifyRefreshResponse(500) === "transient");
 check("network-adjacent 403 is transient (not Google's revocation signal)", classifyRefreshResponse(403) === "transient");
+
+console.log("\nToken request body (client_secret handling):");
+
+const bodyNoSecret = buildTokenRequestBody({ client_id: "abc", grant_type: "authorization_code" });
+check("client_secret is omitted when not provided", bodyNoSecret.get("client_secret") === null);
+check("other params are still present when no secret is given", bodyNoSecret.get("client_id") === "abc");
+
+const bodyWithSecret = buildTokenRequestBody({ client_id: "abc", grant_type: "authorization_code" }, "shh-its-a-secret");
+check("client_secret is included when provided", bodyWithSecret.get("client_secret") === "shh-its-a-secret");
+check("other params are still present alongside a secret", bodyWithSecret.get("client_id") === "abc");
+
+const bodyEmptySecret = buildTokenRequestBody({ client_id: "abc" }, "");
+check("an empty-string secret is treated as absent, not sent as client_secret=''", bodyEmptySecret.get("client_secret") === null);
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

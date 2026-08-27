@@ -135,6 +135,16 @@ Google Cloud OAuth Client ID, which you create yourself:
    ```bash
    GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com npm run electron
    ```
+6. If sign-in fails with `client_secret is missing`, Google has issued your
+   Client ID as a type that requires it even with PKCE. Download the
+   client secret JSON from the same Credentials page and also set
+   `GOOGLE_OAUTH_CLIENT_SECRET` (it's optional otherwise — omit it and
+   nothing sends a `client_secret`):
+   ```bash
+   GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com \
+   GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret \
+   npm run electron
+   ```
 
 Without `GOOGLE_OAUTH_CLIENT_ID` set, "Sign in with Google" shows an inline
 error instead of opening a browser. "Sign in with Apple" is a disabled stub
