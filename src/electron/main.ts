@@ -8,8 +8,15 @@ import { detectHardware, recommendModelSize } from "./hardwareInfo.js";
 import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken } from "./googleAuth.js";
 import { listSessions, searchSessions, loadSessionRecord } from "../sessionStore.js";
 import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
+import { loadEnvFile } from "./loadEnvFile.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Picks up GOOGLE_OAUTH_CLIENT_ID/SECRET (and anything else) from a local
+// .env in the project root, if present — so `npm run electron` alone works
+// without manually exporting credentials into the shell first. An
+// already-set environment variable always wins over the file.
+loadEnvFile(process.cwd());
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({

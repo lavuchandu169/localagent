@@ -124,9 +124,12 @@ provider, pick a mode, type a task, hit Run — the event log renders tool
 calls/results live, with inline Approve/Deny buttons for anything the
 permission engine asks about.
 
-Optionally, sign in with a Google account from the header control — this is
-identity only right now (nothing in the app is gated by it). It needs a
-Google Cloud OAuth Client ID, which you create yourself:
+Optionally, sign in with a Google account from the header control. Signing
+in is never required — everything works fully signed-out, session history
+included — but while signed in it also turns on automatic backup of your
+session history to a hidden folder in your Google Drive, so it survives a
+reinstall or a move to a new machine. It needs a Google Cloud OAuth Client
+ID, which you create yourself:
 
 1. https://console.cloud.google.com/ → create/select a project.
 2. APIs & Services → OAuth consent screen → configure (External or
@@ -150,6 +153,18 @@ Google Cloud OAuth Client ID, which you create yourself:
    GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret \
    npm run electron
    ```
+7. Instead of exporting these into your shell every time, you can put them
+   in a `.env` file in the project root (already gitignored — never
+   committed):
+   ```bash
+   export GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
+   export GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
+   ```
+   `npm run electron` loads it automatically; a variable already set in
+   your actual shell environment always takes priority over the file.
+8. The Drive backup scope was added after the original sign-in feature —
+   if you signed in before, you'll be asked to sign in again once to grant
+   it.
 
 Without `GOOGLE_OAUTH_CLIENT_ID` set, "Sign in with Google" shows an inline
 error instead of opening a browser. "Sign in with Apple" is a disabled stub
