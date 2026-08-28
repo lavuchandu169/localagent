@@ -12,6 +12,7 @@ import {
   clearStoredIdentity,
   classifyRefreshResponse,
   buildTokenRequestBody,
+  getFreshAccessToken,
 } from "../electron/googleAuth.js";
 
 type StoredIdentityForTest = { email: string; name: string; pictureUrl: string | null; refreshToken: string | null };
@@ -61,7 +62,10 @@ check("code_challenge is passed through", parsed.searchParams.get("code_challeng
 check("code_challenge_method is S256", parsed.searchParams.get("code_challenge_method") === "S256");
 check("state is passed through", parsed.searchParams.get("state") === "xyz789state");
 check("response_type is code", parsed.searchParams.get("response_type") === "code");
-check("scope requests openid, email, and profile", parsed.searchParams.get("scope") === "openid email profile");
+check(
+  "scope requests openid, email, profile, and Drive appdata",
+  parsed.searchParams.get("scope") === "openid email profile https://www.googleapis.com/auth/drive.appdata"
+);
 check("access_type is offline (needed to get a refresh token)", parsed.searchParams.get("access_type") === "offline");
 check("prompt is consent (forces refresh token on repeat sign-ins)", parsed.searchParams.get("prompt") === "consent");
 
@@ -139,6 +143,21 @@ check("other params are still present alongside a secret", bodyWithSecret.get("c
 
 const bodyEmptySecret = buildTokenRequestBody({ client_id: "abc" }, "");
 check("an empty-string secret is treated as absent, not sent as client_secret=''", bodyEmptySecret.get("client_secret") === null);
+
+console.log("\ngetFreshAccessToken:");
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-auth-test-"));
+  const authFilePath = path.join(dir, "auth.json");
+  const token = await getFreshAccessToken(authFilePath, "client-id");
+  check("returns null when there is no stored identity", token === null);
+}
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-auth-test-"));
+  const authFilePath = path.join(dir, "auth.json");
+  await saveStoredIdentity(authFilePath, { email: "a@b.com", name: "A", pictureUrl: null, refreshToken: null });
+  const token = await getFreshAccessToken(authFilePath, "client-id");
+  check("returns null when the stored identity has no refresh token", token === null);
+}
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -31,7 +31,7 @@ export function buildGoogleAuthUrl(params: GoogleAuthUrlParams): string {
   url.searchParams.set("client_id", params.clientId);
   url.searchParams.set("redirect_uri", params.redirectUri);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", "openid email profile");
+  url.searchParams.set("scope", "openid email profile https://www.googleapis.com/auth/drive.appdata");
   url.searchParams.set("code_challenge", params.codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("state", params.state);
@@ -291,6 +291,23 @@ export async function getAuthStatus(authFilePath: string, clientId: string | und
   }
 
   return { signedIn: true, email: identity.email, name: identity.name, pictureUrl: identity.pictureUrl };
+}
+
+/**
+ * Returns a fresh access token for API calls beyond identity (e.g. Drive
+ * cloud sync), refreshing via the stored refresh token. Returns null if
+ * there's no stored identity, no refresh token, or the refresh token has
+ * been revoked — callers should treat any of these as "sync unavailable
+ * right now" without forcing a sign-out themselves. Throws on a transient
+ * failure (network, Google outage), exactly like refreshAccessToken does,
+ * so callers can tell "give up for now" apart from "definitely signed out."
+ */
+export async function getFreshAccessToken(authFilePath: string, clientId: string, clientSecret?: string): Promise<string | null> {
+  const identity = await loadStoredIdentity(authFilePath);
+  if (!identity || !identity.refreshToken) return null;
+  const refreshed = await refreshAccessToken(clientId, identity.refreshToken, clientSecret);
+  if (!refreshed) return null;
+  return refreshed.accessToken;
 }
 
 export async function signOut(authFilePath: string): Promise<void> {
