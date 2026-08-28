@@ -1,5 +1,9 @@
-import { listRemoteSessions, downloadSession, uploadSession, deleteRemoteSession, DriveScopeError } from "../cloudSync.js";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs/promises";
+import { listRemoteSessions, downloadSession, uploadSession, deleteRemoteSession, DriveScopeError, reconcileSessions } from "../cloudSync.js";
 import type { SessionRecord } from "../sessionStore.js";
+import { loadSessionRecord, saveSession } from "../sessionStore.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -125,6 +129,107 @@ console.log("\nDriveScopeError classification:");
     caught = err;
   }
   check("a plain 500 throws a regular Error, not DriveScopeError", caught instanceof Error && !(caught instanceof DriveScopeError));
+}
+
+console.log("\nreconcileSessions:");
+{
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  await saveSession(sessionsDir, makeRecord("local-only", 100));
+
+  const uploaded: SessionRecord[] = [];
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [],
+      downloadSession: async () => {
+        throw new Error("should not be called");
+      },
+      uploadSession: async (_token, record) => {
+        uploaded.push(record);
+      },
+    },
+  });
+  check("pushes a local-only session to remote", uploaded.length === 1 && uploaded[0]?.id === "local-only");
+  check("reports one pushed, zero pulled", result.pushed === 1 && result.pulled === 0);
+}
+
+{
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const remoteRecord = makeRecord("remote-only", 200);
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "remote-only", driveFileId: "f1" }],
+      downloadSession: async () => remoteRecord,
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+  const local = await loadSessionRecord(sessionsDir, "remote-only");
+  check("pulls a remote-only session to local", local !== null && local.title === remoteRecord.title);
+  check("reports one pulled, zero pushed", result.pulled === 1 && result.pushed === 0);
+}
+
+{
+  // Same id both places, remote newer -> pull and overwrite local.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  await saveSession(sessionsDir, makeRecord("both", 100));
+  const newerRemote = makeRecord("both", 200);
+
+  await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "both", driveFileId: "f1" }],
+      downloadSession: async () => newerRemote,
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+  const local = await loadSessionRecord(sessionsDir, "both");
+  check("remote-newer overwrites the local copy", local?.updatedAt === 200);
+}
+
+{
+  // Same id both places, local newer -> push and overwrite remote.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  await saveSession(sessionsDir, makeRecord("both", 300));
+  const olderRemote = makeRecord("both", 100);
+  const uploaded: SessionRecord[] = [];
+
+  await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "both", driveFileId: "f1" }],
+      downloadSession: async () => olderRemote,
+      uploadSession: async (_token, record) => {
+        uploaded.push(record);
+      },
+    },
+  });
+  check("local-newer pushes the local copy to remote", uploaded.length === 1 && uploaded[0]?.updatedAt === 300);
+  const local = await loadSessionRecord(sessionsDir, "both");
+  check("local file is left untouched when local was already newer", local?.updatedAt === 300);
+}
+
+{
+  // One session's failure doesn't block another's sync.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  await saveSession(sessionsDir, makeRecord("ok", 100));
+
+  const uploaded: SessionRecord[] = [];
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "broken", driveFileId: "f-broken" }],
+      downloadSession: async (_token, id) => {
+        if (id === "f-broken") throw new Error("simulated network failure");
+        throw new Error("unexpected id");
+      },
+      uploadSession: async (_token, record) => {
+        uploaded.push(record);
+      },
+    },
+  });
+  check("a failed remote download doesn't abort the rest of the pass", uploaded.some((r) => r.id === "ok"));
+  check("the failed session isn't counted as pulled", result.pulled === 0);
 }
 
 console.log(failures === 0 ? "\nAll cloudSync tests passed." : `\n${failures} cloudSync test(s) FAILED.`);

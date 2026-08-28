@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { SessionRecord } from "./sessionStore.js";
+import { listSessions, loadSessionRecord, saveSession, type SessionRecord } from "./sessionStore.js";
 
 export interface RemoteSessionMeta {
   sessionId: string;
@@ -121,4 +121,83 @@ export async function deleteRemoteSession(accessToken: string, sessionId: string
   });
   if (response.status === 404) return;
   await checkDriveResponse(response, "delete");
+}
+
+export interface ReconcileResult {
+  pulled: number;
+  pushed: number;
+}
+
+export interface ReconcileOps {
+  listRemoteSessions: (accessToken: string) => Promise<RemoteSessionMeta[]>;
+  downloadSession: (accessToken: string, driveFileId: string) => Promise<SessionRecord>;
+  uploadSession: (accessToken: string, record: SessionRecord) => Promise<void>;
+}
+
+function defaultReconcileOps(fetchImpl: FetchImpl): ReconcileOps {
+  return {
+    listRemoteSessions: (token) => listRemoteSessions(token, fetchImpl),
+    downloadSession: (token, id) => downloadSession(token, id, fetchImpl),
+    uploadSession: (token, record) => uploadSession(token, record, fetchImpl),
+  };
+}
+
+/**
+ * Runs once per successful sign-in. Diffs local sessionsDir against the
+ * Drive appDataFolder: pulls anything remote-only, pushes anything
+ * local-only, and for a session present in both keeps whichever has the
+ * newer updatedAt (last-writer-wins), overwriting the other. Each
+ * session's sync is caught individually so one bad file can't block the
+ * rest of the pass.
+ */
+export async function reconcileSessions(
+  sessionsDir: string,
+  accessToken: string,
+  deps: { fetchImpl?: FetchImpl; ops?: ReconcileOps } = {}
+): Promise<ReconcileResult> {
+  const ops = deps.ops ?? defaultReconcileOps(deps.fetchImpl ?? fetch);
+
+  const [localEntries, remoteEntries] = await Promise.all([listSessions(sessionsDir), ops.listRemoteSessions(accessToken)]);
+  const remoteIds = new Set(remoteEntries.map((e) => e.sessionId));
+
+  let pulled = 0;
+  let pushed = 0;
+
+  for (const remote of remoteEntries) {
+    try {
+      const localEntry = localEntries.find((e) => e.id === remote.sessionId);
+      if (!localEntry) {
+        const record = await ops.downloadSession(accessToken, remote.driveFileId);
+        await saveSession(sessionsDir, record);
+        pulled++;
+        continue;
+      }
+      const localRecord = await loadSessionRecord(sessionsDir, remote.sessionId);
+      if (!localRecord) continue;
+      const remoteRecord = await ops.downloadSession(accessToken, remote.driveFileId);
+      if (remoteRecord.updatedAt > localRecord.updatedAt) {
+        await saveSession(sessionsDir, remoteRecord);
+        pulled++;
+      } else if (localRecord.updatedAt > remoteRecord.updatedAt) {
+        await ops.uploadSession(accessToken, localRecord);
+        pushed++;
+      }
+    } catch {
+      // One session's sync failure must not block the rest of the pass.
+    }
+  }
+
+  for (const local of localEntries) {
+    if (remoteIds.has(local.id)) continue;
+    try {
+      const record = await loadSessionRecord(sessionsDir, local.id);
+      if (!record) continue;
+      await ops.uploadSession(accessToken, record);
+      pushed++;
+    } catch {
+      // Same as above.
+    }
+  }
+
+  return { pulled, pushed };
 }
