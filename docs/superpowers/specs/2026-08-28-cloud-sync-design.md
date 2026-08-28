@@ -242,3 +242,18 @@ token is stale, or the user is signed out.
 - Apple sign-in interaction — Apple sign-in remains the disabled stub
   it already is; this feature is Google-account-only, consistent with
   the existing sign-in feature's scope.
+
+## Known limitation: delete propagation while signed out
+
+Deleting a session locally best-effort deletes its Drive copy (see
+Backup flow) — but only when signed in and reachable at the moment of
+deletion. A session deleted while signed out, or while a Drive call
+fails, has no local record of the pending delete: the next reconcile
+pass sees a Drive file with no local counterpart and treats it as
+"remote-only," pulling it back. There is no tombstone mechanism. A
+user who deletes a session under those conditions may see it reappear
+after their next successful sign-in, and would need to delete it again
+while online. This was identified during the implementation branch's
+final review and deliberately left unaddressed — building a tombstone
+list was judged out of scope for this feature's first version;
+revisit if it proves disruptive in practice.
