@@ -6,7 +6,8 @@ import { OpenAICompatibleProvider } from "../providers/openaiCompatible.js";
 import { EmbeddedLlamaProvider } from "../providers/embeddedLlama.js";
 import { AnthropicProvider } from "../providers/anthropicProvider.js";
 import { isEmbeddedModelSize } from "../models.js";
-import { saveSession, deleteSession } from "../sessionStore.js";
+import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
+import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, ChatMessage, ModelProvider, PermissionMode } from "../types.js";
 
 export type ProviderConfig =
@@ -32,6 +33,14 @@ export interface ResumePayload {
   createdAt: number;
 }
 
+/** Best-effort cloud sync wiring, supplied by main.ts. uploadSession/deleteRemoteSession default to the real Drive-backed implementations — tests override them directly instead of faking fetch. */
+export interface CloudSyncConfig {
+  getAccessToken: () => Promise<string | null>;
+  onScopeError: () => void;
+  uploadSession?: (accessToken: string, record: SessionRecord) => Promise<void>;
+  deleteRemoteSession?: (accessToken: string, sessionId: string) => Promise<void>;
+}
+
 interface SessionEntry {
   session: AgentSession;
   provider: ModelProvider;
@@ -47,10 +56,11 @@ interface SessionEntry {
 export interface SessionRegistry {
   sessions: Map<string, SessionEntry>;
   sessionsDir: string;
+  cloudSync?: CloudSyncConfig;
 }
 
-export function createSessionRegistry(sessionsDir: string): SessionRegistry {
-  return { sessions: new Map(), sessionsDir };
+export function createSessionRegistry(sessionsDir: string, cloudSync?: CloudSyncConfig): SessionRegistry {
+  return { sessions: new Map(), sessionsDir, cloudSync };
 }
 
 /** Mirrors the provider construction in cli.ts's --base-url branch. */
@@ -127,14 +137,42 @@ export async function startSession(
 
 async function persistSession(registry: SessionRegistry, sessionId: string, entry: SessionEntry): Promise<void> {
   if (entry.deleted) return;
-  await saveSession(registry.sessionsDir, {
+  const record: SessionRecord = {
     id: sessionId,
     title: entry.title ?? "(untitled)",
     messages: entry.session.getMessages(),
     events: entry.events,
     createdAt: entry.createdAt,
     updatedAt: Date.now(),
-  });
+  };
+  await saveSession(registry.sessionsDir, record);
+  await syncUploadToCloud(registry, record);
+}
+
+/** Best-effort: cloud sync must never fail or delay the caller. A missing drive.appdata scope (DriveScopeError) is reported once via onScopeError; any other failure (offline, revoked token, transient Drive error) is silently swallowed and simply retried on the next save. */
+async function syncUploadToCloud(registry: SessionRegistry, record: SessionRecord): Promise<void> {
+  if (!registry.cloudSync) return;
+  const { getAccessToken, onScopeError, uploadSession: upload = driveUploadSession } = registry.cloudSync;
+  try {
+    const token = await getAccessToken();
+    if (!token) return;
+    await upload(token, record);
+  } catch (err) {
+    if (err instanceof DriveScopeError) onScopeError();
+  }
+}
+
+/** Mirrors syncUploadToCloud's best-effort contract for the delete path. */
+async function syncDeleteFromCloud(registry: SessionRegistry, sessionId: string): Promise<void> {
+  if (!registry.cloudSync) return;
+  const { getAccessToken, onScopeError, deleteRemoteSession: del = driveDeleteRemoteSession } = registry.cloudSync;
+  try {
+    const token = await getAccessToken();
+    if (!token) return;
+    await del(token, sessionId);
+  } catch (err) {
+    if (err instanceof DriveScopeError) onScopeError();
+  }
 }
 
 async function doRunTask(
@@ -236,4 +274,5 @@ export async function removeSession(registry: SessionRegistry, sessionId: string
   }
   await deleteSession(registry.sessionsDir, sessionId);
   registry.sessions.delete(sessionId);
+  await syncDeleteFromCloud(registry, sessionId);
 }

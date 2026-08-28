@@ -13,6 +13,7 @@ import {
 } from "../electron/sessionRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { loadSessionRecord } from "../sessionStore.js";
+import { DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, ChatResponse } from "../types.js";
 
 let failures = 0;
@@ -314,6 +315,131 @@ await (async () => {
 
     check("runTask completes instead of hanging after its session is deleted mid-approval", true);
   })();
+
+  console.log("\nCloud sync integration:");
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
+    );
+    await runTask(registry, sessionId, "a task", () => {});
+    check("runTask completes without a cloudSync config and doesn't throw", true);
+  }
+
+  {
+    // Two separate primitives rather than one nullable object: TypeScript's
+    // control-flow narrowing doesn't track reassignment of a captured
+    // variable that happens only inside a nested callback, so it keeps
+    // treating the outer variable as its literal `null` initializer at the
+    // check() call below — property access via optional chaining on that
+    // stale narrowing fails to compile. Plain equality checks against a
+    // `string | null` aren't affected by that narrowing quirk.
+    let uploadedToken: string | null = null;
+    let uploadedRecordId: string | null = null;
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {
+        throw new Error("should not be called");
+      },
+      uploadSession: async (token, record) => {
+        uploadedToken = token;
+        uploadedRecordId = record.id;
+      },
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
+    );
+    await runTask(registry, sessionId, "sync me", () => {});
+    check(
+      "a completed task uploads the session record when signed in",
+      uploadedToken === "fake-token" && uploadedRecordId === sessionId
+    );
+  }
+
+  {
+    let uploadCalled = false;
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => null,
+      onScopeError: () => {},
+      uploadSession: async () => {
+        uploadCalled = true;
+      },
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
+    );
+    await runTask(registry, sessionId, "not signed in", () => {});
+    check("no upload is attempted when getAccessToken resolves null (signed out)", !uploadCalled);
+  }
+
+  {
+    let scopeErrorCalled = false;
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {
+        scopeErrorCalled = true;
+      },
+      uploadSession: async () => {
+        throw new DriveScopeError("upload");
+      },
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
+    );
+    await runTask(registry, sessionId, "bad scope", () => {});
+    check("a DriveScopeError from upload invokes onScopeError", scopeErrorCalled);
+  }
+
+  {
+    let scopeErrorCalled = false;
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {
+        scopeErrorCalled = true;
+      },
+      uploadSession: async () => {
+        throw new Error("network blip");
+      },
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
+    );
+    let threw = false;
+    try {
+      await runTask(registry, sessionId, "transient failure", () => {});
+    } catch {
+      threw = true;
+    }
+    check("a non-scope upload failure is swallowed, not thrown, and doesn't call onScopeError", !threw && !scopeErrorCalled);
+  }
+
+  {
+    let deletedSessionId: string | null = null;
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {},
+      deleteRemoteSession: async (_token, id) => {
+        deletedSessionId = id;
+      },
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([]) }
+    );
+    await removeSession(registry, sessionId);
+    check("removeSession best-effort deletes the remote copy when signed in", deletedSessionId === sessionId);
+  }
 
   await fs.rm(sessionsDir, { recursive: true, force: true });
 
