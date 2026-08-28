@@ -63,6 +63,8 @@ interface AgentBridge {
   searchSessions(query: string): Promise<SessionIndexEntry[]>;
   loadSession(id: string): Promise<SessionRecord | null>;
   deleteSession(id: string): Promise<void>;
+  onSessionsChanged(callback: () => void): () => void;
+  onCloudSyncScopeWarning(callback: () => void): () => void;
 }
 
 declare global {
@@ -535,6 +537,14 @@ signOutBtn.addEventListener("click", async () => {
   } finally {
     signOutBtn.disabled = false;
   }
+});
+
+window.agent.onSessionsChanged(() => {
+  void refreshSessionList(sessionSearchInput.value.trim());
+});
+
+window.agent.onCloudSyncScopeWarning(() => {
+  authError.textContent = "Sign in again to keep backing up your sessions to Google Drive.";
 });
 
 window.agent.getAuthStatus().then(renderAuthState).catch(() => {});

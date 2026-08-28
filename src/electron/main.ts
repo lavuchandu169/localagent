@@ -5,8 +5,9 @@ import { createSessionRegistry, startSession, runTask, respondPermission, cancel
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import { checkCachedModels } from "./modelCache.js";
 import { detectHardware, recommendModelSize } from "./hardwareInfo.js";
-import { signInWithGoogle, signOut, getAuthStatus } from "./googleAuth.js";
+import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken } from "./googleAuth.js";
 import { listSessions, searchSessions, loadSessionRecord } from "../sessionStore.js";
+import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,8 +31,20 @@ function createWindow(): BrowserWindow {
 app.whenReady().then(() => {
   const authFilePath = path.join(app.getPath("userData"), "auth.json");
   const sessionsDir = path.join(app.getPath("userData"), "sessions");
-  const registry = createSessionRegistry(sessionsDir);
   const win = createWindow();
+
+  let scopeWarningSent = false;
+  function notifyScopeWarning(): void {
+    if (scopeWarningSent) return;
+    scopeWarningSent = true;
+    win.webContents.send("agent:cloud-sync-scope-warning");
+  }
+
+  const registry = createSessionRegistry(sessionsDir, {
+    getAccessToken: () =>
+      getFreshAccessToken(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID ?? "", process.env.GOOGLE_OAUTH_CLIENT_SECRET),
+    onScopeError: notifyScopeWarning,
+  });
 
   ipcMain.handle("agent:start-session", (event, config: SessionConfig, resume?: ResumePayload) =>
     startSession(registry, config, {
@@ -64,9 +77,30 @@ app.whenReady().then(() => {
     if (result.canceled) return null;
     return result.filePaths[0] ?? null;
   });
-  ipcMain.handle("agent:google-sign-in", () =>
-    signInWithGoogle(process.env.GOOGLE_OAUTH_CLIENT_ID ?? "", authFilePath, process.env.GOOGLE_OAUTH_CLIENT_SECRET)
-  );
+  ipcMain.handle("agent:google-sign-in", async () => {
+    const result = await signInWithGoogle(
+      process.env.GOOGLE_OAUTH_CLIENT_ID ?? "",
+      authFilePath,
+      process.env.GOOGLE_OAUTH_CLIENT_SECRET
+    );
+    if (!("error" in result)) {
+      try {
+        const token = await getFreshAccessToken(
+          authFilePath,
+          process.env.GOOGLE_OAUTH_CLIENT_ID ?? "",
+          process.env.GOOGLE_OAUTH_CLIENT_SECRET
+        );
+        if (token) {
+          await reconcileSessions(sessionsDir, token);
+          win.webContents.send("agent:sessions-changed");
+        }
+      } catch (err) {
+        if (err instanceof DriveScopeError) notifyScopeWarning();
+        // Any other reconcile failure is non-fatal — sign-in itself already succeeded.
+      }
+    }
+    return result;
+  });
   ipcMain.handle("agent:sign-out", () => signOut(authFilePath));
   ipcMain.handle("agent:auth-status", () =>
     getAuthStatus(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID, process.env.GOOGLE_OAUTH_CLIENT_SECRET)

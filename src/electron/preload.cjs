@@ -31,4 +31,14 @@ contextBridge.exposeInMainWorld("agent", {
   searchSessions: (query) => ipcRenderer.invoke("agent:search-sessions", query),
   loadSession: (id) => ipcRenderer.invoke("agent:load-session", id),
   deleteSession: (id) => ipcRenderer.invoke("agent:delete-session", id),
+  onSessionsChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("agent:sessions-changed", listener);
+    return () => ipcRenderer.removeListener("agent:sessions-changed", listener);
+  },
+  onCloudSyncScopeWarning: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("agent:cloud-sync-scope-warning", listener);
+    return () => ipcRenderer.removeListener("agent:cloud-sync-scope-warning", listener);
+  },
 });
