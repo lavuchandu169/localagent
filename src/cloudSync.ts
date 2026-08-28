@@ -44,7 +44,7 @@ export async function listRemoteSessions(accessToken: string, fetchImpl: FetchIm
   url.searchParams.set("fields", "files(id,appProperties)");
   url.searchParams.set("pageSize", "1000");
 
-  const response = await fetchImpl(url.toString(), { headers: authHeaders(accessToken) });
+  const response = await fetchImpl(url.toString(), { headers: authHeaders(accessToken), signal: AbortSignal.timeout(10_000) });
   await checkDriveResponse(response, "list");
   const body = (await response.json()) as { files?: { id: string; appProperties?: { sessionId?: string } }[] };
 
@@ -63,7 +63,7 @@ async function findRemoteFile(accessToken: string, sessionId: string, fetchImpl:
   url.searchParams.set("q", `appProperties has { key='sessionId' and value='${sessionId}' }`);
   url.searchParams.set("fields", "files(id)");
 
-  const response = await fetchImpl(url.toString(), { headers: authHeaders(accessToken) });
+  const response = await fetchImpl(url.toString(), { headers: authHeaders(accessToken), signal: AbortSignal.timeout(10_000) });
   await checkDriveResponse(response, "lookup");
   const body = (await response.json()) as { files?: { id: string }[] };
   return body.files?.[0]?.id ?? null;
@@ -72,7 +72,7 @@ async function findRemoteFile(accessToken: string, sessionId: string, fetchImpl:
 /** Downloads and parses one session's full record by its Drive file id. */
 export async function downloadSession(accessToken: string, driveFileId: string, fetchImpl: FetchImpl = fetch): Promise<SessionRecord> {
   const url = `${DRIVE_FILES_ENDPOINT}/${driveFileId}?alt=media`;
-  const response = await fetchImpl(url, { headers: authHeaders(accessToken) });
+  const response = await fetchImpl(url, { headers: authHeaders(accessToken), signal: AbortSignal.timeout(10_000) });
   await checkDriveResponse(response, "download");
   return (await response.json()) as SessionRecord;
 }
@@ -87,6 +87,7 @@ export async function uploadSession(accessToken: string, record: SessionRecord, 
       method: "PATCH",
       headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
       body: content,
+      signal: AbortSignal.timeout(10_000),
     });
     await checkDriveResponse(response, "update");
     return;
@@ -107,6 +108,7 @@ export async function uploadSession(accessToken: string, record: SessionRecord, 
     method: "POST",
     headers: { ...authHeaders(accessToken), "Content-Type": `multipart/related; boundary=${boundary}` },
     body,
+    signal: AbortSignal.timeout(10_000),
   });
   await checkDriveResponse(response, "create");
 }
@@ -118,6 +120,7 @@ export async function deleteRemoteSession(accessToken: string, sessionId: string
   const response = await fetchImpl(`${DRIVE_FILES_ENDPOINT}/${fileId}`, {
     method: "DELETE",
     headers: authHeaders(accessToken),
+    signal: AbortSignal.timeout(10_000),
   });
   if (response.status === 404) return;
   await checkDriveResponse(response, "delete");
@@ -165,15 +168,21 @@ export async function reconcileSessions(
 
   for (const remote of remoteEntries) {
     try {
-      const localEntry = localEntries.find((e) => e.id === remote.sessionId);
-      if (!localEntry) {
+      // Always read the record file straight off disk here, rather than
+      // trusting the `localEntries` snapshot captured at the top of this
+      // function: if the app crashed between sessionStore.ts's two writes
+      // (record file written, index.json not yet updated), or index.json
+      // itself is missing/corrupted, the snapshot can be stale relative to
+      // what's actually on disk. Deciding pull-vs-compare from a stale
+      // snapshot risks silently overwriting a newer local record with an
+      // older remote one.
+      const localRecord = await loadSessionRecord(sessionsDir, remote.sessionId);
+      if (!localRecord) {
         const record = await ops.downloadSession(accessToken, remote.driveFileId);
         await saveSession(sessionsDir, record);
         pulled++;
         continue;
       }
-      const localRecord = await loadSessionRecord(sessionsDir, remote.sessionId);
-      if (!localRecord) continue;
       const remoteRecord = await ops.downloadSession(accessToken, remote.driveFileId);
       if (remoteRecord.updatedAt > localRecord.updatedAt) {
         await saveSession(sessionsDir, remoteRecord);

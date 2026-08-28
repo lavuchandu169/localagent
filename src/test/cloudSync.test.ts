@@ -232,5 +232,38 @@ console.log("\nreconcileSessions:");
   check("the failed session isn't counted as pulled", result.pulled === 0);
 }
 
+console.log("\nreconcileSessions: stale local index doesn't cause data loss:");
+{
+  // Simulates a crash between sessionStore.ts's two writes: the record file
+  // is on disk (via saveSession) but index.json is then corrupted/reset to
+  // not know about it — matching the crash scenario's actual on-disk state.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  await saveSession(sessionsDir, makeRecord("crashed", 500));
+  await fs.writeFile(path.join(sessionsDir, "index.json"), "[]", "utf-8");
+
+  const olderRemote = makeRecord("crashed", 100);
+  const uploaded: SessionRecord[] = [];
+
+  await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "crashed", driveFileId: "f1" }],
+      downloadSession: async () => olderRemote,
+      uploadSession: async (_token, record) => {
+        uploaded.push(record);
+      },
+    },
+  });
+
+  const local = await loadSessionRecord(sessionsDir, "crashed");
+  check(
+    "a record on disk but missing from a stale index is not clobbered by an older remote copy",
+    local?.updatedAt === 500
+  );
+  check(
+    "the local-newer record is pushed to remote instead of being blindly overwritten",
+    uploaded.length === 1 && uploaded[0]?.id === "crashed" && uploaded[0]?.updatedAt === 500
+  );
+}
+
 console.log(failures === 0 ? "\nAll cloudSync tests passed." : `\n${failures} cloudSync test(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -33,11 +33,23 @@ app.whenReady().then(() => {
   const sessionsDir = path.join(app.getPath("userData"), "sessions");
   const win = createWindow();
 
+  // Broadcasts to every live window rather than a single captured `win`
+  // reference: on macOS, closing the window destroys that BrowserWindow
+  // without quitting the app, and app.on("activate", ...) then creates a
+  // NEW window without ever updating any closed-over `win` variable. Sending
+  // to a destroyed window's webContents throws, so these two notifications
+  // must not depend on any single captured window reference.
+  function broadcastToAllWindows(channel: string, ...args: unknown[]): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send(channel, ...args);
+    }
+  }
+
   let scopeWarningSent = false;
   function notifyScopeWarning(): void {
     if (scopeWarningSent) return;
     scopeWarningSent = true;
-    win.webContents.send("agent:cloud-sync-scope-warning");
+    broadcastToAllWindows("agent:cloud-sync-scope-warning");
   }
 
   const registry = createSessionRegistry(sessionsDir, {
@@ -92,7 +104,7 @@ app.whenReady().then(() => {
         );
         if (token) {
           await reconcileSessions(sessionsDir, token);
-          win.webContents.send("agent:sessions-changed");
+          broadcastToAllWindows("agent:sessions-changed");
         }
       } catch (err) {
         if (err instanceof DriveScopeError) notifyScopeWarning();

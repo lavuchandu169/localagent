@@ -146,7 +146,13 @@ async function persistSession(registry: SessionRegistry, sessionId: string, entr
     updatedAt: Date.now(),
   };
   await saveSession(registry.sessionsDir, record);
-  await syncUploadToCloud(registry, record);
+  // Fire-and-forget: syncUploadToCloud never rejects (it catches everything
+  // internally), and this function is awaited inside doRunTask, which
+  // entry.running tracks — finalizeEntry awaits entry.running before
+  // disposing the model provider's native resources, so an awaited slow/hung
+  // cloud sync call here would directly delay freeing the model's memory on
+  // cancel/delete/resume-over-existing.
+  void syncUploadToCloud(registry, record);
 }
 
 /** Best-effort: cloud sync must never fail or delay the caller. A missing drive.appdata scope (DriveScopeError) is reported once via onScopeError; any other failure (offline, revoked token, transient Drive error) is silently swallowed and simply retried on the next save. */
@@ -274,5 +280,8 @@ export async function removeSession(registry: SessionRegistry, sessionId: string
   }
   await deleteSession(registry.sessionsDir, sessionId);
   registry.sessions.delete(sessionId);
-  await syncDeleteFromCloud(registry, sessionId);
+  // Fire-and-forget for the same reason as persistSession's upload call —
+  // syncDeleteFromCloud never rejects, and callers no longer need to wait on
+  // it for correctness.
+  void syncDeleteFromCloud(registry, sessionId);
 }
