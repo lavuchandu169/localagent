@@ -8,6 +8,7 @@ import {
   saveSession,
   deleteSession,
   rebuildIndex,
+  claimUnownedSessions,
   type SessionRecord,
 } from "../sessionStore.js";
 import type { ChatMessage, AgentEvent } from "../types.js";
@@ -28,7 +29,7 @@ function makeRecord(id: string, title: string, updatedAt: number, extra: Partial
     { role: "user", content: title },
   ];
   const events: AgentEvent[] = [{ type: "text", text: `response mentioning ${title}` }];
-  return { id, title, messages, events, createdAt: updatedAt, updatedAt, ...extra };
+  return { id, title, messages, events, createdAt: updatedAt, updatedAt, ownerEmail: null, ...extra };
 }
 
 console.log("Session store (explicit path):");
@@ -92,7 +93,57 @@ async function runTests() {
   const listAfterRebuild = await listSessions(sessionsDir);
   check("listSessions recovers via rebuildIndex when index.json is corrupted", listAfterRebuild.some((e) => e.id === "s1"));
 
+  console.log("\nOwnership filtering:");
+  const ownershipDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessions-owner-test-"));
+  await saveSession(ownershipDir, makeRecord("owned-a", "a's session", 100, { ownerEmail: "a@example.com" }));
+  await saveSession(ownershipDir, makeRecord("owned-b", "b's session", 200, { ownerEmail: "b@example.com" }));
+  await saveSession(ownershipDir, makeRecord("unowned", "nobody's session", 300, { ownerEmail: null }));
+
+  const allSessions = await listSessions(ownershipDir);
+  check("omitting the owner filter returns every session regardless of owner", allSessions.length === 3);
+
+  const aSessions = await listSessions(ownershipDir, "a@example.com");
+  check("listSessions(dir, email) returns only that owner's sessions", aSessions.length === 1 && aSessions[0]?.id === "owned-a");
+
+  const noneSessions = await listSessions(ownershipDir, "nobody-signed-in@example.com");
+  check("a non-matching owner filter returns an empty list", noneSessions.length === 0);
+
+  const nullOwnerSessions = await listSessions(ownershipDir, null);
+  check("listSessions(dir, null) returns only unowned sessions", nullOwnerSessions.length === 1 && nullOwnerSessions[0]?.id === "unowned");
+
+  const searchScopedToA = await searchSessions(ownershipDir, "session", "a@example.com");
+  check("searchSessions honors the owner filter too", searchScopedToA.length === 1 && searchScopedToA[0]?.id === "owned-a");
+
+  console.log("\nclaimUnownedSessions:");
+  const claimed = await claimUnownedSessions(ownershipDir, "a@example.com");
+  check("claims exactly the unowned sessions", claimed === 1);
+  const afterClaim = await loadSessionRecord(ownershipDir, "unowned");
+  check("the claimed session now has the claiming owner", afterClaim?.ownerEmail === "a@example.com");
+  const bUntouched = await loadSessionRecord(ownershipDir, "owned-b");
+  check("an already-owned session is left untouched by a different claim", bUntouched?.ownerEmail === "b@example.com");
+  const reclaim = await claimUnownedSessions(ownershipDir, "c@example.com");
+  check("claiming again with nothing left unowned claims zero", reclaim === 0);
+
+  console.log("\nBackward compatibility (pre-ownership data):");
+  await fs.mkdir(path.join(ownershipDir, "legacy"), { recursive: true });
+  const legacyDir = path.join(ownershipDir, "legacy");
+  const legacyRecord = { id: "legacy1", title: "legacy session", messages: [], events: [], createdAt: 1, updatedAt: 1 };
+  await fs.writeFile(path.join(legacyDir, "legacy1.json"), JSON.stringify(legacyRecord), "utf-8");
+  await fs.writeFile(
+    path.join(legacyDir, "index.json"),
+    JSON.stringify([{ id: "legacy1", title: "legacy session", updatedAt: 1 }]),
+    "utf-8"
+  );
+  const legacyLoaded = await loadSessionRecord(legacyDir, "legacy1");
+  check("a record file with no ownerEmail field loads with ownerEmail defaulted to null", legacyLoaded?.ownerEmail === null);
+  const legacyIndexed = await listSessions(legacyDir);
+  check(
+    "an index.json with no ownerEmail field on its entries is accepted as-is (not treated as corrupt) and defaults to null",
+    legacyIndexed.length === 1 && legacyIndexed[0]?.ownerEmail === null
+  );
+
   await fs.rm(sessionsDir, { recursive: true, force: true });
+  await fs.rm(ownershipDir, { recursive: true, force: true });
 }
 
 await runTests();

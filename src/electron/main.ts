@@ -5,8 +5,8 @@ import { createSessionRegistry, startSession, runTask, respondPermission, cancel
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import { checkCachedModels } from "./modelCache.js";
 import { detectHardware, recommendModelSize } from "./hardwareInfo.js";
-import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken } from "./googleAuth.js";
-import { listSessions, searchSessions, loadSessionRecord } from "../sessionStore.js";
+import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken, getStoredEmail } from "./googleAuth.js";
+import { listSessions, searchSessions, loadSessionRecord, claimUnownedSessions } from "../sessionStore.js";
 import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 import { loadEnvFile } from "./loadEnvFile.js";
 
@@ -63,6 +63,7 @@ app.whenReady().then(() => {
     getAccessToken: () =>
       getFreshAccessToken(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID ?? "", process.env.GOOGLE_OAUTH_CLIENT_SECRET),
     onScopeError: notifyScopeWarning,
+    getOwnerEmail: () => getStoredEmail(authFilePath),
   });
 
   ipcMain.handle("agent:start-session", (event, config: SessionConfig, resume?: ResumePayload) =>
@@ -103,6 +104,18 @@ app.whenReady().then(() => {
       process.env.GOOGLE_OAUTH_CLIENT_SECRET
     );
     if (!("error" in result)) {
+      // Local sessions saved before ownership existed (or by an older
+      // version of the app) have no owner yet — claim them for whoever
+      // just signed in, rather than leaving them permanently invisible now
+      // that the sidebar filters by account. Purely local, so this runs
+      // regardless of whether a Drive access token is available below.
+      try {
+        const claimed = await claimUnownedSessions(sessionsDir, result.email);
+        if (claimed > 0) console.log(`[cloudSync] claimed ${claimed} previously-unowned local session(s) for ${result.email}`);
+      } catch (err) {
+        console.warn("[cloudSync] claiming unowned local sessions failed:", err);
+      }
+
       try {
         const token = await getFreshAccessToken(
           authFilePath,
@@ -112,7 +125,6 @@ app.whenReady().then(() => {
         if (token) {
           const { pulled, pushed } = await reconcileSessions(sessionsDir, token);
           console.log(`[cloudSync] reconcile after sign-in: pulled ${pulled}, pushed ${pushed}`);
-          broadcastToAllWindows("agent:sessions-changed");
         } else {
           console.warn("[cloudSync] sign-in succeeded but no access token was available for reconcile — skipping.");
         }
@@ -121,6 +133,8 @@ app.whenReady().then(() => {
         // Any other reconcile failure is non-fatal — sign-in itself already succeeded.
         console.warn("[cloudSync] reconcile after sign-in failed:", err);
       }
+
+      broadcastToAllWindows("agent:sessions-changed");
     }
     return result;
   });
@@ -128,8 +142,17 @@ app.whenReady().then(() => {
   ipcMain.handle("agent:auth-status", () =>
     getAuthStatus(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID, process.env.GOOGLE_OAUTH_CLIENT_SECRET)
   );
-  ipcMain.handle("agent:list-sessions", () => listSessions(sessionsDir));
-  ipcMain.handle("agent:search-sessions", (_event, query: string) => searchSessions(sessionsDir, query));
+  // Session history is gated by the signed-in account: signed out (or no
+  // account ever stored) shows nothing, matching the app's per-account
+  // model rather than exposing every local session unconditionally.
+  ipcMain.handle("agent:list-sessions", async () => {
+    const email = await getStoredEmail(authFilePath);
+    return email ? listSessions(sessionsDir, email) : [];
+  });
+  ipcMain.handle("agent:search-sessions", async (_event, query: string) => {
+    const email = await getStoredEmail(authFilePath);
+    return email ? searchSessions(sessionsDir, query, email) : [];
+  });
   ipcMain.handle("agent:load-session", async (_event, id: string) => {
     try {
       return await loadSessionRecord(sessionsDir, id);

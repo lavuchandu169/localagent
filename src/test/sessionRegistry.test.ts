@@ -245,6 +245,7 @@ await (async () => {
           priorEvents: [{ type: "text", text: "earlier response" }],
           title: "earlier task title",
           createdAt: 12345,
+          ownerEmail: null,
         },
       }
     );
@@ -347,6 +348,7 @@ await (async () => {
         uploadedToken = token;
         uploadedRecordId = record.id;
       },
+      getOwnerEmail: async () => null,
     });
     const { sessionId } = await startSession(
       registry,
@@ -368,6 +370,7 @@ await (async () => {
       uploadSession: async () => {
         uploadCalled = true;
       },
+      getOwnerEmail: async () => null,
     });
     const { sessionId } = await startSession(
       registry,
@@ -388,6 +391,7 @@ await (async () => {
       uploadSession: async () => {
         throw new DriveScopeError("upload");
       },
+      getOwnerEmail: async () => null,
     });
     const { sessionId } = await startSession(
       registry,
@@ -408,6 +412,7 @@ await (async () => {
       uploadSession: async () => {
         throw new Error("network blip");
       },
+      getOwnerEmail: async () => null,
     });
     const { sessionId } = await startSession(
       registry,
@@ -431,6 +436,7 @@ await (async () => {
       deleteRemoteSession: async (_token, id) => {
         deletedSessionId = id;
       },
+      getOwnerEmail: async () => null,
     });
     const { sessionId } = await startSession(
       registry,
@@ -439,6 +445,54 @@ await (async () => {
     );
     await removeSession(registry, sessionId);
     check("removeSession best-effort deletes the remote copy when signed in", deletedSessionId === sessionId);
+  }
+
+  console.log("\nSession ownership:");
+  {
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {},
+      uploadSession: async () => {},
+      getOwnerEmail: async () => "owner@example.com",
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
+    );
+    await runTask(registry, sessionId, "a new session", () => {});
+    const saved = await loadSessionRecord(sessionsDir, sessionId);
+    check("a new session is stamped with the currently signed-in owner", saved?.ownerEmail === "owner@example.com");
+  }
+
+  {
+    // getOwnerEmail resolves to a DIFFERENT value than the resumed
+    // session's original owner (simulating a sign-out or account switch
+    // mid-conversation) — the original owner must survive unchanged.
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {},
+      uploadSession: async () => {},
+      getOwnerEmail: async () => "someone-else@example.com",
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      {
+        providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]),
+        resume: {
+          sessionId: "resumed-owned-session",
+          initialMessages: [{ role: "system", content: "sys" }],
+          priorEvents: [],
+          title: "resumed",
+          createdAt: Date.now(),
+          ownerEmail: "original-owner@example.com",
+        },
+      }
+    );
+    await runTask(registry, sessionId, "continue the resumed session", () => {});
+    const saved = await loadSessionRecord(sessionsDir, sessionId);
+    check("a resumed session keeps its original owner regardless of who's currently signed in", saved?.ownerEmail === "original-owner@example.com");
   }
 
   await fs.rm(sessionsDir, { recursive: true, force: true });

@@ -24,12 +24,41 @@ nothing here does live push/notify between devices.
 ## Scope change from the original sign-in spec
 
 The original Google sign-in spec was explicit that sign-in gates
-nothing — it's optional identity, full stop. This feature keeps that
-true for the app as a whole: everything continues to work fully
-signed-out, and local session save/resume is unaffected either way.
-What changes is narrower — signing in now also turns on automatic
-cloud backup of session history. Sign-in remains optional; it just
-does more than identity now for users who opt into it.
+nothing — it's optional identity, full stop. Signing in stays entirely
+optional here too — nothing forces it, and the app is fully usable
+without it. But within this feature's own area (session history), the
+scope did widen further than the initial design: chat/task/tool
+functionality itself is never gated, but **session history visibility
+is now gated by account** (see below) — updated after live testing
+surfaced that per-account separation, not just per-account backup, was
+the actual expectation, matching how a multi-user product like
+Claude.ai behaves rather than a single shared local history file.
+
+### Session ownership and history visibility
+
+Every session is stamped with an `ownerEmail` — the account signed in
+at the moment the session is first created (or, for a resumed session,
+whichever account originally owned it; resuming never reassigns
+ownership). The sidebar's list/search only ever shows the
+currently-signed-in account's own sessions:
+
+- **Signed out:** the sidebar shows nothing, not even sessions created
+  locally before signing in ever existed as a concept.
+- **Signed in as account A:** only A's sessions show. Switching to
+  account B shows only B's.
+- **Local-only sessions from before this concept existed** (or created
+  offline, before ever signing in) have no owner. The first time any
+  account signs in, every unowned local session is automatically
+  claimed by that account — so existing history isn't orphaned, it
+  becomes that user's going forward. A second account signing in later
+  does *not* also claim those — only genuinely-still-unowned sessions
+  are claimed on each sign-in.
+
+This is a local-only filter — it has no interaction with Drive's own
+per-account isolation (which is automatic and complete, since each
+Google account has an entirely separate `appDataFolder`). It exists
+purely because a single machine's local disk is otherwise one shared
+pool of session files regardless of who's signed in.
 
 ## Architecture: reuse the existing per-session file shape, sync via Drive's `appDataFolder`
 

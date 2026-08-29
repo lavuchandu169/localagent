@@ -31,6 +31,7 @@ export interface ResumePayload {
   priorEvents: AgentEvent[];
   title: string;
   createdAt: number;
+  ownerEmail: string | null;
 }
 
 /** Best-effort cloud sync wiring, supplied by main.ts. uploadSession/deleteRemoteSession default to the real Drive-backed implementations — tests override them directly instead of faking fetch. */
@@ -39,6 +40,8 @@ export interface CloudSyncConfig {
   onScopeError: () => void;
   uploadSession?: (accessToken: string, record: SessionRecord) => Promise<void>;
   deleteRemoteSession?: (accessToken: string, sessionId: string) => Promise<void>;
+  /** Cheap, no-network read of the currently signed-in account's email (or null if signed out) — stamped onto every saved session as its owner, so the UI can later filter local history by account. */
+  getOwnerEmail: () => Promise<string | null>;
 }
 
 interface SessionEntry {
@@ -51,6 +54,8 @@ interface SessionEntry {
   deleted: boolean;
   /** The currently in-flight runTask() call, if any — awaited by finalizeEntry before disposing the provider, so a model's native resources are never freed while it's still mid-generation. */
   running: Promise<void> | null;
+  /** Fixed once at session creation (or carried over from a resumed session's prior record) — never re-derived from "whoever's currently signed in" on every save, so signing out or switching accounts mid-conversation can't silently strip ownership from an already-owned session. */
+  ownerEmail: string | null;
 }
 
 export interface SessionRegistry {
@@ -122,6 +127,12 @@ export async function startSession(
       }),
   });
 
+  // Fixed once here: a resumed session keeps its original owner regardless
+  // of who's signed in right now; a brand-new session is stamped with
+  // whoever's signed in at the moment it's created, once, not re-derived
+  // on every later save (see the field's own doc comment).
+  const ownerEmail = deps.resume ? deps.resume.ownerEmail : registry.cloudSync ? await registry.cloudSync.getOwnerEmail() : null;
+
   registry.sessions.set(sessionId, {
     session,
     provider,
@@ -131,6 +142,7 @@ export async function startSession(
     createdAt: deps.resume?.createdAt ?? Date.now(),
     deleted: false,
     running: null,
+    ownerEmail,
   });
   return { sessionId, workspaceRoot };
 }
@@ -144,6 +156,7 @@ async function persistSession(registry: SessionRegistry, sessionId: string, entr
     events: entry.events,
     createdAt: entry.createdAt,
     updatedAt: Date.now(),
+    ownerEmail: entry.ownerEmail,
   };
   await saveSession(registry.sessionsDir, record);
   // Fire-and-forget: syncUploadToCloud never rejects (it catches everything

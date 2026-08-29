@@ -294,6 +294,17 @@ export async function getAuthStatus(authFilePath: string, clientId: string | und
 }
 
 /**
+ * Cheap, no-network read of the currently stored account's email (or null
+ * if signed out) — for local session-ownership stamping/filtering, where
+ * a full refreshed AuthStatus would be unnecessary network overhead on
+ * every save/list/search call.
+ */
+export async function getStoredEmail(authFilePath: string): Promise<string | null> {
+  const identity = await loadStoredIdentity(authFilePath);
+  return identity?.email ?? null;
+}
+
+/**
  * Returns a fresh access token for API calls beyond identity (e.g. Drive
  * cloud sync), refreshing via the stored refresh token. Returns null if
  * there's no stored identity, no refresh token, or the refresh token has

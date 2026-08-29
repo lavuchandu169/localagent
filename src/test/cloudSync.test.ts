@@ -16,7 +16,7 @@ function check(name: string, cond: boolean) {
 }
 
 function makeRecord(id: string, updatedAt: number): SessionRecord {
-  return { id, title: `title-${id}`, messages: [], events: [], createdAt: updatedAt, updatedAt };
+  return { id, title: `title-${id}`, messages: [], events: [], createdAt: updatedAt, updatedAt, ownerEmail: null };
 }
 
 console.log("cloudSync (fake fetch):");

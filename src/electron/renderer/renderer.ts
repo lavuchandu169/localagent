@@ -27,6 +27,7 @@ interface SessionIndexEntry {
   id: string;
   title: string;
   updatedAt: number;
+  ownerEmail: string | null;
 }
 
 interface SessionRecord {
@@ -36,6 +37,7 @@ interface SessionRecord {
   events: AgentEvent[];
   createdAt: number;
   updatedAt: number;
+  ownerEmail: string | null;
 }
 
 interface ResumePayload {
@@ -44,6 +46,7 @@ interface ResumePayload {
   priorEvents: AgentEvent[];
   title: string;
   createdAt: number;
+  ownerEmail: string | null;
 }
 
 interface AgentBridge {
@@ -421,6 +424,7 @@ async function resumeSession(id: string): Promise<void> {
     priorEvents: record.events,
     title: record.title,
     createdAt: record.createdAt,
+    ownerEmail: record.ownerEmail,
   });
 }
 
@@ -532,6 +536,11 @@ signOutBtn.addEventListener("click", async () => {
   try {
     await window.agent.signOut();
     renderAuthState({ signedIn: false });
+    // Session history is filtered by the signed-in account server-side —
+    // refresh now so the sidebar clears immediately instead of continuing
+    // to show the just-signed-out account's sessions until the next
+    // unrelated list refresh.
+    await refreshSessionList(sessionSearchInput.value.trim());
   } catch (err) {
     authError.textContent = err instanceof Error ? err.message : String(err);
   } finally {

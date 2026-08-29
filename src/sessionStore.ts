@@ -6,6 +6,8 @@ export interface SessionIndexEntry {
   id: string;
   title: string;
   updatedAt: number;
+  /** The Google account email that owns this session, or null for a session saved before ownership existed (or one that's never been signed-in-tagged). */
+  ownerEmail: string | null;
 }
 
 export interface SessionRecord {
@@ -15,6 +17,8 @@ export interface SessionRecord {
   events: AgentEvent[];
   createdAt: number;
   updatedAt: number;
+  /** The Google account email that owns this session, or null. See SessionIndexEntry. */
+  ownerEmail: string | null;
 }
 
 function indexPath(sessionsDir: string): string {
@@ -48,14 +52,28 @@ export async function rebuildIndex(sessionsDir: string): Promise<SessionIndexEnt
     if (file === "index.json" || !file.endsWith(".json")) continue;
     const id = file.slice(0, -".json".length);
     const record = await loadSessionRecord(sessionsDir, id);
-    if (record) entries.push({ id: record.id, title: record.title, updatedAt: record.updatedAt });
+    if (record) entries.push({ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail });
   }
   entries.sort((a, b) => b.updatedAt - a.updatedAt);
   await writeIndex(sessionsDir, entries);
   return entries;
 }
 
-export async function listSessions(sessionsDir: string): Promise<SessionIndexEntry[]> {
+/**
+ * Lists every session, or only those owned by `ownerEmail` when it's
+ * passed (including `null`, to list only pre-ownership/untagged
+ * sessions). Omit the second argument entirely for internal callers that
+ * need every local session regardless of owner (cloud sync's reconcile
+ * pass, `claimUnownedSessions`) — the UI-facing IPC handlers are the only
+ * callers that should pass it.
+ */
+export async function listSessions(sessionsDir: string, ownerEmail?: string | null): Promise<SessionIndexEntry[]> {
+  const entries = await listAllSessions(sessionsDir);
+  if (ownerEmail === undefined) return entries;
+  return entries.filter((e) => e.ownerEmail === ownerEmail);
+}
+
+async function listAllSessions(sessionsDir: string): Promise<SessionIndexEntry[]> {
   try {
     const raw = await fs.readFile(indexPath(sessionsDir), "utf-8");
     const parsed = JSON.parse(raw) as unknown;
@@ -69,7 +87,11 @@ export async function listSessions(sessionsDir: string): Promise<SessionIndexEnt
         typeof (e as SessionIndexEntry).updatedAt === "number"
     );
     if (!isValid) return rebuildIndex(sessionsDir);
-    return parsed as SessionIndexEntry[];
+    // ownerEmail is normalized here rather than folded into the validity
+    // check above so an index.json written before ownership existed isn't
+    // treated as corrupt and rebuilt unnecessarily — it's just missing a
+    // field that defaults to null.
+    return (parsed as SessionIndexEntry[]).map((e) => ({ ...e, ownerEmail: e.ownerEmail ?? null }));
   } catch (err: any) {
     if (err?.code === "ENOENT") return [];
     return rebuildIndex(sessionsDir);
@@ -92,7 +114,15 @@ export async function loadSessionRecord(sessionsDir: string, id: string): Promis
     ) {
       return null;
     }
-    return { id: r.id, title: r.title, messages: r.messages, events: r.events, createdAt: r.createdAt, updatedAt: r.updatedAt };
+    return {
+      id: r.id,
+      title: r.title,
+      messages: r.messages,
+      events: r.events,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+      ownerEmail: r.ownerEmail ?? null,
+    };
   } catch {
     return null;
   }
@@ -102,25 +132,29 @@ export async function saveSession(sessionsDir: string, record: SessionRecord): P
   await fs.mkdir(sessionsDir, { recursive: true });
   await fs.writeFile(recordPath(sessionsDir, record.id), JSON.stringify(record, null, 2), "utf-8");
 
-  const entries = await listSessions(sessionsDir);
+  const entries = await listAllSessions(sessionsDir);
   const withoutThis = entries.filter((e) => e.id !== record.id);
-  withoutThis.push({ id: record.id, title: record.title, updatedAt: record.updatedAt });
+  withoutThis.push({ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail });
   withoutThis.sort((a, b) => b.updatedAt - a.updatedAt);
   await writeIndex(sessionsDir, withoutThis);
 }
 
 export async function deleteSession(sessionsDir: string, id: string): Promise<void> {
   await fs.rm(recordPath(sessionsDir, id), { force: true });
-  const entries = await listSessions(sessionsDir);
+  const entries = await listAllSessions(sessionsDir);
   await writeIndex(
     sessionsDir,
     entries.filter((e) => e.id !== id)
   );
 }
 
-/** Full-transcript search: title, every message's content, and every text/status event's text — not just the title. */
-export async function searchSessions(sessionsDir: string, query: string): Promise<SessionIndexEntry[]> {
-  const entries = await listSessions(sessionsDir);
+/**
+ * Full-transcript search: title, every message's content, and every
+ * text/status event's text — not just the title. See `listSessions` for
+ * the `ownerEmail` filtering contract.
+ */
+export async function searchSessions(sessionsDir: string, query: string, ownerEmail?: string | null): Promise<SessionIndexEntry[]> {
+  const entries = await listSessions(sessionsDir, ownerEmail);
   const trimmed = query.trim();
   if (!trimmed) return entries;
 
@@ -137,4 +171,24 @@ export async function searchSessions(sessionsDir: string, query: string): Promis
     if (haystackParts.join("\n").toLowerCase().includes(lower)) matches.push(entry);
   }
   return matches;
+}
+
+/**
+ * Claims every local session with no owner (created before this concept
+ * existed, or never tagged) for `email` — called once per sign-in so a
+ * user's pre-existing local history becomes visible under their account
+ * instead of permanently orphaned. Idempotent: once claimed, a session is
+ * never reassigned by this function again. Returns the number claimed.
+ */
+export async function claimUnownedSessions(sessionsDir: string, email: string): Promise<number> {
+  const all = await listAllSessions(sessionsDir);
+  let claimed = 0;
+  for (const entry of all) {
+    if (entry.ownerEmail !== null) continue;
+    const record = await loadSessionRecord(sessionsDir, entry.id);
+    if (!record) continue;
+    await saveSession(sessionsDir, { ...record, ownerEmail: email });
+    claimed++;
+  }
+  return claimed;
 }
