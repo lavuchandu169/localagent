@@ -105,10 +105,24 @@ narrow, typed, main-owns-state:
 
 `app.getPath('userData')/auth.json`, main-process-only file access (same
 pattern already used for everything else — the renderer never gets raw
-`fs`). Contains `{ email, name, pictureUrl, refreshToken }`. This file is
-equivalent in sensitivity to a browser's saved-login state; no new
-protection beyond normal OS file permissions is in scope here, consistent
-with how e.g. `~/.node-llama-cpp/models` is already handled.
+`fs`). Contains `{ email, name, pictureUrl, refreshToken }`.
+
+**Revised after initial ship:** this file's contents are encrypted at
+rest via Electron's `safeStorage` (macOS Keychain / Windows DPAPI / Linux
+libsecret — `src/electron/secureStorage.ts`), not plain OS file
+permissions alone as originally scoped here. A refresh token is a
+long-lived bearer credential, not equivalent to ephemeral browser session
+state, and ships to every user's machine as part of this app's data —
+worth the OS-native protection. `googleAuth.ts` itself stays
+Electron-free: `loadStoredIdentity`/`saveStoredIdentity` (and everything
+that calls them) take an optional `StorageCrypto` encrypt/decrypt pair;
+omitting it keeps the original plain-JSON behavior, which is what lets
+`googleAuth.test.ts` keep running without Electron. `main.ts` supplies the
+real Keychain-backed implementation, falling back to plain text (still
+0600-permissioned) only when `safeStorage.isEncryptionAvailable()` is
+false (some minimal Linux setups with no keyring daemon). No migration
+for a pre-existing plaintext file — it fails to decrypt and is treated as
+signed-out, prompting one re-sign-in.
 
 ## UI
 

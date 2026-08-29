@@ -9,6 +9,7 @@ import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken, getStore
 import { listSessions, searchSessions, loadSessionRecord, claimUnownedSessions } from "../sessionStore.js";
 import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 import { loadEnvFile } from "./loadEnvFile.js";
+import { isSecureStorageAvailable, electronStorageCrypto } from "./secureStorage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -40,6 +41,18 @@ app.whenReady().then(() => {
   const sessionsDir = path.join(app.getPath("userData"), "sessions");
   const win = createWindow();
 
+  // The stored Google identity (including the refresh token) is encrypted
+  // at rest via the OS-native credential backend (Keychain/DPAPI/libsecret)
+  // wherever it's available. Falls back to a plain (still 0600-permissioned)
+  // file rather than failing sign-in outright on a system with no
+  // secret-service/keyring daemon running (some minimal Linux setups).
+  const storageCrypto = isSecureStorageAvailable() ? electronStorageCrypto : undefined;
+  if (!storageCrypto) {
+    console.warn(
+      "[auth] OS-native secure storage isn't available on this system — the Google identity file will be stored as plain text (0600 permissions) instead of OS-encrypted."
+    );
+  }
+
   // Broadcasts to every live window rather than a single captured `win`
   // reference: on macOS, closing the window destroys that BrowserWindow
   // without quitting the app, and app.on("activate", ...) then creates a
@@ -61,9 +74,9 @@ app.whenReady().then(() => {
 
   const registry = createSessionRegistry(sessionsDir, {
     getAccessToken: () =>
-      getFreshAccessToken(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID ?? "", process.env.GOOGLE_OAUTH_CLIENT_SECRET),
+      getFreshAccessToken(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID ?? "", process.env.GOOGLE_OAUTH_CLIENT_SECRET, storageCrypto),
     onScopeError: notifyScopeWarning,
-    getOwnerEmail: () => getStoredEmail(authFilePath),
+    getOwnerEmail: () => getStoredEmail(authFilePath, storageCrypto),
   });
 
   ipcMain.handle("agent:start-session", (event, config: SessionConfig, resume?: ResumePayload) =>
@@ -101,7 +114,8 @@ app.whenReady().then(() => {
     const result = await signInWithGoogle(
       process.env.GOOGLE_OAUTH_CLIENT_ID ?? "",
       authFilePath,
-      process.env.GOOGLE_OAUTH_CLIENT_SECRET
+      process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+      storageCrypto
     );
     if (!("error" in result)) {
       // Local sessions saved before ownership existed (or by an older
@@ -120,7 +134,8 @@ app.whenReady().then(() => {
         const token = await getFreshAccessToken(
           authFilePath,
           process.env.GOOGLE_OAUTH_CLIENT_ID ?? "",
-          process.env.GOOGLE_OAUTH_CLIENT_SECRET
+          process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+          storageCrypto
         );
         if (token) {
           const { pulled, pushed } = await reconcileSessions(sessionsDir, token);
@@ -140,17 +155,17 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("agent:sign-out", () => signOut(authFilePath));
   ipcMain.handle("agent:auth-status", () =>
-    getAuthStatus(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID, process.env.GOOGLE_OAUTH_CLIENT_SECRET)
+    getAuthStatus(authFilePath, process.env.GOOGLE_OAUTH_CLIENT_ID, process.env.GOOGLE_OAUTH_CLIENT_SECRET, storageCrypto)
   );
   // Session history is gated by the signed-in account: signed out (or no
   // account ever stored) shows nothing, matching the app's per-account
   // model rather than exposing every local session unconditionally.
   ipcMain.handle("agent:list-sessions", async () => {
-    const email = await getStoredEmail(authFilePath);
+    const email = await getStoredEmail(authFilePath, storageCrypto);
     return email ? listSessions(sessionsDir, email) : [];
   });
   ipcMain.handle("agent:search-sessions", async (_event, query: string) => {
-    const email = await getStoredEmail(authFilePath);
+    const email = await getStoredEmail(authFilePath, storageCrypto);
     return email ? searchSessions(sessionsDir, query, email) : [];
   });
   ipcMain.handle("agent:load-session", async (_event, id: string) => {

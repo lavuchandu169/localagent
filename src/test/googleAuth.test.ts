@@ -13,7 +13,14 @@ import {
   classifyRefreshResponse,
   buildTokenRequestBody,
   getFreshAccessToken,
+  type StorageCrypto,
 } from "../electron/googleAuth.js";
+
+/** Not real encryption — just reversible enough to prove the plumbing actually calls encrypt on write and decrypt on read, without depending on Electron's safeStorage (which secureStorage.ts wraps and is verified separately, live). */
+const fakeStorageCrypto: StorageCrypto = {
+  encrypt: (plainText) => Buffer.from(plainText, "utf-8").toString("base64"),
+  decrypt: (cipherText) => Buffer.from(cipherText, "base64").toString("utf-8"),
+};
 
 type StoredIdentityForTest = { email: string; name: string; pictureUrl: string | null; refreshToken: string | null };
 
@@ -113,6 +120,32 @@ async function runStorageTests() {
 
   await clearStoredIdentity(tmpFile);
   check("clearing a nonexistent file does not throw", true);
+
+  const tmpCryptoFile = path.join(os.tmpdir(), `localagent-auth-test-crypto-${process.pid}-${Date.now()}.json`);
+  const identity2: StoredIdentityForTest = { email: "d@example.com", name: "Dee", pictureUrl: "https://x/y.png", refreshToken: "rt-2" };
+  await saveStoredIdentity(tmpCryptoFile, identity2, fakeStorageCrypto);
+  const onDisk = await fs.readFile(tmpCryptoFile, "utf-8");
+  let onDiskIsPlainJson = true;
+  try {
+    JSON.parse(onDisk);
+  } catch {
+    onDiskIsPlainJson = false;
+  }
+  check("with a storageCrypto, the on-disk content is not plain JSON (it was actually transformed)", !onDiskIsPlainJson);
+  const loadedWithCrypto = await loadStoredIdentity(tmpCryptoFile, fakeStorageCrypto);
+  check("saved-with-crypto identity round-trips through load with the same crypto", JSON.stringify(loadedWithCrypto) === JSON.stringify(identity2));
+  const loadedWithoutCrypto = await loadStoredIdentity(tmpCryptoFile);
+  check("an encrypted file read back without a storageCrypto is treated as signed-out, not a crash", loadedWithoutCrypto === null);
+  await fs.rm(tmpCryptoFile, { force: true });
+
+  const tmpPlainFile = path.join(os.tmpdir(), `localagent-auth-test-plain-${process.pid}-${Date.now()}.json`);
+  await saveStoredIdentity(tmpPlainFile, identity2);
+  const loadedPlainWithCrypto = await loadStoredIdentity(tmpPlainFile, fakeStorageCrypto);
+  check(
+    "a pre-existing plain-text file read back with a storageCrypto is treated as signed-out, not a crash (no migration — just re-sign-in)",
+    loadedPlainWithCrypto === null
+  );
+  await fs.rm(tmpPlainFile, { force: true });
 
   const tmpShapeFile = path.join(os.tmpdir(), `localagent-auth-test-shape-${process.pid}-${Date.now()}.json`);
   await fs.writeFile(tmpShapeFile, JSON.stringify({ foo: "bar" }), "utf-8");

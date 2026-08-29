@@ -87,10 +87,27 @@ export function mapUserInfo(raw: GoogleUserInfoResponse, refreshToken: string | 
   };
 }
 
-export async function loadStoredIdentity(authFilePath: string): Promise<StoredIdentity | null> {
+/**
+ * Encrypts/decrypts the on-disk identity file's contents to an opaque
+ * string safe to write as a text file. Optional throughout this module —
+ * omitting it stores plain JSON (protected only by the file's 0600
+ * permissions), which is what keeps this file importable and testable
+ * without Electron. The real implementation (`secureStorage.ts`, backed by
+ * Electron's `safeStorage` — OS Keychain/DPAPI/libsecret) is supplied by
+ * main.ts. An identity written with one storageCrypto (or none) and read
+ * back with a different one (or none) simply fails to parse and is
+ * treated as signed-out — no migration path, just a re-sign-in.
+ */
+export interface StorageCrypto {
+  encrypt: (plainText: string) => string;
+  decrypt: (cipherText: string) => string;
+}
+
+export async function loadStoredIdentity(authFilePath: string, storageCrypto?: StorageCrypto): Promise<StoredIdentity | null> {
   try {
     const raw = await fs.readFile(authFilePath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
+    const json = storageCrypto ? storageCrypto.decrypt(raw) : raw;
+    const parsed = JSON.parse(json) as unknown;
     if (!parsed || typeof parsed !== "object") return null;
     const id = parsed as Partial<StoredIdentity>;
     if (typeof id.email !== "string" || typeof id.name !== "string") return null;
@@ -100,8 +117,10 @@ export async function loadStoredIdentity(authFilePath: string): Promise<StoredId
   }
 }
 
-export async function saveStoredIdentity(authFilePath: string, identity: StoredIdentity): Promise<void> {
-  await fs.writeFile(authFilePath, JSON.stringify(identity, null, 2), { encoding: "utf-8", mode: 0o600 });
+export async function saveStoredIdentity(authFilePath: string, identity: StoredIdentity, storageCrypto?: StorageCrypto): Promise<void> {
+  const json = JSON.stringify(identity, null, 2);
+  const toWrite = storageCrypto ? storageCrypto.encrypt(json) : json;
+  await fs.writeFile(authFilePath, toWrite, { encoding: "utf-8", mode: 0o600 });
 }
 
 export async function clearStoredIdentity(authFilePath: string): Promise<void> {
@@ -164,7 +183,12 @@ async function fetchUserInfo(accessToken: string): Promise<GoogleUserInfoRespons
 
 export type SignInResult = { email: string; name: string; pictureUrl: string | null } | { error: string };
 
-export async function signInWithGoogle(clientId: string, authFilePath: string, clientSecret?: string): Promise<SignInResult> {
+export async function signInWithGoogle(
+  clientId: string,
+  authFilePath: string,
+  clientSecret?: string,
+  storageCrypto?: StorageCrypto
+): Promise<SignInResult> {
   if (!clientId) {
     return { error: "GOOGLE_OAUTH_CLIENT_ID is not set — see README for how to create one." };
   }
@@ -224,7 +248,7 @@ export async function signInWithGoogle(clientId: string, authFilePath: string, c
     const userInfo = await fetchUserInfo(tokens.accessToken);
     const identity = mapUserInfo(userInfo, tokens.refreshToken);
 
-    await saveStoredIdentity(authFilePath, identity);
+    await saveStoredIdentity(authFilePath, identity, storageCrypto);
     return { email: identity.email, name: identity.name, pictureUrl: identity.pictureUrl };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
@@ -270,8 +294,13 @@ export async function refreshAccessToken(clientId: string, refreshToken: string,
 
 export type AuthStatus = { signedIn: false } | { signedIn: true; email: string; name: string; pictureUrl: string | null };
 
-export async function getAuthStatus(authFilePath: string, clientId: string | undefined, clientSecret?: string): Promise<AuthStatus> {
-  const identity = await loadStoredIdentity(authFilePath);
+export async function getAuthStatus(
+  authFilePath: string,
+  clientId: string | undefined,
+  clientSecret?: string,
+  storageCrypto?: StorageCrypto
+): Promise<AuthStatus> {
+  const identity = await loadStoredIdentity(authFilePath, storageCrypto);
   if (!identity) return { signedIn: false };
 
   // Opportunistic re-establishment: if we can still refresh, keep the
@@ -299,8 +328,8 @@ export async function getAuthStatus(authFilePath: string, clientId: string | und
  * a full refreshed AuthStatus would be unnecessary network overhead on
  * every save/list/search call.
  */
-export async function getStoredEmail(authFilePath: string): Promise<string | null> {
-  const identity = await loadStoredIdentity(authFilePath);
+export async function getStoredEmail(authFilePath: string, storageCrypto?: StorageCrypto): Promise<string | null> {
+  const identity = await loadStoredIdentity(authFilePath, storageCrypto);
   return identity?.email ?? null;
 }
 
@@ -313,8 +342,13 @@ export async function getStoredEmail(authFilePath: string): Promise<string | nul
  * failure (network, Google outage), exactly like refreshAccessToken does,
  * so callers can tell "give up for now" apart from "definitely signed out."
  */
-export async function getFreshAccessToken(authFilePath: string, clientId: string, clientSecret?: string): Promise<string | null> {
-  const identity = await loadStoredIdentity(authFilePath);
+export async function getFreshAccessToken(
+  authFilePath: string,
+  clientId: string,
+  clientSecret?: string,
+  storageCrypto?: StorageCrypto
+): Promise<string | null> {
+  const identity = await loadStoredIdentity(authFilePath, storageCrypto);
   if (!identity || !identity.refreshToken) return null;
   const refreshed = await refreshAccessToken(clientId, identity.refreshToken, clientSecret);
   if (!refreshed) return null;

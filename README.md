@@ -184,6 +184,14 @@ so it survives a reinstall or a new machine. History itself is filtered
 per signed-in account, the same way any multi-user app keeps your chats
 yours.
 
+Uses PKCE, no client secret required by Google's own design for desktop
+apps — though in practice some "Desktop app" client registrations still
+enforce one, so `GOOGLE_OAUTH_CLIENT_SECRET` is supported when Google asks
+for it (see troubleshooting below). The signed-in refresh token is
+encrypted at rest via your OS's native credential store (Keychain on
+macOS, DPAPI on Windows, libsecret on Linux) — never written to disk as
+plain text.
+
 Needs a Google Cloud OAuth Client ID, which you create yourself — nothing
 is shared with anyone else's project:
 
