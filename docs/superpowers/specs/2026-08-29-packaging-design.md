@@ -66,6 +66,22 @@ this project's existing lean, single-file convention (no separate
 }
 ```
 
+**Revised after initial ship:** the `mac.target` array above shipped
+with both `arm64` and `x64`, but the final whole-branch review caught
+that the x64 target was silently broken. `@node-llama-cpp/mac-x64` is
+an npm `optionalDependency` gated on `cpu: ["x64"]`; on an arm64
+machine — including GitHub's `macos-latest` CI runners, which are also
+Apple Silicon — `npm ci`/`npm install` never installs that variant, so
+electron-builder builds the x64 target from an arm64-only
+`node_modules`, embedding arm64-compiled native addons
+(`@node-llama-cpp/mac-arm64-metal`, `@reflink/reflink-darwin-arm64`)
+inside an x64 Electron shell. The result would not launch correctly on
+real Intel hardware, and this wasn't a local-only artifact — CI would
+have reproduced it identically. `mac.target.arch` is now `["arm64"]`
+only; Intel Mac support is a deliberate scope cut for this beta,
+deferred to a future release, and documented in the README rather than
+silently shipped broken.
+
 ### The output-directory collision
 
 electron-builder defaults its output folder to `dist/` — the same

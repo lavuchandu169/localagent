@@ -13,9 +13,18 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version v$PKG_VERSION"
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
       - run: npm ci
       - run: npm run package:mac -- --publish always
         env:
@@ -25,9 +34,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version v$PKG_VERSION"
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
       - run: npm ci
       - run: npm run package:win -- --publish always
         env:

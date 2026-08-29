@@ -190,6 +190,14 @@ on first launch — normal for a beta, not a sign anything's wrong:
 - **Windows**: SmartScreen shows "Windows protected your PC." Click
   **More info** → **Run anyway**. Only needed once.
 
+This beta's macOS build is Apple Silicon (arm64) only — Intel Mac
+(x64) support isn't available yet.
+
+Google sign-in and Drive backup aren't wired up in the packaged
+installers yet — there's no in-app way to configure OAuth credentials,
+so those features currently only work when running from source with a
+`.env` in the project root (see below).
+
 ### Google sign-in and cloud backup
 
 Optional, and it gates nothing — chat, tasks, and session history all work
@@ -341,8 +349,9 @@ This is a vertical slice proving the harness is real and correct, not the
 full spec. Not built: a VS Code extension, Tree-sitter/LSP symbol
 intelligence, subagents, an MCP client, hooks, checkpoints/undo via git
 worktrees, sandboxed execution, licensing, and — within the Electron app
-itself — multi-session/tabs, a diff viewer, and Drive delete-propagation (deleting a session while signed out can
-reappear on the next sign-in; documented, not yet fixed).
+itself — multi-session/tabs, a diff viewer, and Drive delete-propagation
+(deleting a session while signed out can reappear on the next sign-in;
+documented, not yet fixed).
 
 The architecture is intentionally the part designed to extend into all of
 that without rework — the provider interface, tool interface, permission

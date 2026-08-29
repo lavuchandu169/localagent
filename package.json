@@ -29,7 +29,9 @@
     },
     "files": [
       "dist/**/*",
-      "package.json"
+      "package.json",
+      "!dist/test/**",
+      "!dist/demo.js"
     ],
     "asarUnpack": [
       "**/*.node"
@@ -38,7 +40,7 @@
       "category": "public.app-category.developer-tools",
       "icon": "src/electron/renderer/icon-512.png",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
+        { "target": "dmg", "arch": ["arm64"] }
       ]
     },
     "win": {
@@ -48,7 +50,8 @@
       ]
     },
     "publish": {
-      "provider": "github"
+      "provider": "github",
+      "releaseType": "prerelease"
     }
   },
   "dependencies": {
