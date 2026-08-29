@@ -82,6 +82,29 @@ function byId<T extends HTMLElement>(id: string): T {
   return el as T;
 }
 
+/**
+ * Disables `button` and swaps its label to `busyText` while `fn` runs,
+ * always restoring the original label and re-enabling it afterward —
+ * regardless of outcome. The button-level equivalent of a spinner, for
+ * actions (sign-in, sign-out) that otherwise give no visible sign
+ * anything is happening beyond a plain disabled state, which reads as
+ * unresponsive rather than "working."  Not used for start-session, whose
+ * disabled state deliberately does NOT reset on success (the setup
+ * controls stay locked once a session is running) — that one keeps its
+ * own inline handling instead of this always-restore helper.
+ */
+async function withBusyLabel<T>(button: HTMLButtonElement, busyText: string, fn: () => Promise<T>): Promise<T> {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = busyText;
+  try {
+    return await fn();
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 const workspacePathEl = byId<HTMLSpanElement>("workspace-path");
 const chooseWorkspaceBtn = byId<HTMLButtonElement>("choose-workspace");
 const advancedDisclosure = byId<HTMLDetailsElement>("advanced-disclosure");
@@ -332,6 +355,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
   const config: SessionConfig = { ...(workspaceRoot ? { workspaceRoot } : {}), provider, mode: modeSelect.value as PermissionMode };
 
   startSessionBtn.disabled = true;
+  startSessionBtn.textContent = "Starting…";
   try {
     const result = await window.agent.startSession(config, resume);
     sessionId = result.sessionId;
@@ -375,6 +399,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
   } catch (err: any) {
     startError.textContent = err?.message ?? String(err);
     startSessionBtn.disabled = false;
+    startSessionBtn.textContent = "Start session";
   } finally {
     downloadProgressRow.hidden = true;
     progressLastTime = 0;
@@ -410,38 +435,62 @@ function resetToSetup(): void {
   advancedProviderExternal.disabled = false;
   advancedProviderAnthropic.disabled = false;
   startSessionBtn.disabled = false;
+  startSessionBtn.textContent = "Start session";
   void refreshSessionList(sessionSearchInput.value.trim());
 }
 
 newSessionBtn.addEventListener("click", resetToSetup);
 
-async function resumeSession(id: string): Promise<void> {
-  const record = await window.agent.loadSession(id);
-  if (!record) {
-    startError.textContent = "Couldn't load this session — the saved file looks corrupted.";
-    return;
+// `triggerEl` is the specific sidebar item that was clicked — previously
+// clicking it gave no feedback at all until the resume finished. It's
+// optional because resumeSession has no clickable trigger the very first
+// time a session is opened programmatically (there isn't one today, but
+// keeping this an optional param rather than required avoids assuming
+// every future caller has a button to point at).
+async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise<void> {
+  const originalLabel = triggerEl?.textContent ?? null;
+  if (triggerEl) {
+    triggerEl.disabled = true;
+    triggerEl.textContent = "Resuming…";
   }
+  try {
+    const record = await window.agent.loadSession(id);
+    if (!record) {
+      startError.textContent = "Couldn't load this session — the saved file looks corrupted.";
+      return;
+    }
 
-  if (sessionId) {
-    await window.agent.cancelSession(sessionId);
+    if (sessionId) {
+      await window.agent.cancelSession(sessionId);
+    }
+    sessionId = null;
+    taskInput.disabled = true;
+    runTaskBtn.disabled = true;
+
+    clearEventLog();
+    for (const event of record.events) {
+      renderEvent(event);
+    }
+
+    await beginSession({
+      sessionId: record.id,
+      initialMessages: record.messages,
+      priorEvents: record.events,
+      title: record.title,
+      createdAt: record.createdAt,
+      ownerEmail: record.ownerEmail,
+    });
+  } finally {
+    // On success, beginSession's own refreshSessionList call already
+    // rebuilt the sidebar (replacing triggerEl with a freshly-labeled
+    // element), so this is a harmless no-op on a now-detached node in that
+    // case — it only visibly matters on the failure path above, where the
+    // list never re-rendered and this element is still the one on screen.
+    if (triggerEl) {
+      triggerEl.disabled = false;
+      triggerEl.textContent = originalLabel;
+    }
   }
-  sessionId = null;
-  taskInput.disabled = true;
-  runTaskBtn.disabled = true;
-
-  clearEventLog();
-  for (const event of record.events) {
-    renderEvent(event);
-  }
-
-  await beginSession({
-    sessionId: record.id,
-    initialMessages: record.messages,
-    priorEvents: record.events,
-    title: record.title,
-    createdAt: record.createdAt,
-    ownerEmail: record.ownerEmail,
-  });
 }
 
 function renderSessionList(entries: SessionIndexEntry[]): void {
@@ -459,7 +508,7 @@ function renderSessionList(entries: SessionIndexEntry[]): void {
     label.className = "session-item-label";
     label.textContent = entry.title;
     label.title = entry.title;
-    label.addEventListener("click", () => void resumeSession(entry.id));
+    label.addEventListener("click", () => void resumeSession(entry.id, label));
 
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
@@ -531,37 +580,38 @@ function renderAuthState(status: AuthStatus): void {
   }
 }
 
-googleSignInBtn.addEventListener("click", async () => {
+googleSignInBtn.addEventListener("click", () => {
   authError.textContent = "";
-  googleSignInBtn.disabled = true;
-  try {
+  // The whole flow — waiting for you to finish in the browser, plus
+  // claiming unowned local sessions and running the Drive reconcile pass
+  // — happens before this resolves, which can take real time. A plain
+  // disabled button with no label change reads as frozen; this makes
+  // clear it's actually working.
+  void withBusyLabel(googleSignInBtn, "Signing in…", async () => {
     const result = await window.agent.googleSignIn();
     if ("error" in result) {
       authError.textContent = result.error;
     } else {
       renderAuthState({ signedIn: true, ...result });
     }
-  } finally {
-    googleSignInBtn.disabled = false;
-  }
+  });
 });
 
-signOutBtn.addEventListener("click", async () => {
+signOutBtn.addEventListener("click", () => {
   authError.textContent = "";
-  signOutBtn.disabled = true;
-  try {
-    await window.agent.signOut();
-    renderAuthState({ signedIn: false });
-    // Session history is filtered by the signed-in account server-side —
-    // refresh now so the sidebar clears immediately instead of continuing
-    // to show the just-signed-out account's sessions until the next
-    // unrelated list refresh.
-    await refreshSessionList(sessionSearchInput.value.trim());
-  } catch (err) {
-    authError.textContent = err instanceof Error ? err.message : String(err);
-  } finally {
-    signOutBtn.disabled = false;
-  }
+  void withBusyLabel(signOutBtn, "Signing out…", async () => {
+    try {
+      await window.agent.signOut();
+      renderAuthState({ signedIn: false });
+      // Session history is filtered by the signed-in account server-side —
+      // refresh now so the sidebar clears immediately instead of continuing
+      // to show the just-signed-out account's sessions until the next
+      // unrelated list refresh.
+      await refreshSessionList(sessionSearchInput.value.trim());
+    } catch (err) {
+      authError.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
 });
 
 window.agent.onSessionsChanged(() => {

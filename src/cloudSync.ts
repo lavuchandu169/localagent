@@ -153,6 +153,8 @@ function defaultReconcileOps(fetchImpl: FetchImpl): ReconcileOps {
  * session's sync is caught individually so one bad file can't block the
  * rest of the pass.
  */
+type ReconcileOutcome = "pulled" | "pushed" | "skipped";
+
 export async function reconcileSessions(
   sessionsDir: string,
   accessToken: string,
@@ -163,52 +165,67 @@ export async function reconcileSessions(
   const [localEntries, remoteEntries] = await Promise.all([listSessions(sessionsDir), ops.listRemoteSessions(accessToken)]);
   const remoteIds = new Set(remoteEntries.map((e) => e.sessionId));
 
-  let pulled = 0;
-  let pushed = 0;
-
-  for (const remote of remoteEntries) {
-    try {
-      // Always read the record file straight off disk here, rather than
-      // trusting the `localEntries` snapshot captured at the top of this
-      // function: if the app crashed between sessionStore.ts's two writes
-      // (record file written, index.json not yet updated), or index.json
-      // itself is missing/corrupted, the snapshot can be stale relative to
-      // what's actually on disk. Deciding pull-vs-compare from a stale
-      // snapshot risks silently overwriting a newer local record with an
-      // older remote one.
-      const localRecord = await loadSessionRecord(sessionsDir, remote.sessionId);
-      if (!localRecord) {
-        const record = await ops.downloadSession(accessToken, remote.driveFileId);
-        await saveSession(sessionsDir, record);
-        pulled++;
-        continue;
+  // Every session is reconciled independently and concurrently (Promise.all,
+  // not a sequential loop) — with N sessions this costs roughly the slowest
+  // single round-trip instead of N round-trips back to back, which is what
+  // made sign-in feel unresponsive with more than a couple of sessions.
+  // Each session's own failure is still caught individually (returning
+  // "skipped" rather than throwing) so one bad file can't block the rest.
+  const remoteOutcomes = await Promise.all(
+    remoteEntries.map(async (remote): Promise<ReconcileOutcome> => {
+      try {
+        // Always read the record file straight off disk here, rather than
+        // trusting the `localEntries` snapshot captured at the top of this
+        // function: if the app crashed between sessionStore.ts's two writes
+        // (record file written, index.json not yet updated), or index.json
+        // itself is missing/corrupted, the snapshot can be stale relative to
+        // what's actually on disk. Deciding pull-vs-compare from a stale
+        // snapshot risks silently overwriting a newer local record with an
+        // older remote one.
+        const localRecord = await loadSessionRecord(sessionsDir, remote.sessionId);
+        if (!localRecord) {
+          const record = await ops.downloadSession(accessToken, remote.driveFileId);
+          await saveSession(sessionsDir, record);
+          return "pulled";
+        }
+        const remoteRecord = await ops.downloadSession(accessToken, remote.driveFileId);
+        if (remoteRecord.updatedAt > localRecord.updatedAt) {
+          await saveSession(sessionsDir, remoteRecord);
+          return "pulled";
+        }
+        if (localRecord.updatedAt > remoteRecord.updatedAt) {
+          await ops.uploadSession(accessToken, localRecord);
+          return "pushed";
+        }
+        return "skipped";
+      } catch (err) {
+        // Logged, not rethrown — one session's sync failure must not block
+        // the rest of the pass.
+        console.warn(`[cloudSync] reconcile failed for session ${remote.sessionId}:`, err);
+        return "skipped";
       }
-      const remoteRecord = await ops.downloadSession(accessToken, remote.driveFileId);
-      if (remoteRecord.updatedAt > localRecord.updatedAt) {
-        await saveSession(sessionsDir, remoteRecord);
-        pulled++;
-      } else if (localRecord.updatedAt > remoteRecord.updatedAt) {
-        await ops.uploadSession(accessToken, localRecord);
-        pushed++;
-      }
-    } catch (err) {
-      // One session's sync failure must not block the rest of the pass —
-      // but log it, so a persistently broken pull/push is diagnosable.
-      console.warn(`[cloudSync] reconcile failed for session ${remote.sessionId}:`, err);
-    }
-  }
+    })
+  );
 
-  for (const local of localEntries) {
-    if (remoteIds.has(local.id)) continue;
-    try {
-      const record = await loadSessionRecord(sessionsDir, local.id);
-      if (!record) continue;
-      await ops.uploadSession(accessToken, record);
-      pushed++;
-    } catch (err) {
-      console.warn(`[cloudSync] reconcile push failed for session ${local.id}:`, err);
-    }
-  }
+  const localOnlyOutcomes = await Promise.all(
+    localEntries
+      .filter((local) => !remoteIds.has(local.id))
+      .map(async (local): Promise<ReconcileOutcome> => {
+        try {
+          const record = await loadSessionRecord(sessionsDir, local.id);
+          if (!record) return "skipped";
+          await ops.uploadSession(accessToken, record);
+          return "pushed";
+        } catch (err) {
+          console.warn(`[cloudSync] reconcile push failed for session ${local.id}:`, err);
+          return "skipped";
+        }
+      })
+  );
 
-  return { pulled, pushed };
+  const outcomes = [...remoteOutcomes, ...localOnlyOutcomes];
+  return {
+    pulled: outcomes.filter((o) => o === "pulled").length,
+    pushed: outcomes.filter((o) => o === "pushed").length,
+  };
 }

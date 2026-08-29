@@ -265,5 +265,41 @@ console.log("\nreconcileSessions: stale local index doesn't cause data loss:");
   );
 }
 
+console.log("\nreconcileSessions: sessions are reconciled concurrently, not one at a time:");
+{
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const DELAY_MS = 150;
+  const SESSION_COUNT = 5;
+  const remoteEntries = Array.from({ length: SESSION_COUNT }, (_, i) => ({
+    sessionId: `remote-${i}`,
+    driveFileId: `f-${i}`,
+  }));
+
+  const start = Date.now();
+  await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => remoteEntries,
+      downloadSession: async (_token, driveFileId) => {
+        await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
+        const i = driveFileId.split("-")[1];
+        return makeRecord(`remote-${i}`, 100);
+      },
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+  const elapsedMs = Date.now() - start;
+
+  // Sequential would take roughly SESSION_COUNT * DELAY_MS (750ms here);
+  // concurrent should take roughly one DELAY_MS regardless of how many
+  // sessions there are. Generous ceiling (3x one delay) to absorb test-
+  // machine scheduling noise without the check becoming meaningless.
+  check(
+    `${SESSION_COUNT} sessions with a ${DELAY_MS}ms delay each reconcile concurrently (${elapsedMs}ms, not ~${SESSION_COUNT * DELAY_MS}ms)`,
+    elapsedMs < DELAY_MS * 3
+  );
+}
+
 console.log(failures === 0 ? "\nAll cloudSync tests passed." : `\n${failures} cloudSync test(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
