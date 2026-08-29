@@ -244,7 +244,7 @@ is shared with anyone else's project:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `GOOGLE_OAUTH_CLIENT_ID is not set` | No client ID in the environment or `.env` | See step 5 above |
+| `GOOGLE_OAUTH_CLIENT_ID is not set` | No client ID in the environment, `.env`, or saved Settings | Running from source: see step 5 above. Running the packaged app: open Settings (gear icon in the header) and paste your Client ID/Secret there instead. |
 | `access_denied` at Google's consent screen | OAuth consent screen is in Testing and your account isn't a test user | Add yourself under Audience → Test users (step 2) |
 | `client_secret is missing` | Google issued this Client ID as a type that needs it even with PKCE | Set `GOOGLE_OAUTH_CLIENT_SECRET` too |
 | `[cloudSync] upload failed ... Google Drive API has not been used` | The Drive API itself isn't enabled for the project | Enable it (step 3), wait ~30s, retry |

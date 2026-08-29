@@ -190,7 +190,7 @@ export async function signInWithGoogle(
   storageCrypto?: StorageCrypto
 ): Promise<SignInResult> {
   if (!clientId) {
-    return { error: "GOOGLE_OAUTH_CLIENT_ID is not set — see README for how to create one." };
+    return { error: "GOOGLE_OAUTH_CLIENT_ID is not set — add your Google OAuth credentials in Settings." };
   }
 
   const { codeVerifier, codeChallenge } = generatePkcePair();
