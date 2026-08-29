@@ -191,8 +191,10 @@ export async function reconcileSessions(
         await ops.uploadSession(accessToken, localRecord);
         pushed++;
       }
-    } catch {
-      // One session's sync failure must not block the rest of the pass.
+    } catch (err) {
+      // One session's sync failure must not block the rest of the pass —
+      // but log it, so a persistently broken pull/push is diagnosable.
+      console.warn(`[cloudSync] reconcile failed for session ${remote.sessionId}:`, err);
     }
   }
 
@@ -203,8 +205,8 @@ export async function reconcileSessions(
       if (!record) continue;
       await ops.uploadSession(accessToken, record);
       pushed++;
-    } catch {
-      // Same as above.
+    } catch (err) {
+      console.warn(`[cloudSync] reconcile push failed for session ${local.id}:`, err);
     }
   }
 

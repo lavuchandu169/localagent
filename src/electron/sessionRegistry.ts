@@ -155,7 +155,7 @@ async function persistSession(registry: SessionRegistry, sessionId: string, entr
   void syncUploadToCloud(registry, record);
 }
 
-/** Best-effort: cloud sync must never fail or delay the caller. A missing drive.appdata scope (DriveScopeError) is reported once via onScopeError; any other failure (offline, revoked token, transient Drive error) is silently swallowed and simply retried on the next save. */
+/** Best-effort: cloud sync must never fail or delay the caller. A missing drive.appdata scope (DriveScopeError) is reported once via onScopeError; any other failure (offline, revoked token, transient Drive error) is swallowed (never thrown to the caller) and simply retried on the next save — but logged, so a persistently broken backup is diagnosable instead of silently invisible. */
 async function syncUploadToCloud(registry: SessionRegistry, record: SessionRecord): Promise<void> {
   if (!registry.cloudSync) return;
   const { getAccessToken, onScopeError, uploadSession: upload = driveUploadSession } = registry.cloudSync;
@@ -165,6 +165,7 @@ async function syncUploadToCloud(registry: SessionRegistry, record: SessionRecor
     await upload(token, record);
   } catch (err) {
     if (err instanceof DriveScopeError) onScopeError();
+    else console.warn(`[cloudSync] upload failed for session ${record.id}, will retry on next save:`, err);
   }
 }
 
@@ -178,6 +179,7 @@ async function syncDeleteFromCloud(registry: SessionRegistry, sessionId: string)
     await del(token, sessionId);
   } catch (err) {
     if (err instanceof DriveScopeError) onScopeError();
+    else console.warn(`[cloudSync] remote delete failed for session ${sessionId}:`, err);
   }
 }
 

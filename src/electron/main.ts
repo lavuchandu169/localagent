@@ -110,12 +110,16 @@ app.whenReady().then(() => {
           process.env.GOOGLE_OAUTH_CLIENT_SECRET
         );
         if (token) {
-          await reconcileSessions(sessionsDir, token);
+          const { pulled, pushed } = await reconcileSessions(sessionsDir, token);
+          console.log(`[cloudSync] reconcile after sign-in: pulled ${pulled}, pushed ${pushed}`);
           broadcastToAllWindows("agent:sessions-changed");
+        } else {
+          console.warn("[cloudSync] sign-in succeeded but no access token was available for reconcile — skipping.");
         }
       } catch (err) {
         if (err instanceof DriveScopeError) notifyScopeWarning();
         // Any other reconcile failure is non-fatal — sign-in itself already succeeded.
+        console.warn("[cloudSync] reconcile after sign-in failed:", err);
       }
     }
     return result;
