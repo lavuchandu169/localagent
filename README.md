@@ -24,6 +24,7 @@ of what isn't built yet.
 - [Desktop app](#desktop-app)
   - [Google sign-in and cloud backup](#google-sign-in-and-cloud-backup)
   - [Running inside a sandboxed agent CLI](#running-inside-a-sandboxed-agent-cli)
+- [Privacy](#privacy)
 - [Testing](#testing)
 - [Project structure](#project-structure)
 - [What's deliberately out of scope](#whats-deliberately-out-of-scope)
@@ -247,6 +248,39 @@ env -u ELECTRON_RUN_AS_NODE npm run electron
 ```
 
 A normal user terminal won't have this variable set at all.
+
+## Privacy
+
+There is no backend for this project — no server we operate, no
+analytics, no telemetry, nothing phoning home. Everything below happens
+directly between your machine and whichever service you've explicitly
+configured.
+
+- **Your code and files** stay on your machine unless you choose a
+  provider that sends them elsewhere: `--provider anthropic` sends task
+  context to Anthropic's API (needs your own `ANTHROPIC_API_KEY`);
+  `--base-url` sends it to whatever OpenAI-compatible server you point at
+  (typically a local one, e.g. Ollama). The default embedded mode sends
+  nothing anywhere — inference runs entirely in-process.
+- **Session history** is saved locally (`app.getPath('userData')/sessions`).
+  It only leaves your machine if you sign in with Google, in which case
+  it's backed up to a hidden, app-private folder in *your own* Google
+  Drive (`drive.appdata` — not visible in your normal Drive UI, not
+  accessible to any other app or person) — see
+  [Google sign-in and cloud backup](#google-sign-in-and-cloud-backup).
+- **Google sign-in** is optional and gates nothing. If used, your email,
+  name, and profile picture URL are requested from Google's own identity
+  endpoint and stored locally so the app can show who's signed in; the
+  refresh token needed to keep that session and Drive backup working is
+  encrypted at rest via your OS's native credential store (Keychain /
+  DPAPI / libsecret), never written to disk as plain text.
+- **Nothing is shared between users of this app.** Each Google account's
+  backed-up sessions live only in that account's own Drive; local session
+  history is filtered to whichever account is currently signed in.
+
+This is a local-first, open-source prototype, not a hosted product — the
+source above is the actual and complete description of what it does with
+your data.
 
 ## Testing
 
