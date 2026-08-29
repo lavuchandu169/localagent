@@ -1,118 +1,140 @@
-# localagent — working prototype
+# localagent
 
-A small, runnable slice of the local-first autonomous coding agent spec:
-provider abstraction, tool registry, permission engine, and a working agent
-loop. It corresponds to Phases 1–5 of the roadmap (foundation, repository
-access, agent loop, editing, terminal + verification).
+**A local-first autonomous coding agent.** Bring your own model — a GGUF
+file running entirely in-process, any OpenAI-compatible server (Ollama, LM
+Studio, vLLM, llama.cpp server), or Claude — and get a real agent loop with
+a permission engine, file/search/edit/shell tools, and a desktop app on top,
+with nothing required to leave your machine.
 
-## What's actually implemented
+![Node](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript&logoColor=white)
+![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white)
+![Runs offline](https://img.shields.io/badge/runs-offline--first-2ea44f)
 
-- **`ModelProvider` abstraction** (`src/types.ts`) — nothing above this layer
-  knows which backend is in use.
-- **`OpenAICompatibleProvider`** (`src/providers/openaiCompatible.ts`) — talks
-  to any OpenAI-compatible `/v1/chat/completions` server: Ollama, LM Studio,
-  llama.cpp server, vLLM, etc. Normalizes their tool-call format into the
-  internal `ToolCall` type.
-- **`EmbeddedLlamaProvider`** (`src/providers/embeddedLlama.ts`) — runs a GGUF
-  model in-process via `node-llama-cpp`, no server or other app required. Used
-  automatically when `--base-url` is omitted. Auto-downloads and caches a
-  curated model (`src/models.ts`: `small`/`medium`/`large`, default
-  `small` — Qwen2.5-Coder GGUF) on first run. Uses `node-llama-cpp`'s
-  low-level `LlamaChat.generateResponse()` rather than `LlamaChatSession` so
-  requested tool calls come back to `AgentSession` instead of being
-  auto-executed by the library — `PermissionEngine` still gates every call,
-  same as the `OpenAICompatibleProvider` path.
-- **`MockProvider`** (`src/providers/mockProvider.ts`) — a scripted provider
-  so the harness can be verified with zero network dependency (used by the
-  demo and the tests).
-- **Tools** (`src/tools/*.ts`): `read_file`, `list_directory`, `grep`
-  (ripgrep with a pure-JS fallback), `edit_file`, `run_command`. All file
-  tools refuse to touch protected paths (`.env`, `*.pem`, `.ssh/`, etc.) and
-  redact secret-shaped strings before they ever reach the model or your
-  terminal.
-- **`PermissionEngine`** (`src/permissions.ts`) — deterministic rules, not
-  LLM judgment: `PLAN` (read-only), `DEFAULT` (asks before writes/exec),
-  `ACCEPT_EDITS` (auto-allows safe file writes, still asks for shell), plus
-  a command-risk classifier (`SAFE_READ` / `NETWORK` / `DESTRUCTIVE` /
-  `UNKNOWN`, unknown defaults to asking).
-- **`AgentSession`** (`src/agent.ts`) — the real loop: send messages + tool
-  schemas → get a final answer or tool calls → run permission check → execute
-  tool → append result → repeat, up to a turn budget. Emits a typed event
-  stream (`status`, `tool.start`, `tool.result`, `permission.request`,
-  `text`, `done`, `error`).
-- **CLI** (`src/cli.ts`) — connects the above to a real local model server.
-- **Electron desktop app — "Foundation"** (`src/electron/`) — a Mac/Windows
-  shell around the same core, zero changes to `agent.ts` (see
-  `docs/superpowers/specs/2026-08-25-electron-foundation-design.md`).
-  `sessionRegistry.ts` holds the provider/session logic (unit-tested, no
-  Electron imports); `main.ts` owns the one `AgentSession` and exposes it to
-  the renderer over IPC; `preload.cjs` is a hand-written CommonJS bridge
-  (`contextIsolation: true`, `nodeIntegration: false`); `renderer/` is a
-  vanilla-TS single-window UI: workspace picker, provider/mode selection,
-  task input, and a live event log with inline permission approve/deny.
-  One session at a time — multi-session, a diff viewer, and settings
-  persistence are follow-on sub-projects, not built here. `googleAuth.ts`
-  adds optional Google sign-in (system browser + PKCE + a loopback
-  redirect server, see
-  `docs/superpowers/specs/2026-08-26-google-apple-signin-design.md`) —
-  identity only, nothing is gated by it; Apple sign-in is a disabled UI
-  stub pending an Apple Developer account and a registered domain.
-  `sessionStore.ts` adds persistent session history — every completed task
-  autosaves to `app.getPath('userData')/sessions/`, a left sidebar lists
-  and full-text-searches past sessions, and clicking one resumes it with
-  full model context (not just a read-only transcript) — see
-  `docs/superpowers/specs/2026-08-27-session-persistence-design.md`.
-- **Tests** (`src/test/agent.test.ts`, `src/test/sessionRegistry.test.ts`) —
-  covering command risk classification, permission decisions across all
-  modes, a full scripted agent run, and the Electron session-registry logic
-  (session start/provider selection, event streaming, permission
-  unblocking, cancellation) via `MockProvider`.
-- **Working end-to-end demo** (`src/demo.ts` + `fixture-repo/`) — a tiny repo
-  with an intentionally broken `add()` function and a failing test. The demo
-  scripts a fake model that reads the file, runs the failing test, fixes the
-  bug, reruns the test, and only reports success after seeing a real exit
-  code 0 — proving the loop, tools, and permission gating all work together
-  without needing any LLM running.
+This is a working vertical slice, not the full spec — see
+[What's out of scope](#whats-deliberately-out-of-scope) for the honest list
+of what isn't built yet.
 
-## Run it
+## Contents
+
+- [Highlights](#highlights)
+- [Quick start](#quick-start)
+- [CLI](#cli)
+- [Desktop app](#desktop-app)
+  - [Google sign-in and cloud backup](#google-sign-in-and-cloud-backup)
+  - [Running inside a sandboxed agent CLI](#running-inside-a-sandboxed-agent-cli)
+- [Testing](#testing)
+- [Project structure](#project-structure)
+- [What's deliberately out of scope](#whats-deliberately-out-of-scope)
+
+## Highlights
+
+**Agent core**
+- A real loop (`src/agent.ts`): send messages + tool schemas → get a final
+  answer or tool calls → permission check → execute → append result →
+  repeat, up to a turn budget. Emits a typed event stream (`status`,
+  `tool.start`, `tool.result`, `permission.request`, `text`, `done`,
+  `error`) that both the CLI and the desktop app render live.
+- Runtime-enforced grounding: if a task names a real file, it gets read
+  automatically before the model's first turn — small local models proved
+  unreliable at doing this on their own from prompt wording alone.
+
+**Providers — swap the backend without touching the agent**
+- **`EmbeddedLlamaProvider`** — runs a curated Qwen2.5-Coder GGUF entirely
+  in-process via `node-llama-cpp`. No server, no other app. Auto-downloads
+  and caches on first run (`small` / `medium` / `large`, default `small`).
+- **`OpenAICompatibleProvider`** — talks to Ollama, LM Studio, vLLM, or any
+  `/v1/chat/completions` server.
+- **`AnthropicProvider`** — the real Claude API, when you want frontier
+  quality and don't mind code leaving the machine.
+- **`MockProvider`** — a scripted provider for zero-network tests and the
+  demo.
+
+**Tools & safety, not vibes**
+- `read_file`, `list_directory`, `grep` (ripgrep with a pure-JS fallback),
+  `edit_file`, `run_command`.
+- Every file tool refuses to touch protected paths (`.env*`, `*.pem`,
+  `*.key`, `id_rsa*`, `credentials.*`, `secrets.*`, `.ssh/`, `.aws/`,
+  `.git/`) and redacts secret-shaped strings before they ever reach the
+  model or your terminal.
+- `PermissionEngine` is deterministic code, not LLM judgment: four modes
+  (`PLAN` / `DEFAULT` / `ACCEPT_EDITS` / `AUTO_SAFE`) plus a command-risk
+  classifier (`SAFE_READ` / `NETWORK` / `DESTRUCTIVE` / `UNKNOWN` — unknown
+  always asks). A model proposing a whole-file rewrite it never actually
+  read gets asked, too, even in auto-approve modes.
+
+**Desktop app**
+- A Mac/Windows Electron shell around the same core, with zero changes to
+  `agent.ts` — workspace picker, provider/mode selection, task input, and
+  a live event log with inline Approve/Deny.
+- **Session history** — every completed task autosaves; a sidebar lists
+  and full-text-searches past sessions, and resuming one restores full
+  model context, not a read-only transcript.
+- **Optional Google sign-in**, gating nothing — the app is fully usable
+  signed-out. Signed in, it turns on **automatic backup to a hidden
+  folder in your Google Drive**, so history survives a reinstall or a
+  move to a new machine, filtered per-account like any multi-user app.
+
+## Quick start
 
 ```bash
 npm install
 npm run build
 
-# Offline, no LLM required — proves the whole harness works:
+# Offline, no LLM required — proves the whole harness works end-to-end:
 npm run demo
 
-# Unit tests:
+# Full test suite:
 npm test
+```
 
+`npm run demo` runs against `fixture-repo/`, a tiny repo with an
+intentionally broken `add()` function and a failing test. A scripted fake
+model reads the file, runs the failing test, fixes the bug, reruns it, and
+only reports success after seeing a real exit code `0` — proving the loop,
+tools, and permission gating all work together without any real LLM.
+
+## CLI
+
+```bash
 # Embedded mode — no server, no other app. Downloads and caches a GGUF
-# model on first run (default: Qwen2.5-Coder-1.5B-Instruct, ~1GB) to
+# model on first run (default: Qwen2.5-Coder-1.5B-Instruct, ~1GB) into
 # node-llama-cpp's default models directory, ~/.node-llama-cpp/models —
-# delete that folder to clear the cache, or pre-seed it offline before a
-# machine goes air-gapped.
+# delete that folder to clear the cache, or pre-seed it before going air-gapped.
 node dist/cli.js "explain how add() works in math.js" \
   --workspace ./fixture-repo \
   --mode DEFAULT
 
-# Or against an external server (e.g. `ollama pull qwen2.5-coder` first):
+# Against an external server (e.g. `ollama pull qwen2.5-coder` first):
 node dist/cli.js "explain how add() works in math.js" \
   --workspace ./fixture-repo \
   --base-url http://localhost:11434/v1 \
   --model qwen2.5-coder:latest \
   --mode DEFAULT
+
+# The real Claude API instead — sends code over the network, needs ANTHROPIC_API_KEY:
+node dist/cli.js "explain how add() works in math.js" \
+  --workspace ./fixture-repo \
+  --provider anthropic \
+  --mode DEFAULT
 ```
 
-`--mode PLAN` refuses all writes/exec; `--mode ACCEPT_EDITS` auto-allows
-file edits but still asks before running shell commands; `DEFAULT` asks
-before both.
+| Flag | Meaning |
+|---|---|
+| `--workspace <dir>` | Repo root the agent's file tools operate on |
+| `--base-url <url>` | Use an OpenAI-compatible server instead of the embedded model |
+| `--model <name>` | Server model id with `--base-url`; `small`\|`medium`\|`large` in embedded mode |
+| `--provider anthropic` | Use the real Claude API (needs `ANTHROPIC_API_KEY`) |
+| `--mode <mode>` | Permission mode, see below |
 
-`--model` means different things depending on whether `--base-url` is set:
-with it, `--model` is the id the server expects (e.g. `qwen2.5-coder:latest`);
-without it (embedded mode), `--model` picks `small` (default) / `medium` /
-`large` from the curated list in `src/models.ts`.
+| Mode | Reads | Edits | Shell commands |
+|---|---|---|---|
+| `PLAN` | ✅ free | 🚫 refused | 🚫 refused |
+| `DEFAULT` | ✅ free | ⏸ asks | ⏸ asks |
+| `ACCEPT_EDITS` | ✅ free | ✅ auto | ⏸ asks |
+| `AUTO_SAFE` | ✅ free | ✅ auto | ⏸ asks *(safe-command auto-approval not wired up yet — same as `ACCEPT_EDITS` today)* |
 
-### Desktop app
+## Desktop app
 
 ```bash
 npm run build      # also copies src/electron's static assets into dist/electron/
@@ -120,80 +142,125 @@ npm run electron
 ```
 
 Pick a workspace (e.g. `fixture-repo`), choose embedded or external
-provider, pick a mode, type a task, hit Run — the event log renders tool
-calls/results live, with inline Approve/Deny buttons for anything the
-permission engine asks about.
+provider, pick a mode, type a task, hit **Run** — the event log renders
+tool calls/results live, with inline Approve/Deny for anything the
+permission engine asks about. Past sessions live in the left sidebar,
+searchable and resumable with full context.
 
-Optionally, sign in with a Google account from the header control. Signing
-in is never required — everything works fully signed-out, session history
-included — but while signed in it also turns on automatic backup of your
-session history to a hidden folder in your Google Drive, so it survives a
-reinstall or a move to a new machine. It needs a Google Cloud OAuth Client
-ID, which you create yourself:
+### Google sign-in and cloud backup
 
-1. https://console.cloud.google.com/ → create/select a project.
-2. APIs & Services → OAuth consent screen → configure (External or
-   Internal) with an app name and support email.
-3. APIs & Services → Credentials → Create Credentials → OAuth client ID →
-   Application type: **Desktop app**.
-4. Copy the generated Client ID.
-5. Set it as `GOOGLE_OAUTH_CLIENT_ID` in the environment the Electron app
-   launches from — same pattern as `ANTHROPIC_API_KEY`, no UI field,
-   nothing committed to the repo:
-   ```bash
-   GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com npm run electron
-   ```
-6. If sign-in fails with `client_secret is missing`, Google has issued your
-   Client ID as a type that requires it even with PKCE. Download the
-   client secret JSON from the same Credentials page and also set
-   `GOOGLE_OAUTH_CLIENT_SECRET` (it's optional otherwise — omit it and
-   nothing sends a `client_secret`):
-   ```bash
-   GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com \
-   GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret \
-   npm run electron
-   ```
-7. Instead of exporting these into your shell every time, you can put them
-   in a `.env` file in the project root (already gitignored — never
-   committed):
+Optional, and it gates nothing — chat, tasks, and session history all work
+fully signed-out. Signing in additionally turns on automatic backup of your
+session history to a private, hidden folder in your Google Drive
+(`drive.appdata` — invisible in your normal Drive UI, scoped to this app),
+so it survives a reinstall or a new machine. History itself is filtered
+per signed-in account, the same way any multi-user app keeps your chats
+yours.
+
+Needs a Google Cloud OAuth Client ID, which you create yourself — nothing
+is shared with anyone else's project:
+
+1. [console.cloud.google.com](https://console.cloud.google.com/) → create
+   or select a project.
+2. **APIs & Services → OAuth consent screen** → configure (External or
+   Internal) with an app name and support email. While the screen is in
+   **Testing**, add your own Google account under **Audience → Test
+   users** — otherwise sign-in fails with `access_denied`.
+3. **APIs & Services → Library** → search **Google Drive API** → **Enable**.
+   Skip this and backup fails silently with a `Google Drive API has not
+   been used in project ...` error in the console.
+4. **APIs & Services → Credentials → Create Credentials → OAuth client ID**
+   → Application type: **Desktop app**. Copy the generated Client ID.
+5. Put your credentials in a `.env` file in the project root (already
+   gitignored — never committed) instead of exporting them every time:
    ```bash
    export GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
    export GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
    ```
    `npm run electron` loads it automatically; a variable already set in
-   your actual shell environment always takes priority over the file.
-8. The Drive backup scope was added after the original sign-in feature —
-   if you signed in before, you'll be asked to sign in again once to grant
-   it.
+   your real shell environment always wins over the file.
 
-Without `GOOGLE_OAUTH_CLIENT_ID` set, "Sign in with Google" shows an inline
-error instead of opening a browser. "Sign in with Apple" is a disabled stub
-for now — it needs a paid Apple Developer account and a registered web
-domain, neither of which exists for this project yet (see
-`docs/superpowers/specs/2026-08-26-google-apple-signin-design.md`).
+<details>
+<summary>Troubleshooting</summary>
 
-> **If you're running this from inside a sandboxed agent CLI** (e.g. Claude
-> Code) rather than a normal terminal: some sandboxes set
-> `ELECTRON_RUN_AS_NODE=1` so their own bundled Electron binary can double as
-> a plain Node runtime internally. That env var makes *any* Electron binary
-> skip its app/window machinery entirely and just run the entry file as
-> plain Node — `import ... from "electron"` then fails or resolves to `{}`,
-> and no window ever opens. It's not a bug in this app; unset it for the
-> `electron` process specifically: `env -u ELECTRON_RUN_AS_NODE npm run
-> electron`. A normal user terminal won't have this variable set at all.
+| Symptom | Cause | Fix |
+|---|---|---|
+| `GOOGLE_OAUTH_CLIENT_ID is not set` | No client ID in the environment or `.env` | See step 5 above |
+| `access_denied` at Google's consent screen | OAuth consent screen is in Testing and your account isn't a test user | Add yourself under Audience → Test users (step 2) |
+| `client_secret is missing` | Google issued this Client ID as a type that needs it even with PKCE | Set `GOOGLE_OAUTH_CLIENT_SECRET` too |
+| `[cloudSync] upload failed ... Google Drive API has not been used` | The Drive API itself isn't enabled for the project | Enable it (step 3), wait ~30s, retry |
+| Session history doesn't come back after reinstall | Uploads never actually reached Drive (check the terminal for `[cloudSync]` lines) | Fix whatever the log line says, then sign in again — the next save retries automatically |
+| Already signed in, but backup silently isn't happening | The stored token predates the Drive scope | Sign in again once to re-consent |
 
-## What's deliberately out of scope here
+</details>
+
+"Sign in with Apple" is a disabled stub — it needs a paid Apple Developer
+account and a registered web domain, neither of which exists for this
+project yet.
+
+### Running inside a sandboxed agent CLI
+
+Some sandboxes (e.g. Claude Code) set `ELECTRON_RUN_AS_NODE=1` so their own
+bundled Electron binary can double as a plain Node runtime internally. That
+env var makes *any* Electron binary skip its app/window machinery entirely
+and just run the entry file as plain Node — `import ... from "electron"`
+then fails or resolves to `{}`, and no window ever opens. It's not a bug in
+this app; unset it for the `electron` process specifically:
+
+```bash
+env -u ELECTRON_RUN_AS_NODE npm run electron
+```
+
+A normal user terminal won't have this variable set at all.
+
+## Testing
+
+```bash
+npm test
+```
+
+No test framework — plain Node scripts under `src/test/` with a
+hand-rolled `check(name, condition)` assertion, chained together in
+`package.json`'s `test` script. Coverage spans command-risk classification,
+permission decisions across every mode, a full scripted agent run, Google
+OAuth token/PKCE plumbing, the Electron session registry (start/provider
+selection/event streaming/cancellation) via `MockProvider`, local session
+persistence, and Drive-backed cloud sync (CRUD + reconcile) against a fake
+`fetch` — real behavior, not framework mocks.
+
+## Project structure
+
+| Path | What it is |
+|---|---|
+| `src/agent.ts` | The agent loop itself — provider-, tool-, and UI-agnostic |
+| `src/types.ts` | The `ModelProvider` interface everything else depends on |
+| `src/providers/` | `EmbeddedLlamaProvider`, `OpenAICompatibleProvider`, `AnthropicProvider`, `MockProvider` |
+| `src/tools/` | `read_file`, `list_directory`, `grep`, `edit_file`, `run_command` |
+| `src/permissions.ts` | `PermissionEngine` — the deterministic policy layer |
+| `src/protected.ts` | Protected-path matching and secret redaction |
+| `src/sessionStore.ts` | Explicit-path local session persistence (file-per-session + index) |
+| `src/cloudSync.ts` | Electron-free Google Drive backup/restore (CRUD + reconcile) |
+| `src/cli.ts` | The terminal entry point |
+| `src/electron/` | The desktop app — `main.ts`, `sessionRegistry.ts`, `preload.cjs`, `renderer/`, `googleAuth.ts` |
+| `src/demo.ts` + `fixture-repo/` | The scripted, offline, end-to-end proof |
+| `src/test/` | The suite `npm test` runs |
+| `docs/superpowers/specs/` | Design docs for each feature, written before it was built |
+
+None of `agent.ts`, `permissions.ts`, `toolRegistry.ts`, or the tools
+import any UI-specific code — the CLI and the Electron app sit on top of
+the exact same core interchangeably, and the desktop app was added with
+**zero changes to `agent.ts`**.
+
+## What's deliberately out of scope
 
 This is a vertical slice proving the harness is real and correct, not the
-full spec. Not built: VS Code extension, Tree-sitter/LSP symbol
-intelligence, subagents, MCP client, hooks, checkpoints/undo via git
+full spec. Not built: a VS Code extension, Tree-sitter/LSP symbol
+intelligence, subagents, an MCP client, hooks, checkpoints/undo via git
 worktrees, sandboxed execution, licensing, and — within the Electron app
 itself — packaging/installers, multi-session/tabs, a diff viewer, and
-settings persistence.
-The architecture (provider interface, tool interface, permission engine,
-typed event stream) is intentionally the part designed to extend into those
-without rework — see the original build prompt's Section 68 boundary rule:
-none of `agent.ts`, `permissions.ts`, `toolRegistry.ts`, or the tools import
-any UI-specific code, so a VS Code extension, the CLI, and the Electron app
-all sit on top interchangeably — the Electron desktop app now proves that
-in practice, with zero changes to `agent.ts`.
+Drive delete-propagation (deleting a session while signed out can
+reappear on the next sign-in; documented, not yet fixed).
+
+The architecture is intentionally the part designed to extend into all of
+that without rework — the provider interface, tool interface, permission
+engine, and typed event stream are the boundary that makes it possible.
