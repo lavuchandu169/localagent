@@ -22,6 +22,7 @@ of what isn't built yet.
 - [CLI](#cli)
   - [Embedded models](#embedded-models)
 - [Desktop app](#desktop-app)
+  - [Download the beta](#download-the-beta)
   - [Google sign-in and cloud backup](#google-sign-in-and-cloud-backup)
   - [Running inside a sandboxed agent CLI](#running-inside-a-sandboxed-agent-cli)
 - [Privacy](#privacy)
@@ -175,6 +176,20 @@ tool calls/results live, with inline Approve/Deny for anything the
 permission engine asks about. Past sessions live in the left sidebar,
 searchable and resumable with full context.
 
+### Download the beta
+
+Prebuilt installers are attached to each [GitHub Release](https://github.com/lavuchandu169/localagent/releases) — no `npm install`/`npm run build` needed.
+
+These are unsigned builds (no Apple Developer or Windows code-signing
+certificate behind them yet), so your OS will show a one-time warning
+on first launch — normal for a beta, not a sign anything's wrong:
+
+- **macOS**: Gatekeeper blocks it ("cannot be opened because the
+  developer cannot be verified"). Right-click the app → **Open** →
+  confirm in the dialog. Only needed once.
+- **Windows**: SmartScreen shows "Windows protected your PC." Click
+  **More info** → **Run anyway**. Only needed once.
+
 ### Google sign-in and cloud backup
 
 Optional, and it gates nothing — chat, tasks, and session history all work
@@ -326,8 +341,7 @@ This is a vertical slice proving the harness is real and correct, not the
 full spec. Not built: a VS Code extension, Tree-sitter/LSP symbol
 intelligence, subagents, an MCP client, hooks, checkpoints/undo via git
 worktrees, sandboxed execution, licensing, and — within the Electron app
-itself — packaging/installers, multi-session/tabs, a diff viewer, and
-Drive delete-propagation (deleting a session while signed out can
+itself — multi-session/tabs, a diff viewer, and Drive delete-propagation (deleting a session while signed out can
 reappear on the next sign-in; documented, not yet fixed).
 
 The architecture is intentionally the part designed to extend into all of
