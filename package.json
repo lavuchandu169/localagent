@@ -1,6 +1,6 @@
 {
   "name": "localagent",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "description": "Local-first autonomous coding agent prototype (vertical slice: Phases 1-5)",
   "type": "module",
   "main": "dist/electron/main.js",
@@ -12,7 +12,40 @@
     "start": "node dist/cli.js",
     "demo": "node dist/demo.js",
     "test": "node dist/test/agent.test.js && node dist/test/sessionRegistry.test.js && node dist/test/modeLabels.test.js && node dist/test/hardwareInfo.test.js && node dist/test/filenameCandidates.test.js && node dist/test/anthropicProvider.test.js && node dist/test/googleAuth.test.js && node dist/test/sessionStore.test.js && node dist/test/cloudSync.test.js && node dist/test/loadEnvFile.test.js",
-    "electron": "electron ."
+    "electron": "electron .",
+    "package:mac": "npm run build && electron-builder --mac",
+    "package:win": "npm run build && electron-builder --win",
+    "package:all": "npm run build && electron-builder -mw"
+  },
+  "build": {
+    "appId": "com.chandulavu.localagent",
+    "productName": "localagent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "src/electron/renderer/icon-512.png",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ]
+    },
+    "win": {
+      "icon": "src/electron/renderer/icon-512.png",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "publish": {
+      "provider": "github"
+    }
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
@@ -25,6 +58,7 @@
   "devDependencies": {
     "@types/node": "^20.14.9",
     "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.5.4"
   }
 }
