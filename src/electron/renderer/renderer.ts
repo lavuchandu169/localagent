@@ -68,6 +68,8 @@ interface AgentBridge {
   deleteSession(id: string): Promise<void>;
   onSessionsChanged(callback: () => void): () => void;
   onCloudSyncScopeWarning(callback: () => void): () => void;
+  getGoogleSettings(): Promise<{ clientId: string; hasSecret: boolean }>;
+  saveGoogleSettings(settings: { clientId: string; clientSecret?: string }): Promise<void>;
 }
 
 declare global {
@@ -128,6 +130,14 @@ const aboutPanel = byId<HTMLDivElement>("about-panel");
 const aboutClose = byId<HTMLButtonElement>("about-close");
 const aboutWorkspace = byId<HTMLSpanElement>("about-workspace");
 const aboutHardware = byId<HTMLSpanElement>("about-hardware");
+const settingsToggle = byId<HTMLButtonElement>("settings-toggle");
+const settingsPanel = byId<HTMLDivElement>("settings-panel");
+const settingsClose = byId<HTMLButtonElement>("settings-close");
+const settingsClientIdInput = byId<HTMLInputElement>("settings-client-id");
+const settingsClientSecretInput = byId<HTMLInputElement>("settings-client-secret");
+const settingsError = byId<HTMLDivElement>("settings-error");
+const settingsSaved = byId<HTMLDivElement>("settings-saved");
+const settingsSaveBtn = byId<HTMLButtonElement>("settings-save");
 const googleSignInBtn = byId<HTMLButtonElement>("google-sign-in");
 const signOutBtn = byId<HTMLButtonElement>("sign-out-btn");
 const authSignedOut = byId<HTMLDivElement>("auth-signed-out");
@@ -208,6 +218,53 @@ aboutToggle.addEventListener("click", () => {
 aboutClose.addEventListener("click", () => {
   aboutPanel.hidden = true;
   aboutToggle.setAttribute("aria-expanded", "false");
+});
+
+// Tracks whether the user actually typed into the secret field this time
+// it was open — saving must NOT overwrite a previously-saved secret just
+// because the field displays its masked placeholder unchanged.
+let settingsSecretTouched = false;
+settingsClientSecretInput.addEventListener("input", () => {
+  settingsSecretTouched = true;
+});
+
+async function openSettingsPanel(): Promise<void> {
+  settingsError.textContent = "";
+  settingsSaved.hidden = true;
+  settingsSecretTouched = false;
+  const current = await window.agent.getGoogleSettings();
+  settingsClientIdInput.value = current.clientId;
+  settingsClientSecretInput.value = "";
+  settingsClientSecretInput.placeholder = current.hasSecret ? "•••• saved" : "";
+}
+
+settingsToggle.addEventListener("click", async () => {
+  const opening = settingsPanel.hidden;
+  if (opening) await openSettingsPanel();
+  settingsPanel.hidden = !opening;
+  settingsToggle.setAttribute("aria-expanded", String(opening));
+});
+
+settingsClose.addEventListener("click", () => {
+  settingsPanel.hidden = true;
+  settingsToggle.setAttribute("aria-expanded", "false");
+});
+
+settingsSaveBtn.addEventListener("click", () => {
+  settingsError.textContent = "";
+  settingsSaved.hidden = true;
+  void withBusyLabel(settingsSaveBtn, "Saving…", async () => {
+    try {
+      await window.agent.saveGoogleSettings({
+        clientId: settingsClientIdInput.value.trim(),
+        clientSecret: settingsSecretTouched ? settingsClientSecretInput.value : undefined,
+      });
+      settingsSecretTouched = false;
+      settingsSaved.hidden = false;
+    } catch (err) {
+      settingsError.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
 });
 
 chooseWorkspaceBtn.addEventListener("click", async () => {

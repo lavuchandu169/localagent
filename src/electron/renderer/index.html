@@ -41,6 +41,7 @@
               </div>
               <div id="auth-error" class="error-text"></div>
             </div>
+            <button id="settings-toggle" aria-expanded="false" title="Settings">⚙</button>
             <button id="about-toggle" aria-expanded="false" title="About">?</button>
           </div>
         </header>
@@ -56,6 +57,28 @@
             <dd id="about-hardware">Detecting…</dd>
           </dl>
           <button id="about-close">Close</button>
+        </div>
+
+        <div id="settings-panel" hidden>
+          <p>Google sign-in needs your own OAuth Client ID (and sometimes a Client Secret) from Google Cloud Console. Saved locally, used only to sign in.</p>
+          <ol>
+            <li><a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a> → create or select a project.</li>
+            <li>APIs &amp; Services → OAuth consent screen → configure it, add yourself as a test user (or publish to production).</li>
+            <li>APIs &amp; Services → Credentials → Create Credentials → OAuth client ID → Application type: <strong>Desktop app</strong>.</li>
+            <li>Copy the Client ID (and Client Secret, if Google issued one) below.</li>
+          </ol>
+          <label>
+            Client ID
+            <input id="settings-client-id" type="text" placeholder="your-client-id.apps.googleusercontent.com" />
+          </label>
+          <label>
+            Client Secret <span class="hint-text">(only if Google asks for one)</span>
+            <input id="settings-client-secret" type="password" placeholder="" />
+          </label>
+          <div id="settings-error" class="error-text"></div>
+          <div id="settings-saved" class="hint-text" hidden>Saved.</div>
+          <button id="settings-save">Save</button>
+          <button id="settings-close">Close</button>
         </div>
 
         <section id="setup">

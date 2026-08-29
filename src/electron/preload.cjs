@@ -41,4 +41,6 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.on("agent:cloud-sync-scope-warning", listener);
     return () => ipcRenderer.removeListener("agent:cloud-sync-scope-warning", listener);
   },
+  getGoogleSettings: () => ipcRenderer.invoke("agent:get-google-settings"),
+  saveGoogleSettings: (settings) => ipcRenderer.invoke("agent:save-google-settings", settings),
 });
