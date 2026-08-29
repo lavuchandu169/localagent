@@ -2,6 +2,10 @@
   "name": "localagent",
   "version": "0.1.0-beta.1",
   "description": "Local-first autonomous coding agent prototype (vertical slice: Phases 1-5)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lavuchandu169/localagent.git"
+  },
   "type": "module",
   "main": "dist/electron/main.js",
   "bin": {
