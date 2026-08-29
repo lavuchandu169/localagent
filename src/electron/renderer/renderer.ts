@@ -1,7 +1,7 @@
 import type { AgentEvent, ChatMessage, PermissionMode, ToolCall } from "../../types.js";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import { MODE_LABELS } from "../modeLabels.js";
-import { EMBEDDED_MODELS } from "../../models.js";
+import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 
 interface HardwareInfo {
   totalRamBytes: number;
@@ -125,6 +125,22 @@ let workspaceRoot: string | null = null;
 let sessionId: string | null = null;
 let hardwareInfo: HardwareInfo | null = null;
 const toolCards = new Map<string, HTMLElement>();
+
+const EMBEDDED_CATEGORY_LABELS: Record<ModelCategory, string> = { coding: "Coding", chat: "Chat" };
+for (const category of Object.keys(EMBEDDED_CATEGORY_LABELS) as ModelCategory[]) {
+  const group = document.createElement("optgroup");
+  group.label = EMBEDDED_CATEGORY_LABELS[category];
+  for (const id of Object.keys(EMBEDDED_MODELS) as EmbeddedModelId[]) {
+    const info = EMBEDDED_MODELS[id];
+    if (info.category !== category) continue;
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = `${info.name} — ${info.sizeNote}`;
+    if (id === DEFAULT_EMBEDDED_MODEL) option.selected = true;
+    group.appendChild(option);
+  }
+  embeddedSizeSelect.appendChild(group);
+}
 
 for (const mode of Object.keys(MODE_LABELS) as PermissionMode[]) {
   const option = document.createElement("option");
@@ -344,7 +360,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
 
     const modelText =
       provider.kind === "embedded"
-        ? EMBEDDED_MODELS[provider.size as keyof typeof EMBEDDED_MODELS]?.description ?? provider.size
+        ? (provider.size in EMBEDDED_MODELS ? describeEmbeddedModel(provider.size as EmbeddedModelId) : provider.size)
         : provider.kind === "anthropic"
           ? "Claude Sonnet 5 (Anthropic API)"
           : `${provider.model} (${provider.baseUrl})`;

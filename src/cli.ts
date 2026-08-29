@@ -5,8 +5,14 @@ import { defaultToolRegistry } from "./toolRegistry.js";
 import { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
 import { EmbeddedLlamaProvider } from "./providers/embeddedLlama.js";
 import { AnthropicProvider } from "./providers/anthropicProvider.js";
-import { isEmbeddedModelSize } from "./models.js";
+import { isEmbeddedModelId, describeEmbeddedModel, EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, type EmbeddedModelId } from "./models.js";
 import type { ModelProvider, PermissionMode, ToolCall } from "./types.js";
+
+function embeddedModelIdsByCategory(category: "coding" | "chat"): string {
+  return (Object.keys(EMBEDDED_MODELS) as EmbeddedModelId[])
+    .filter((id) => EMBEDDED_MODELS[id].category === category)
+    .join(" | ");
+}
 
 function parseArgs(argv: string[]) {
   const args: Record<string, string> = {};
@@ -32,7 +38,9 @@ async function main() {
     console.error(
       'Usage: localagent "<task description>" [--workspace <dir>] [--base-url <url>] [--model <name>] [--mode DEFAULT|PLAN|ACCEPT_EDITS|AUTO_SAFE] [--provider anthropic]\n' +
         "  --base-url given     → talk to that OpenAI-compatible server (Ollama/LM Studio/etc), --model is its model id.\n" +
-        "  --base-url omitted   → run a model in-process, no server needed. --model selects small|medium|large (default small).\n" +
+        `  --base-url omitted   → run a model in-process, no server needed. --model selects an id, default "${DEFAULT_EMBEDDED_MODEL}":\n` +
+        `      coding: ${embeddedModelIdsByCategory("coding")}\n` +
+        `      chat:   ${embeddedModelIdsByCategory("chat")}\n` +
         "  --provider anthropic → use the real Claude Sonnet 5 API instead — sends code over the network, needs ANTHROPIC_API_KEY."
     );
     process.exit(1);
@@ -65,17 +73,21 @@ async function main() {
       process.exit(1);
     }
   } else {
-    const size = args.model ?? "small";
-    if (!isEmbeddedModelSize(size)) {
-      console.error(`\n--model must be one of small|medium|large in embedded mode (got "${size}").\n`);
+    const size = args.model ?? DEFAULT_EMBEDDED_MODEL;
+    if (!isEmbeddedModelId(size)) {
+      console.error(
+        `\n--model "${size}" isn't a known embedded model id. Choices:\n` +
+          `  coding: ${embeddedModelIdsByCategory("coding")}\n` +
+          `  chat:   ${embeddedModelIdsByCategory("chat")}\n`
+      );
       process.exit(1);
     }
     model = size;
     provider = new EmbeddedLlamaProvider({ size });
-    console.log(`\n[localagent] no --base-url given, running "${size}" in-process (downloads and caches on first run)…`);
+    console.log(`\n[localagent] no --base-url given, running ${describeEmbeddedModel(size)} in-process (downloads and caches on first run)…`);
     const healthy = await provider.healthCheck();
     if (!healthy) {
-      console.error(`\nFailed to download or load the "${size}" embedded model.`);
+      console.error(`\nFailed to download or load ${EMBEDDED_MODELS[size].name}.`);
       console.error("Check your network connection, or pass --base-url to use an external server instead.\n");
       process.exit(1);
     }

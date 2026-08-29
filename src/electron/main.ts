@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import { checkCachedModels } from "./modelCache.js";
-import { detectHardware, recommendModelSize } from "./hardwareInfo.js";
+import { detectHardware, recommendModel } from "./hardwareInfo.js";
 import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken, getStoredEmail } from "./googleAuth.js";
 import { listSessions, searchSessions, loadSessionRecord, claimUnownedSessions } from "../sessionStore.js";
 import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
@@ -89,7 +89,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle("agent:hardware-info", async () => {
     const info = await detectHardware();
-    return { ...info, recommended: recommendModelSize(info) };
+    return { ...info, recommended: recommendModel(info) };
   });
 
   ipcMain.handle("agent:pick-workspace", async () => {

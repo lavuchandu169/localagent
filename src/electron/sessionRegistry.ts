@@ -5,7 +5,7 @@ import { defaultToolRegistry } from "../toolRegistry.js";
 import { OpenAICompatibleProvider } from "../providers/openaiCompatible.js";
 import { EmbeddedLlamaProvider } from "../providers/embeddedLlama.js";
 import { AnthropicProvider } from "../providers/anthropicProvider.js";
-import { isEmbeddedModelSize } from "../models.js";
+import { isEmbeddedModelId } from "../models.js";
 import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, ChatMessage, ModelProvider, PermissionMode } from "../types.js";
@@ -76,7 +76,7 @@ export function buildProvider(config: ProviderConfig, onDownloadProgress?: (stat
   if (config.kind === "anthropic") {
     return new AnthropicProvider();
   }
-  if (!isEmbeddedModelSize(config.size)) {
+  if (!isEmbeddedModelId(config.size)) {
     throw new Error(`Invalid embedded model size: ${config.size}`);
   }
   return new EmbeddedLlamaProvider({ size: config.size, onDownloadProgress });

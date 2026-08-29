@@ -1,6 +1,6 @@
 import type { ChatHistoryItem, ChatModelFunctionCall, ChatModelFunctions } from "node-llama-cpp";
 import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
-import { EMBEDDED_MODELS, type EmbeddedModelSize } from "../models.js";
+import { EMBEDDED_MODELS, type EmbeddedModelId } from "../models.js";
 
 /**
  * Converts our provider-agnostic transcript into node-llama-cpp's
@@ -167,7 +167,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
   private context: import("node-llama-cpp").LlamaContext | undefined;
 
   constructor(
-    private opts: { size: EmbeddedModelSize; onDownloadProgress?: (status: { totalSize: number; downloadedSize: number }) => void }
+    private opts: { size: EmbeddedModelId; onDownloadProgress?: (status: { totalSize: number; downloadedSize: number }) => void }
   ) {}
 
   private getChat(): Promise<import("node-llama-cpp").LlamaChat> {
@@ -204,7 +204,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    return (Object.keys(EMBEDDED_MODELS) as EmbeddedModelSize[]).map((size) => ({ id: size, local: true }));
+    return (Object.keys(EMBEDDED_MODELS) as EmbeddedModelId[]).map((size) => ({ id: size, local: true }));
   }
 
   async healthCheck(): Promise<boolean> {

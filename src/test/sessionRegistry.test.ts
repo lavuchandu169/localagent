@@ -38,7 +38,7 @@ await (async () => {
     const registry = createSessionRegistry(sessionsDir);
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider([]) }
     );
     check("startSession returns a sessionId and registers it", registry.sessions.has(sessionId));
@@ -48,7 +48,7 @@ await (async () => {
     const registry = createSessionRegistry(sessionsDir);
     const { workspaceRoot: resolved } = await startSession(
       registry,
-      { provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider([]) }
     );
     check("startSession defaults workspaceRoot to the home directory when none is given", resolved === os.homedir());
@@ -60,7 +60,7 @@ await (async () => {
     try {
       await startSession(
         registry,
-        { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+        { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
         { providerFactory: () => ({ id: "unhealthy", listModels: async () => [], healthCheck: async () => false, chat: async () => { throw new Error("should not be called"); } }) }
       );
     } catch {
@@ -74,7 +74,7 @@ await (async () => {
     let receivedCallback: unknown;
     await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       {
         providerFactory: (_config, onDownloadProgress) => {
           receivedCallback = onDownloadProgress;
@@ -102,7 +102,7 @@ await (async () => {
     const script: ChatResponse[] = [{ turn: { type: "final", content: "all done" } }];
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider(script) }
     );
 
@@ -146,7 +146,7 @@ await (async () => {
     ];
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "DEFAULT" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
       { providerFactory: () => new MockProvider(script) }
     );
 
@@ -174,7 +174,7 @@ await (async () => {
     ];
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider(script) }
     );
 
@@ -201,7 +201,7 @@ await (async () => {
     ];
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider(script) }
     );
 
@@ -236,7 +236,7 @@ await (async () => {
     const fixedId = "resume-test-fixed-id";
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       {
         providerFactory: () => new MockProvider(script),
         resume: {
@@ -269,7 +269,7 @@ await (async () => {
     const script: ChatResponse[] = [{ turn: { type: "final", content: "first" } }, { turn: { type: "final", content: "second" } }];
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider(script) }
     );
     await runTask(registry, sessionId, "first task", () => {});
@@ -294,7 +294,7 @@ await (async () => {
     ];
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "DEFAULT" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
       { providerFactory: () => new MockProvider(script) }
     );
 
@@ -322,7 +322,7 @@ await (async () => {
     const registry = createSessionRegistry(sessionsDir);
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
     );
     await runTask(registry, sessionId, "a task", () => {});
@@ -352,7 +352,7 @@ await (async () => {
     });
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
     );
     await runTask(registry, sessionId, "sync me", () => {});
@@ -374,7 +374,7 @@ await (async () => {
     });
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
     );
     await runTask(registry, sessionId, "not signed in", () => {});
@@ -395,7 +395,7 @@ await (async () => {
     });
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
     );
     await runTask(registry, sessionId, "bad scope", () => {});
@@ -416,7 +416,7 @@ await (async () => {
     });
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
     );
     let threw = false;
@@ -440,7 +440,7 @@ await (async () => {
     });
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider([]) }
     );
     await removeSession(registry, sessionId);
@@ -457,7 +457,7 @@ await (async () => {
     });
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
     );
     await runTask(registry, sessionId, "a new session", () => {});
@@ -477,7 +477,7 @@ await (async () => {
     });
     const { sessionId } = await startSession(
       registry,
-      { workspaceRoot, provider: { kind: "embedded", size: "small" }, mode: "PLAN" },
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       {
         providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]),
         resume: {

@@ -20,6 +20,7 @@ of what isn't built yet.
 - [Highlights](#highlights)
 - [Quick start](#quick-start)
 - [CLI](#cli)
+  - [Embedded models](#embedded-models)
 - [Desktop app](#desktop-app)
   - [Google sign-in and cloud backup](#google-sign-in-and-cloud-backup)
   - [Running inside a sandboxed agent CLI](#running-inside-a-sandboxed-agent-cli)
@@ -40,9 +41,14 @@ of what isn't built yet.
   unreliable at doing this on their own from prompt wording alone.
 
 **Providers — swap the backend without touching the agent**
-- **`EmbeddedLlamaProvider`** — runs a curated Qwen2.5-Coder GGUF entirely
+- **`EmbeddedLlamaProvider`** — runs a curated GGUF model entirely
   in-process via `node-llama-cpp`. No server, no other app. Auto-downloads
-  and caches on first run (`small` / `medium` / `large`, default `small`).
+  and caches on first run. 7 curated models across two purposes — 3 coding
+  models (Qwen2.5-Coder 1.5B/3B/7B Instruct, default the 1.5B) and 4
+  general daily-chat models (Qwen2.5 3B, Llama 3.2 3B, Phi-3.5 Mini,
+  Mistral 7B v0.3 Instruct) — each shown in the desktop app by its real
+  name, grouped by purpose, never behind a generic "small/medium/large"
+  label.
 - **`OpenAICompatibleProvider`** — talks to Ollama, LM Studio, vLLM, or any
   `/v1/chat/completions` server.
 - **`AnthropicProvider`** — the real Claude API, when you want frontier
@@ -123,7 +129,7 @@ node dist/cli.js "explain how add() works in math.js" \
 |---|---|
 | `--workspace <dir>` | Repo root the agent's file tools operate on |
 | `--base-url <url>` | Use an OpenAI-compatible server instead of the embedded model |
-| `--model <name>` | Server model id with `--base-url`; `small`\|`medium`\|`large` in embedded mode |
+| `--model <name>` | Server model id with `--base-url`; one of the 7 embedded model ids otherwise (default `qwen-coder-1.5b`) — run with no args to see the full list grouped by coding/chat |
 | `--provider anthropic` | Use the real Claude API (needs `ANTHROPIC_API_KEY`) |
 | `--mode <mode>` | Permission mode, see below |
 
@@ -133,6 +139,27 @@ node dist/cli.js "explain how add() works in math.js" \
 | `DEFAULT` | ✅ free | ⏸ asks | ⏸ asks |
 | `ACCEPT_EDITS` | ✅ free | ✅ auto | ⏸ asks |
 | `AUTO_SAFE` | ✅ free | ✅ auto | ⏸ asks *(safe-command auto-approval not wired up yet — same as `ACCEPT_EDITS` today)* |
+
+### Embedded models
+
+All GGUF, `Q4_K_M`, resolved via `node-llama-cpp`'s `resolveModelFile()`. The
+desktop app shows the **Name** column grouped by **Purpose**; `--model` takes
+the id.
+
+| Id | Name | Purpose | Note |
+|---|---|---|---|
+| `qwen-coder-1.5b` | Qwen2.5-Coder 1.5B Instruct | Coding | fastest, lowest memory — default |
+| `qwen-coder-3b` | Qwen2.5-Coder 3B Instruct | Coding | better quality, more memory |
+| `qwen-coder-7b` | Qwen2.5-Coder 7B Instruct | Coding | best quality, needs a capable machine |
+| `qwen-3b` | Qwen2.5 3B Instruct | Chat | fast, general-purpose |
+| `llama-3.2-3b` | Llama 3.2 3B Instruct | Chat | fast, general-purpose |
+| `phi-3.5-mini` | Phi-3.5 Mini Instruct | Chat | compact, strong reasoning for its size |
+| `mistral-7b` | Mistral 7B Instruct v0.3 | Chat | best quality, needs a capable machine |
+
+Hardware auto-recommendation (the "recommended for this machine" tag in the
+desktop app) only picks among the 3 coding models, by RAM: <8GB →
+`qwen-coder-1.5b`, 8–16GB → `qwen-coder-3b`, ≥16GB → `qwen-coder-7b`. Chat
+models are there to pick manually.
 
 ## Desktop app
 
