@@ -94,6 +94,28 @@ async function runPrecedenceTests() {
       "an explicit env var wins over saved settings",
       fromEnv.clientId === "env-id" && fromEnv.clientSecret === "env-secret"
     );
+
+    delete process.env.GOOGLE_OAUTH_CLIENT_ID;
+    delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+
+    const emptySettingsFile = path.join(dir, "googleSettingsEmpty.json");
+    const fromEmbedded = await resolveGoogleCredentials(emptySettingsFile, undefined, "embedded-id");
+    check(
+      "with no env var and no saved settings, falls back to the embedded default with no secret",
+      fromEmbedded.clientId === "embedded-id" && fromEmbedded.clientSecret === undefined
+    );
+
+    const fromSettingsOverEmbedded = await resolveGoogleCredentials(settingsFilePath, undefined, "embedded-id");
+    check(
+      "saved settings win over the embedded default",
+      fromSettingsOverEmbedded.clientId === "saved-id" && fromSettingsOverEmbedded.clientSecret === "saved-secret"
+    );
+
+    const withNoEmbeddedDefault = await resolveGoogleCredentials(emptySettingsFile, undefined, null);
+    check(
+      "with no env var, no saved settings, and no embedded default, resolves to an empty clientId",
+      withNoEmbeddedDefault.clientId === "" && withNoEmbeddedDefault.clientSecret === undefined
+    );
   } finally {
     if (savedId === undefined) delete process.env.GOOGLE_OAUTH_CLIENT_ID;
     else process.env.GOOGLE_OAUTH_CLIENT_ID = savedId;

@@ -193,12 +193,13 @@ on first launch — normal for a beta, not a sign anything's wrong:
 This beta's macOS build is Apple Silicon (arm64) only — Intel Mac
 (x64) support isn't available yet.
 
-Google sign-in and Drive backup work in the packaged installers too — no
-`.env` or terminal needed. On first use, open the app's Settings panel
-(the gear icon next to the "?" About button) and paste in a Google OAuth
-Client ID (and Client Secret, if Google requires one for your OAuth
-client type) — the same credentials a from-source developer would put in
-`.env` (see below for how to create one).
+Google sign-in and Drive backup work in the packaged installers out of the
+box — official `.dmg`/`.exe` downloads ship with a working Client ID
+built in, so sign-in just works with no setup. If you'd rather use your
+own Google Cloud project (your own quota, your own consent screen), open
+the app's Settings panel (the gear icon next to the "?" About button) and
+paste in your own Client ID — the same credentials a from-source
+developer would put in `.env` (see below for how to create one).
 
 ### Google sign-in and cloud backup
 
@@ -218,8 +219,10 @@ encrypted at rest via your OS's native credential store (Keychain on
 macOS, DPAPI on Windows, libsecret on Linux) — never written to disk as
 plain text.
 
-Needs a Google Cloud OAuth Client ID, which you create yourself — nothing
-is shared with anyone else's project:
+Official builds already have a working Client ID baked in — you only need
+the steps below if you want to run from source, or want your own Google
+Cloud project instead of the built-in one (nothing from your own project
+is shared with anyone else's):
 
 1. [console.cloud.google.com](https://console.cloud.google.com/) → create
    or select a project.
@@ -250,7 +253,7 @@ is shared with anyone else's project:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `GOOGLE_OAUTH_CLIENT_ID is not set` | No client ID in the environment, `.env`, or saved Settings | Running from source: see step 5 above. Running the packaged app: open Settings (gear icon in the header) and paste your Client ID/Secret there instead. |
+| `GOOGLE_OAUTH_CLIENT_ID is not set` | No client ID in the environment, `.env`, saved Settings, or (only possible from source / a non-official build) the embedded default | Running from source: see step 5 above. Running an official packaged app: this shouldn't happen — sign-in should just work; if it does, open Settings (gear icon in the header) and paste a Client ID/Secret there as a workaround. |
 | `access_denied` at Google's consent screen | OAuth consent screen is in Testing and your account isn't a test user | Add yourself under Audience → Test users (step 2) |
 | `client_secret is missing` | Google issued this Client ID as a type that needs it even with PKCE | Set `GOOGLE_OAUTH_CLIENT_SECRET` too |
 | `[cloudSync] upload failed ... Google Drive API has not been used` | The Drive API itself isn't enabled for the project | Enable it (step 3), wait ~30s, retry |

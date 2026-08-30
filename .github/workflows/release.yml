@@ -29,6 +29,7 @@ jobs:
       - run: npm run package:mac -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID_EMBED }}
 
   build-win:
     runs-on: windows-latest
@@ -50,3 +51,4 @@ jobs:
       - run: npm run package:win -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID_EMBED }}

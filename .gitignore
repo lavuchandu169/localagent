@@ -5,3 +5,4 @@ release/
 .env
 .claude/
 .superpowers/
+src/electron/embeddedCredentials.ts
