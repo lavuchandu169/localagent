@@ -1,6 +1,6 @@
 {
   "name": "localagent",
-  "version": "0.1.0-beta.4",
+  "version": "0.1.0-beta.5",
   "description": "Local-first autonomous coding agent prototype (vertical slice: Phases 1-5)",
   "license": "UNLICENSED",
   "author": "Chandu Lavu",
