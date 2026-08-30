@@ -493,6 +493,13 @@ input:disabled {
   max-width: 320px;
 }
 
+/* label's own `display: flex; flex-direction: column` (above) would otherwise
+   force a nested .hint-text span onto its own line instead of sitting inline
+   after the label text — e.g. "Client Secret (only if Google asks for one)". */
+label .hint-text {
+  display: inline;
+}
+
 #task-input-hint {
   margin-top: 6px;
   max-width: none;

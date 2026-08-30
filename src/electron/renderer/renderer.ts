@@ -68,7 +68,7 @@ interface AgentBridge {
   deleteSession(id: string): Promise<void>;
   onSessionsChanged(callback: () => void): () => void;
   onCloudSyncScopeWarning(callback: () => void): () => void;
-  getGoogleSettings(): Promise<{ clientId: string; hasSecret: boolean }>;
+  getGoogleSettings(): Promise<{ clientId: string; hasSecret: boolean; envOverride: boolean }>;
   saveGoogleSettings(settings: { clientId: string; clientSecret?: string }): Promise<void>;
 }
 
@@ -135,6 +135,7 @@ const settingsPanel = byId<HTMLDivElement>("settings-panel");
 const settingsClose = byId<HTMLButtonElement>("settings-close");
 const settingsClientIdInput = byId<HTMLInputElement>("settings-client-id");
 const settingsClientSecretInput = byId<HTMLInputElement>("settings-client-secret");
+const settingsEnvOverrideNotice = byId<HTMLDivElement>("settings-env-override");
 const settingsError = byId<HTMLDivElement>("settings-error");
 const settingsSaved = byId<HTMLDivElement>("settings-saved");
 const settingsSaveBtn = byId<HTMLButtonElement>("settings-save");
@@ -236,6 +237,7 @@ async function openSettingsPanel(): Promise<void> {
   settingsClientIdInput.value = current.clientId;
   settingsClientSecretInput.value = "";
   settingsClientSecretInput.placeholder = current.hasSecret ? "•••• saved" : "";
+  settingsEnvOverrideNotice.hidden = !current.envOverride;
 }
 
 settingsToggle.addEventListener("click", async () => {
@@ -255,11 +257,19 @@ settingsSaveBtn.addEventListener("click", () => {
   settingsSaved.hidden = true;
   void withBusyLabel(settingsSaveBtn, "Saving…", async () => {
     try {
+      const secretValueSent = settingsSecretTouched ? settingsClientSecretInput.value.trim() : undefined;
       await window.agent.saveGoogleSettings({
         clientId: settingsClientIdInput.value.trim(),
-        clientSecret: settingsSecretTouched ? settingsClientSecretInput.value : undefined,
+        clientSecret: secretValueSent,
       });
       settingsSecretTouched = false;
+      if (secretValueSent !== undefined) {
+        // A secret was actually sent this save — clear the plaintext out of the
+        // DOM and reflect what's now stored (a real secret, or none if the user
+        // cleared the field), matching openSettingsPanel's own placeholder logic.
+        settingsClientSecretInput.value = "";
+        settingsClientSecretInput.placeholder = secretValueSent ? "•••• saved" : "";
+      }
       settingsSaved.hidden = false;
     } catch (err) {
       settingsError.textContent = err instanceof Error ? err.message : String(err);

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession } from "./sessionRegistry.js";
@@ -32,6 +32,10 @@ function createWindow(): BrowserWindow {
       nodeIntegration: false,
       spellcheck: false,
     },
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: "deny" };
   });
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
   return win;
@@ -156,7 +160,11 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("agent:get-google-settings", async () => {
     const settings = await loadGoogleSettings(settingsFilePath, storageCrypto);
-    return { clientId: settings.clientId ?? "", hasSecret: !!settings.clientSecret };
+    return {
+      clientId: settings.clientId ?? "",
+      hasSecret: !!settings.clientSecret,
+      envOverride: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
+    };
   });
   ipcMain.handle("agent:save-google-settings", async (_event, input: { clientId: string; clientSecret?: string }) => {
     const current = await loadGoogleSettings(settingsFilePath, storageCrypto);

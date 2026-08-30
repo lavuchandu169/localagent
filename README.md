@@ -193,10 +193,12 @@ on first launch — normal for a beta, not a sign anything's wrong:
 This beta's macOS build is Apple Silicon (arm64) only — Intel Mac
 (x64) support isn't available yet.
 
-Google sign-in and Drive backup aren't wired up in the packaged
-installers yet — there's no in-app way to configure OAuth credentials,
-so those features currently only work when running from source with a
-`.env` in the project root (see below).
+Google sign-in and Drive backup work in the packaged installers too — no
+`.env` or terminal needed. On first use, open the app's Settings panel
+(the gear icon next to the "?" About button) and paste in a Google OAuth
+Client ID (and Client Secret, if Google requires one for your OAuth
+client type) — the same credentials a from-source developer would put in
+`.env` (see below for how to create one).
 
 ### Google sign-in and cloud backup
 
@@ -239,7 +241,11 @@ is shared with anyone else's project:
    `npm run electron` loads it automatically; a variable already set in
    your real shell environment always wins over the file.
 
-<details>
+   Running the packaged app instead of building from source? Use the
+   in-app Settings panel (gear icon) instead of `.env` — see
+   [Download the beta](#download-the-beta) above.
+
+<details id="troubleshooting">
 <summary>Troubleshooting</summary>
 
 | Symptom | Cause | Fix |
