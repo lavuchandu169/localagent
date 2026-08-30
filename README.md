@@ -168,6 +168,14 @@ desktop app) only picks among the 3 coding models, by RAM: <8GB →
 `qwen-coder-1.5b`, 8–16GB → `qwen-coder-3b`, ≥16GB → `qwen-coder-7b`. Chat
 models are there to pick manually.
 
+Inference runs on CPU in the prebuilt installers — `node-llama-cpp`'s
+optional CUDA/Vulkan GPU backends are deliberately excluded from packaging
+(they alone were ~500MB of an otherwise ~40MB install, mostly NVIDIA-only
+CUDA binaries most users can't use). It falls back to CPU automatically
+either way, so nothing breaks; you just don't get GPU acceleration in the
+packaged app. Building from source with those packages present will
+include them.
+
 ## Desktop app
 
 ```bash
