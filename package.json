@@ -2,6 +2,8 @@
   "name": "localagent",
   "version": "0.1.0-beta.3",
   "description": "Local-first autonomous coding agent prototype (vertical slice: Phases 1-5)",
+  "license": "UNLICENSED",
+  "author": "Chandu Lavu",
   "repository": {
     "type": "git",
     "url": "https://github.com/lavuchandu169/localagent.git"

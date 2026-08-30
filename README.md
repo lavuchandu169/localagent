@@ -6,9 +6,13 @@ Studio, vLLM, llama.cpp server), or Claude — and get a real agent loop with
 a permission engine, file/search/edit/shell tools, and a desktop app on top,
 with nothing required to leave your machine.
 
+[![Latest release](https://img.shields.io/github/v/release/lavuchandu169/localagent?include_prereleases&label=release)](https://github.com/lavuchandu169/localagent/releases)
+[![License](https://img.shields.io/badge/license-proprietary-red)](LICENSE)
 ![Node](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript&logoColor=white)
 ![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white)
+![macOS](https://img.shields.io/badge/macOS-arm64-000000?logo=apple&logoColor=white)
+![Windows](https://img.shields.io/badge/Windows-x64-0078D6?logo=windows&logoColor=white)
 ![Runs offline](https://img.shields.io/badge/runs-offline--first-2ea44f)
 
 This is a working vertical slice, not the full spec — see
@@ -29,6 +33,7 @@ of what isn't built yet.
 - [Testing](#testing)
 - [Project structure](#project-structure)
 - [What's deliberately out of scope](#whats-deliberately-out-of-scope)
+- [License](#license)
 
 ## Highlights
 
@@ -310,9 +315,8 @@ configured.
   backed-up sessions live only in that account's own Drive; local session
   history is filtered to whichever account is currently signed in.
 
-This is a local-first, open-source prototype, not a hosted product — the
-source above is the actual and complete description of what it does with
-your data.
+This is a local-first prototype, not a hosted product — the source above
+is the actual and complete description of what it does with your data.
 
 ## Testing
 
@@ -357,11 +361,19 @@ the exact same core interchangeably, and the desktop app was added with
 This is a vertical slice proving the harness is real and correct, not the
 full spec. Not built: a VS Code extension, Tree-sitter/LSP symbol
 intelligence, subagents, an MCP client, hooks, checkpoints/undo via git
-worktrees, sandboxed execution, licensing, and — within the Electron app
-itself — multi-session/tabs, a diff viewer, and Drive delete-propagation
-(deleting a session while signed out can reappear on the next sign-in;
-documented, not yet fixed).
+worktrees, sandboxed execution, and — within the Electron app itself —
+multi-session/tabs, a diff viewer, and Drive delete-propagation (deleting
+a session while signed out can reappear on the next sign-in; documented,
+not yet fixed).
 
 The architecture is intentionally the part designed to extend into all of
 that without rework — the provider interface, tool interface, permission
 engine, and typed event stream are the boundary that makes it possible.
+
+## License
+
+All rights reserved — see [`LICENSE`](LICENSE). The source is public for
+viewing, but no license to use, copy, modify, or redistribute it is
+granted. Prebuilt installers on the [Releases
+page](https://github.com/lavuchandu169/localagent/releases) are provided
+for personal use of the app as distributed.
