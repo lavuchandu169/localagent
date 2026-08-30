@@ -99,19 +99,25 @@ async function runPrecedenceTests() {
     delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
 
     const emptySettingsFile = path.join(dir, "googleSettingsEmpty.json");
-    const fromEmbedded = await resolveGoogleCredentials(emptySettingsFile, undefined, "embedded-id");
+    const fromEmbeddedIdOnly = await resolveGoogleCredentials(emptySettingsFile, undefined, "embedded-id", null);
     check(
-      "with no env var and no saved settings, falls back to the embedded default with no secret",
-      fromEmbedded.clientId === "embedded-id" && fromEmbedded.clientSecret === undefined
+      "with no env var, no saved settings, and an embedded id but no embedded secret, resolves with an undefined secret",
+      fromEmbeddedIdOnly.clientId === "embedded-id" && fromEmbeddedIdOnly.clientSecret === undefined
     );
 
-    const fromSettingsOverEmbedded = await resolveGoogleCredentials(settingsFilePath, undefined, "embedded-id");
+    const fromEmbeddedIdAndSecret = await resolveGoogleCredentials(emptySettingsFile, undefined, "embedded-id", "embedded-secret");
     check(
-      "saved settings win over the embedded default",
+      "with no env var and no saved settings, falls back to both the embedded id and embedded secret",
+      fromEmbeddedIdAndSecret.clientId === "embedded-id" && fromEmbeddedIdAndSecret.clientSecret === "embedded-secret"
+    );
+
+    const fromSettingsOverEmbedded = await resolveGoogleCredentials(settingsFilePath, undefined, "embedded-id", "embedded-secret");
+    check(
+      "saved settings win over the embedded default (id and secret)",
       fromSettingsOverEmbedded.clientId === "saved-id" && fromSettingsOverEmbedded.clientSecret === "saved-secret"
     );
 
-    const withNoEmbeddedDefault = await resolveGoogleCredentials(emptySettingsFile, undefined, null);
+    const withNoEmbeddedDefault = await resolveGoogleCredentials(emptySettingsFile, undefined, null, null);
     check(
       "with no env var, no saved settings, and no embedded default, resolves to an empty clientId",
       withNoEmbeddedDefault.clientId === "" && withNoEmbeddedDefault.clientSecret === undefined

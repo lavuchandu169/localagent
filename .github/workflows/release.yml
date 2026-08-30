@@ -30,6 +30,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID_EMBED }}
+          GOOGLE_OAUTH_CLIENT_SECRET_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET_EMBED }}
 
   build-win:
     runs-on: windows-latest
@@ -52,3 +53,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID_EMBED }}
+          GOOGLE_OAUTH_CLIENT_SECRET_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET_EMBED }}
