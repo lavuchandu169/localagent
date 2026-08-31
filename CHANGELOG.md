@@ -3,6 +3,15 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.14 — 2026-08-31
+
+- This file — a running history of every release, instead of scanning
+  individual tag descriptions.
+- Local-only crash/error capture: Electron's native crash reporter and
+  new JS-level exception/rejection handlers (main + renderer) all log
+  to a local file only, never uploaded anywhere. "Open error log" link
+  added to the About panel.
+
 ## v0.1.0-beta.13 — 2026-08-31
 
 - First-run onboarding modal explaining the Model dropdown's Embedded /
