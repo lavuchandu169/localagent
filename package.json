@@ -1,6 +1,6 @@
 {
   "name": "localagent",
-  "version": "0.1.0-beta.11",
+  "version": "0.1.0-beta.12",
   "description": "Local-first autonomous coding agent prototype (vertical slice: Phases 1-5)",
   "license": "UNLICENSED",
   "author": "Chandu Lavu",
@@ -40,18 +40,30 @@
     "asarUnpack": [
       "**/*.node"
     ],
-    "electronLanguages": ["en-US"],
+    "electronLanguages": [
+      "en-US"
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "src/electron/renderer/icon-512.png",
       "target": [
-        { "target": "dmg", "arch": ["arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
       ]
     },
     "win": {
       "icon": "src/electron/renderer/icon-512.png",
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "publish": {
@@ -64,6 +76,7 @@
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@fontsource/public-sans": "^5.3.0",
     "@fontsource/source-serif-4": "^5.3.0",
+    "electron-updater": "^6.8.9",
     "node-llama-cpp": "^3.20.0",
     "zod": "^3.23.8"
   },

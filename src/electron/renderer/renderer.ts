@@ -81,6 +81,7 @@ interface AgentBridge {
   deleteSession(id: string): Promise<void>;
   onSessionsChanged(callback: () => void): () => void;
   onCloudSyncScopeWarning(callback: () => void): () => void;
+  onUpdateAvailable(callback: (info: { version: string }) => void): () => void;
   getGoogleSettings(): Promise<{ clientId: string; hasSecret: boolean; envOverride: boolean }>;
   saveGoogleSettings(settings: { clientId: string; clientSecret?: string }): Promise<void>;
   getAnthropicSettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
@@ -139,6 +140,10 @@ const taskInput = byId<HTMLTextAreaElement>("task-input");
 const runTaskBtn = byId<HTMLButtonElement>("run-task");
 const eventLog = byId<HTMLDivElement>("event-log");
 const emptyState = byId<HTMLDivElement>("empty-state");
+const updateBanner = byId<HTMLDivElement>("update-banner");
+const updateBannerText = byId<HTMLSpanElement>("update-banner-text");
+const updateBannerLink = byId<HTMLAnchorElement>("update-banner-link");
+const updateBannerDismiss = byId<HTMLButtonElement>("update-banner-dismiss");
 const aboutToggle = byId<HTMLButtonElement>("about-toggle");
 const aboutPanel = byId<HTMLDivElement>("about-panel");
 const aboutClose = byId<HTMLButtonElement>("about-close");
@@ -921,6 +926,16 @@ window.agent.onSessionsChanged(() => {
 
 window.agent.onCloudSyncScopeWarning(() => {
   authError.textContent = "Sign in again to keep backing up your sessions to Google Drive.";
+});
+
+updateBannerDismiss.addEventListener("click", () => {
+  updateBanner.hidden = true;
+});
+
+window.agent.onUpdateAvailable((info) => {
+  updateBannerText.textContent = `A new version (v${info.version}) is available.`;
+  updateBannerLink.href = `https://github.com/lavuchandu169/localagent/releases/tag/v${info.version}`;
+  updateBanner.hidden = false;
 });
 
 window.agent.getAuthStatus().then(renderAuthState).catch(() => {});

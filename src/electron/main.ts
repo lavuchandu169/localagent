@@ -1,4 +1,13 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
+// electron-updater is CommonJS; Node's ESM/CJS interop fails to statically
+// detect `autoUpdater` as a named export from it (confirmed live — a plain
+// `import { autoUpdater } from "electron-updater"` throws
+// "Named export 'autoUpdater' not found" the instant this file loads,
+// which would have crashed the app on every single launch). The default-
+// import-then-destructure form Node's own error message suggests is the
+// only shape that actually works here.
+import electronUpdaterPkg from "electron-updater";
+const { autoUpdater } = electronUpdaterPkg;
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings } from "./sessionRegistry.js";
@@ -73,6 +82,33 @@ app.whenReady().then(() => {
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) w.webContents.send(channel, ...args);
     }
+  }
+
+  // Checks GitHub Releases once per launch for a newer version and lets the
+  // renderer show an in-app banner pointing at it. Deliberately notify-only,
+  // not a full silent download-and-install: electron-updater's actual
+  // update-apply step (Squirrel.Mac) generally requires a signed app on
+  // macOS, and this app isn't signed yet — attempting a real auto-install
+  // now would likely fail silently on Mac specifically, which is worse
+  // than no auto-updater at all. autoDownload stays false for that reason;
+  // revisit once code signing lands. Only runs in a packaged app — electron
+  // -builder only generates the app-update.yml this needs for a real
+  // build, so a from-source `npm run electron` has nothing to check
+  // against and would just log a harmless error every launch otherwise.
+  if (app.isPackaged) {
+    autoUpdater.allowPrerelease = true; // every release here is tagged "prerelease" on GitHub — without this, updater finds nothing
+    autoUpdater.autoDownload = false;
+    autoUpdater.on("update-available", (info) => {
+      broadcastToAllWindows("agent:update-available", { version: info.version });
+    });
+    autoUpdater.on("error", (err) => {
+      // Best-effort, same failure posture as cloud sync's own handling — a
+      // failed update check is logged, never surfaced as an error to the user.
+      console.warn("[autoUpdater] update check failed:", err);
+    });
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.warn("[autoUpdater] checkForUpdates() threw:", err);
+    });
   }
 
   let scopeWarningSent = false;

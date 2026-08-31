@@ -465,6 +465,45 @@ input:disabled {
   max-width: 320px;
 }
 
+#update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+#update-banner-text {
+  flex: 1;
+}
+
+#update-banner-link {
+  color: var(--accent-strong);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+#update-banner-link:hover {
+  text-decoration: underline;
+}
+
+#update-banner-dismiss {
+  background: none;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+#update-banner-dismiss:hover {
+  color: var(--ink);
+}
+
 /* label's own `display: flex; flex-direction: column` (above) would otherwise
    force a nested .hint-text span onto its own line instead of sitting inline
    after the label text — e.g. "Client Secret (only if Google asks for one)". */
@@ -486,6 +525,10 @@ label .hint-text {
 
 #auth-signed-out[hidden],
 #auth-signed-in[hidden] {
+  display: none;
+}
+
+#update-banner[hidden] {
   display: none;
 }
 

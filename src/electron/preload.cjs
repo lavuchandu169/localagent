@@ -45,6 +45,11 @@ contextBridge.exposeInMainWorld("agent", {
     ipcRenderer.on("agent:cloud-sync-scope-warning", listener);
     return () => ipcRenderer.removeListener("agent:cloud-sync-scope-warning", listener);
   },
+  onUpdateAvailable: (callback) => {
+    const listener = (_event, info) => callback(info);
+    ipcRenderer.on("agent:update-available", listener);
+    return () => ipcRenderer.removeListener("agent:update-available", listener);
+  },
   getGoogleSettings: () => ipcRenderer.invoke("agent:get-google-settings"),
   saveGoogleSettings: (settings) => ipcRenderer.invoke("agent:save-google-settings", settings),
   getAnthropicSettings: () => ipcRenderer.invoke("agent:get-anthropic-settings"),

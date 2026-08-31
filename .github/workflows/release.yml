@@ -9,6 +9,26 @@ on:
       - "v*"
 
 jobs:
+  # Blocks the entire release — including create-release's empty shell — on
+  # the test suite actually passing. Previously nothing in CI ran `npm
+  # test` at all: every one of this project's betas shipped only because a
+  # human ran the suite locally before pushing the tag. A bad tag push with
+  # no local check would have published untested code with nothing to stop
+  # it. Runs on ubuntu-latest (cheapest) since the suite is plain Node
+  # scripts against MockProvider/fake resolvers — no Electron or real
+  # model loading involved.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
   # Creates the GitHub Release for this tag exactly once, before either
   # build job starts. Without this, build-mac and build-win each call
   # electron-builder's `--publish always`, which internally does a
@@ -18,7 +38,10 @@ jobs:
   # hand each time). Both build jobs now `needs: create-release`, so the
   # release already exists by the time either one runs and electron-builder
   # just finds it and appends assets, instead of racing to create it.
+  # Needs `test` too, not just the build jobs — a failing suite must mean
+  # NO release object appears at all, not an empty one with no assets.
   create-release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
