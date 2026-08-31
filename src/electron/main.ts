@@ -9,6 +9,7 @@ import { isEmbeddedModelId } from "../models.js";
 import { detectHardware, recommendModel } from "./hardwareInfo.js";
 import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken, getStoredEmail } from "./googleAuth.js";
 import { loadGoogleSettings, saveGoogleSettings, resolveGoogleCredentials } from "./googleSettings.js";
+import { loadAnthropicSettings, saveAnthropicSettings, resolveAnthropicApiKey } from "./anthropicSettings.js";
 import { listSessions, searchSessions, loadSessionRecord, claimUnownedSessions } from "../sessionStore.js";
 import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 import { loadEnvFile } from "./loadEnvFile.js";
@@ -46,6 +47,7 @@ function createWindow(): BrowserWindow {
 app.whenReady().then(() => {
   const authFilePath = path.join(app.getPath("userData"), "auth.json");
   const settingsFilePath = path.join(app.getPath("userData"), "googleSettings.json");
+  const anthropicSettingsFilePath = path.join(app.getPath("userData"), "anthropicSettings.json");
   const sessionsDir = path.join(app.getPath("userData"), "sessions");
   const win = createWindow();
 
@@ -101,8 +103,16 @@ app.whenReady().then(() => {
   ipcMain.handle("agent:start-session", async (event, config: SessionConfig, resume?: ResumePayload) => {
     const controller = new AbortController();
     currentStartAbortController = controller;
+    // The renderer only ever sends { kind: "anthropic" } — it has no access
+    // to the saved key (agent:get-anthropic-settings never sends the real
+    // value back). Resolved here, the same place Google credentials are
+    // resolved, right before the config reaches startSession.
+    const resolvedConfig: SessionConfig =
+      config.provider.kind === "anthropic"
+        ? { ...config, provider: { kind: "anthropic", apiKey: await resolveAnthropicApiKey(anthropicSettingsFilePath, storageCrypto) } }
+        : config;
     try {
-      return await startSession(registry, config, {
+      return await startSession(registry, resolvedConfig, {
         onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
         signal: controller.signal,
         resume,
@@ -212,6 +222,21 @@ app.whenReady().then(() => {
         clientId: input.clientId || null,
         clientSecret: input.clientSecret !== undefined ? input.clientSecret || null : current.clientSecret,
       },
+      storageCrypto
+    );
+  });
+  ipcMain.handle("agent:get-anthropic-settings", async () => {
+    const settings = await loadAnthropicSettings(anthropicSettingsFilePath, storageCrypto);
+    return { hasKey: !!settings.apiKey, envOverride: !!process.env.ANTHROPIC_API_KEY };
+  });
+  // input.apiKey === undefined means "untouched" (leave the saved key as-is,
+  // mirroring agent:save-google-settings' clientSecret handling) — an
+  // explicit string (including "") sets or clears it.
+  ipcMain.handle("agent:save-anthropic-settings", async (_event, input: { apiKey?: string }) => {
+    const current = await loadAnthropicSettings(anthropicSettingsFilePath, storageCrypto);
+    await saveAnthropicSettings(
+      anthropicSettingsFilePath,
+      { apiKey: input.apiKey !== undefined ? input.apiKey || null : current.apiKey },
       storageCrypto
     );
   });

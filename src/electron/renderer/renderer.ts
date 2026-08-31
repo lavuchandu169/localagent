@@ -83,6 +83,8 @@ interface AgentBridge {
   onCloudSyncScopeWarning(callback: () => void): () => void;
   getGoogleSettings(): Promise<{ clientId: string; hasSecret: boolean; envOverride: boolean }>;
   saveGoogleSettings(settings: { clientId: string; clientSecret?: string }): Promise<void>;
+  getAnthropicSettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
+  saveAnthropicSettings(settings: { apiKey?: string }): Promise<void>;
 }
 
 declare global {
@@ -152,6 +154,11 @@ const settingsEnvOverrideNotice = byId<HTMLDivElement>("settings-env-override");
 const settingsError = byId<HTMLDivElement>("settings-error");
 const settingsSaved = byId<HTMLDivElement>("settings-saved");
 const settingsSaveBtn = byId<HTMLButtonElement>("settings-save");
+const anthropicApiKeyInput = byId<HTMLInputElement>("anthropic-api-key");
+const anthropicEnvOverrideNotice = byId<HTMLDivElement>("anthropic-env-override");
+const anthropicSettingsError = byId<HTMLDivElement>("anthropic-settings-error");
+const anthropicSettingsSaved = byId<HTMLDivElement>("anthropic-settings-saved");
+const anthropicSettingsSaveBtn = byId<HTMLButtonElement>("anthropic-settings-save");
 const googleSignInBtn = byId<HTMLButtonElement>("google-sign-in");
 const signOutBtn = byId<HTMLButtonElement>("sign-out-btn");
 const authSignedOut = byId<HTMLDivElement>("auth-signed-out");
@@ -300,6 +307,13 @@ settingsClientSecretInput.addEventListener("input", () => {
   settingsSecretTouched = true;
 });
 
+// Same touched-tracking contract as settingsSecretTouched above, for the
+// separate Anthropic API key field/form.
+let anthropicApiKeyTouched = false;
+anthropicApiKeyInput.addEventListener("input", () => {
+  anthropicApiKeyTouched = true;
+});
+
 async function openSettingsPanel(): Promise<void> {
   settingsError.textContent = "";
   settingsSaved.hidden = true;
@@ -309,6 +323,15 @@ async function openSettingsPanel(): Promise<void> {
   settingsClientSecretInput.value = "";
   settingsClientSecretInput.placeholder = current.hasSecret ? "•••• saved" : "";
   settingsEnvOverrideNotice.hidden = !current.envOverride;
+
+  anthropicSettingsError.textContent = "";
+  anthropicSettingsSaved.hidden = true;
+  anthropicApiKeyTouched = false;
+  const currentAnthropic = await window.agent.getAnthropicSettings();
+  anthropicApiKeyInput.value = "";
+  anthropicApiKeyInput.placeholder = currentAnthropic.hasKey ? "•••• saved" : "";
+  anthropicEnvOverrideNotice.hidden = !currentAnthropic.envOverride;
+
   await refreshDownloadedModelsList();
 }
 
@@ -345,6 +368,25 @@ settingsSaveBtn.addEventListener("click", () => {
       settingsSaved.hidden = false;
     } catch (err) {
       settingsError.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
+});
+
+anthropicSettingsSaveBtn.addEventListener("click", () => {
+  anthropicSettingsError.textContent = "";
+  anthropicSettingsSaved.hidden = true;
+  void withBusyLabel(anthropicSettingsSaveBtn, "Saving…", async () => {
+    try {
+      const keyValueSent = anthropicApiKeyTouched ? anthropicApiKeyInput.value.trim() : undefined;
+      await window.agent.saveAnthropicSettings({ apiKey: keyValueSent });
+      anthropicApiKeyTouched = false;
+      if (keyValueSent !== undefined) {
+        anthropicApiKeyInput.value = "";
+        anthropicApiKeyInput.placeholder = keyValueSent ? "•••• saved" : "";
+      }
+      anthropicSettingsSaved.hidden = false;
+    } catch (err) {
+      anthropicSettingsError.textContent = err instanceof Error ? err.message : String(err);
     }
   });
 });

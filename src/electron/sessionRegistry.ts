@@ -13,7 +13,7 @@ import type { AgentEvent, ChatMessage, ModelProvider, PermissionMode } from "../
 export type ProviderConfig =
   | { kind: "openai-compatible"; baseUrl: string; model: string }
   | { kind: "embedded"; size: string }
-  | { kind: "anthropic" };
+  | { kind: "anthropic"; apiKey?: string };
 
 export interface SessionConfig {
   /** Omit to chat without file access — defaults to the home directory. */
@@ -78,7 +78,7 @@ export function buildProvider(
     return new OpenAICompatibleProvider({ baseUrl: config.baseUrl, local: true });
   }
   if (config.kind === "anthropic") {
-    return new AnthropicProvider();
+    return new AnthropicProvider({ apiKey: config.apiKey });
   }
   if (!isEmbeddedModelId(config.size)) {
     throw new Error(`Invalid embedded model size: ${config.size}`);

@@ -47,4 +47,6 @@ contextBridge.exposeInMainWorld("agent", {
   },
   getGoogleSettings: () => ipcRenderer.invoke("agent:get-google-settings"),
   saveGoogleSettings: (settings) => ipcRenderer.invoke("agent:save-google-settings", settings),
+  getAnthropicSettings: () => ipcRenderer.invoke("agent:get-anthropic-settings"),
+  saveAnthropicSettings: (settings) => ipcRenderer.invoke("agent:save-anthropic-settings", settings),
 });

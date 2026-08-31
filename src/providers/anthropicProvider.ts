@@ -75,13 +75,20 @@ export function fromAnthropicResponse(response: Anthropic.Message): ChatResponse
  * Talks to the real Anthropic API (Claude Sonnet 5) — the one provider in this
  * app that isn't local. Opt-in only: nothing about the Embedded/External-server
  * paths changes, and this sends file contents and task context over the network
- * to Anthropic. Credentials resolve the same way the Anthropic SDK/CLI always do
- * (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile) — no
- * key is entered or stored in this app.
+ * to Anthropic. Credentials resolve in this order: an explicit `opts.apiKey`
+ * (see resolveAnthropicApiKey in main.ts — an ANTHROPIC_API_KEY env var, then
+ * a key saved via the in-app Settings panel), or, if neither is set, the
+ * Anthropic SDK/CLI's own fallback chain (ANTHROPIC_AUTH_TOKEN, an
+ * `ant auth login` profile) — untouched, exactly as before this app had any
+ * concept of its own Anthropic settings.
  */
 export class AnthropicProvider implements ModelProvider {
   id = "anthropic";
-  private client = new Anthropic();
+  private client: Anthropic;
+
+  constructor(opts?: { apiKey?: string }) {
+    this.client = new Anthropic({ apiKey: opts?.apiKey });
+  }
 
   async listModels(): Promise<ModelInfo[]> {
     return [{ id: MODEL_ID, local: false }];

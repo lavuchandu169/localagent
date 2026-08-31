@@ -28,6 +28,7 @@ of what isn't built yet.
 - [Desktop app](#desktop-app)
   - [Download the beta](#download-the-beta)
   - [Google sign-in and cloud backup](#google-sign-in-and-cloud-backup)
+  - [Using Claude (Anthropic API)](#using-claude-anthropic-api)
   - [Running inside a sandboxed agent CLI](#running-inside-a-sandboxed-agent-cli)
 - [Privacy](#privacy)
 - [Testing](#testing)
@@ -278,6 +279,22 @@ is shared with anyone else's):
 "Sign in with Apple" is a disabled stub — it needs a paid Apple Developer
 account and a registered web domain, neither of which exists for this
 project yet.
+
+### Using Claude (Anthropic API)
+
+Advanced → Claude API sends file contents and task context to Anthropic
+over the network — needs an API key from
+[console.anthropic.com](https://console.anthropic.com/settings/keys),
+pay-as-you-go. This is a separate product from a claude.ai Pro/Max
+subscription: Anthropic's terms reserve that subscription's sign-in for
+Claude Code and claude.ai itself, so it can't be used from this (or any
+other third-party) app — an API key is the only supported way in.
+
+Set `ANTHROPIC_API_KEY` in your environment (or a `.env` file, from
+source), or add the key in the app's Settings panel (gear icon) — same
+env-var-wins-over-saved-setting precedence as Google's credentials.
+Leaving both unset falls back to the Anthropic SDK/CLI's own handling
+(`ANTHROPIC_AUTH_TOKEN`, an `ant auth login` profile), unchanged.
 
 ### Running inside a sandboxed agent CLI
 

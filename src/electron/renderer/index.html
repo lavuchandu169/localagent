@@ -86,6 +86,17 @@
           <p>Downloaded models — delete one to free up disk space; it re-downloads automatically the next time you pick it.</p>
           <ul id="downloaded-models-list"></ul>
           <div id="downloaded-models-empty" class="hint-text">No models downloaded yet.</div>
+
+          <hr />
+          <p>Anthropic API key — to use Claude (Advanced → Claude API), from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. This is a separate, pay-as-you-go API key — not your claude.ai Pro/Max subscription, which can't be used from other apps. Saved locally, sent only to Anthropic.</p>
+          <div id="anthropic-env-override" class="hint-text" hidden>An environment variable (ANTHROPIC_API_KEY) is currently active and overrides this saved value.</div>
+          <label>
+            API Key
+            <input id="anthropic-api-key" type="password" placeholder="" />
+          </label>
+          <div id="anthropic-settings-error" class="error-text"></div>
+          <div id="anthropic-settings-saved" class="hint-text" hidden>Saved.</div>
+          <button id="anthropic-settings-save">Save</button>
         </div>
 
         <section id="setup">
@@ -124,7 +135,7 @@
               </label>
             </div>
             <div id="anthropic-fields" class="row" hidden>
-              <span class="hint-text">Sends file contents and task context to Anthropic over the network. Needs <code>ANTHROPIC_API_KEY</code> set in your environment (or <code>ant auth login</code>) — no key is entered here.</span>
+              <span class="hint-text">Sends file contents and task context to Anthropic over the network. Needs an API key — set <code>ANTHROPIC_API_KEY</code> in your environment, or add one in Settings (gear icon).</span>
             </div>
           </details>
 
