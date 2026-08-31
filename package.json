@@ -35,7 +35,6 @@
       "!dist/test/**",
       "!dist/demo.js",
       "!**/node_modules/@node-llama-cpp/*-cuda*/**",
-      "!**/node_modules/@node-llama-cpp/*-vulkan/**",
       "!**/node_modules/@node-llama-cpp/win-arm64/**"
     ],
     "asarUnpack": [
