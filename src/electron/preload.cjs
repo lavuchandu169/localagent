@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld("agent", {
   cancelDownload: () => ipcRenderer.invoke("agent:cancel-download"),
   getHardwareInfo: () => ipcRenderer.invoke("agent:hardware-info"),
   getDiagnostics: () => ipcRenderer.invoke("agent:diagnostics"),
+  logRendererError: (entry) => ipcRenderer.invoke("agent:log-renderer-error", entry),
+  openErrorLog: () => ipcRenderer.invoke("agent:open-error-log"),
   onEvent: (callback) => {
     const listener = (_event, sessionId, agentEvent) => callback(sessionId, agentEvent);
     ipcRenderer.on("agent:event", listener);

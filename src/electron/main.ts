@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from "electron";
 // electron-updater is CommonJS; Node's ESM/CJS interop fails to statically
 // detect `autoUpdater` as a named export from it (confirmed live — a plain
 // `import { autoUpdater } from "electron-updater"` throws
@@ -10,6 +10,7 @@ import electronUpdaterPkg from "electron-updater";
 const { autoUpdater } = electronUpdaterPkg;
 import path from "node:path";
 import os from "node:os";
+import fsPromises from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
@@ -24,8 +25,50 @@ import { listSessions, searchSessions, loadSessionRecord, claimUnownedSessions }
 import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 import { loadEnvFile } from "./loadEnvFile.js";
 import { isSecureStorageAvailable, electronStorageCrypto } from "./secureStorage.js";
+import { appendErrorLog } from "./errorLog.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// app.getPath("userData") depends on the app's name having been resolved
+// yet — normally read from package.json automatically, but NOT reliably
+// resolved this early (before app.whenReady()): calling getPath this
+// early was confirmed live to return Electron's own generic userData
+// path ("Application Support/Electron") instead of this app's
+// ("Application Support/localagent"), silently writing the error log
+// somewhere no other part of this app's storage ever goes. Every other
+// userData-based path in this file is computed safely inside
+// whenReady(), where that resolution has already happened by then; this
+// one can't wait that long (it needs to exist before whenReady() so
+// startup-time crashes are still caught), so the name is set explicitly
+// instead of relying on the timing to work out.
+app.setName("localagent");
+
+// Local-only crash/error capture — never uploaded anywhere, no external
+// service or account needed (see errorLog.ts's own doc comment for why
+// this doesn't need to be opt-in the way a remote crash reporter would).
+// crashReporter covers native crashes (segfaults, OOM); it does NOT catch
+// plain JS exceptions, which is why the process-level handlers below
+// exist too — between the two, both failure classes actually get logged.
+// Registered as early as possible, before anything else in this file can
+// throw.
+crashReporter.start({ uploadToServer: false, compress: true });
+const errorLogPath = path.join(app.getPath("userData"), "error.log");
+
+process.on("uncaughtException", (err) => {
+  // Preserve Node's default "the process exits" behavior for this one —
+  // registering a listener suppresses that automatically, so it's done
+  // explicitly here, but only AFTER the write actually completes (app
+  // state after an uncaught exception can't be trusted enough to keep
+  // running, but it also can't be trusted enough to skip logging first).
+  appendErrorLog(errorLogPath, { source: "main", kind: "uncaughtException", message: err.message, stack: err.stack }).finally(() =>
+    app.exit(1)
+  );
+});
+
+process.on("unhandledRejection", (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  void appendErrorLog(errorLogPath, { source: "main", kind: "unhandledRejection", message: err.message, stack: err.stack });
+});
 
 // Picks up GOOGLE_OAUTH_CLIENT_ID/SECRET (and anything else) from a local
 // .env in the project root, if present — so `npm run electron` alone works
@@ -206,6 +249,25 @@ app.whenReady().then(() => {
     osRelease: os.release(),
     arch: process.arch,
   }));
+
+  // The renderer-side half of local-only error capture — window.onerror/
+  // unhandledrejection in renderer.ts forward here, since the renderer
+  // has no filesystem access of its own (contextIsolation).
+  ipcMain.handle("agent:log-renderer-error", (_event, entry: { kind: string; message: string; stack?: string }) =>
+    appendErrorLog(errorLogPath, { source: "renderer", ...entry })
+  );
+
+  // Reveals the log file if anything's actually been written to it yet,
+  // otherwise just opens the folder it would appear in — either way gives
+  // the user something to look at rather than a silent no-op.
+  ipcMain.handle("agent:open-error-log", async () => {
+    const exists = await fsPromises
+      .access(errorLogPath)
+      .then(() => true)
+      .catch(() => false);
+    if (exists) shell.showItemInFolder(errorLogPath);
+    else shell.openPath(path.dirname(errorLogPath));
+  });
 
   ipcMain.handle("agent:pick-workspace", async () => {
     const result = await dialog.showOpenDialog(win, { properties: ["openDirectory"] });

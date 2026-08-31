@@ -192,7 +192,7 @@ searchable and resumable with full context.
 
 ### Download the beta
 
-Prebuilt installers are attached to each [GitHub Release](https://github.com/lavuchandu169/localagent/releases) — no `npm install`/`npm run build` needed.
+Prebuilt installers are attached to each [GitHub Release](https://github.com/lavuchandu169/localagent/releases) — no `npm install`/`npm run build` needed. See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each one.
 
 These are unsigned builds (no Apple Developer or Windows code-signing
 certificate behind them yet), so your OS will show a one-time warning
@@ -339,6 +339,12 @@ configured.
 - **Nothing is shared between users of this app.** Each Google account's
   backed-up sessions live only in that account's own Drive; local session
   history is filtered to whichever account is currently signed in.
+- **Crash and error logs** are written locally
+  (`app.getPath('userData')/error.log`) and never uploaded anywhere — no
+  external crash-reporting service, no account, no telemetry. Electron's
+  native crash reports (`crashReporter`) are configured the same way
+  (`uploadToServer: false`). Open the log via About → Open error log if
+  you ever need it for a bug report.
 
 This is a local-first prototype, not a hosted product — the source above
 is the actual and complete description of what it does with your data.

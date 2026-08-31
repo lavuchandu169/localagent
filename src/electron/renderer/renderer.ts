@@ -71,6 +71,8 @@ interface AgentBridge {
   cancelDownload(): Promise<void>;
   getHardwareInfo(): Promise<HardwareInfo>;
   getDiagnostics(): Promise<{ appVersion: string; platform: string; osRelease: string; arch: string }>;
+  logRendererError(entry: { kind: string; message: string; stack?: string }): Promise<void>;
+  openErrorLog(): Promise<void>;
   googleSignIn(): Promise<SignInResult>;
   signOut(): Promise<void>;
   getAuthStatus(): Promise<AuthStatus>;
@@ -124,6 +126,21 @@ async function withBusyLabel<T>(button: HTMLButtonElement, busyText: string, fn:
   }
 }
 
+// Local-only error capture, renderer half — see errorLog.ts's doc comment
+// for why this is on by default rather than opt-in. crashReporter (main
+// process) only catches native crashes; these two catch plain JS errors,
+// which is the more likely failure mode in a renderer this size. Registered
+// early, before anything else below can throw.
+window.addEventListener("error", (event) => {
+  void window.agent.logRendererError({ kind: "window.onerror", message: event.message, stack: event.error?.stack });
+});
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason;
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const stack = reason instanceof Error ? reason.stack : undefined;
+  void window.agent.logRendererError({ kind: "unhandledrejection", message, stack });
+});
+
 const workspacePathEl = byId<HTMLSpanElement>("workspace-path");
 const chooseWorkspaceBtn = byId<HTMLButtonElement>("choose-workspace");
 const externalFields = byId<HTMLDivElement>("external-fields");
@@ -149,6 +166,7 @@ const aboutToggle = byId<HTMLButtonElement>("about-toggle");
 const aboutPanel = byId<HTMLDivElement>("about-panel");
 const aboutClose = byId<HTMLButtonElement>("about-close");
 const reportIssueLink = byId<HTMLAnchorElement>("report-issue-link");
+const openErrorLogBtn = byId<HTMLButtonElement>("open-error-log");
 const onboardingOverlay = byId<HTMLDivElement>("onboarding-overlay");
 const onboardingDismiss = byId<HTMLButtonElement>("onboarding-dismiss");
 const aboutWorkspace = byId<HTMLSpanElement>("about-workspace");
@@ -351,6 +369,10 @@ aboutToggle.addEventListener("click", () => {
   }
 });
 aboutClose.addEventListener("click", closeAboutPanel);
+
+openErrorLogBtn.addEventListener("click", () => {
+  void window.agent.openErrorLog();
+});
 
 // Tracks whether the user actually typed into the secret field this time
 // it was open — saving must NOT overwrite a previously-saved secret just
