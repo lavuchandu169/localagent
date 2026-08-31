@@ -572,24 +572,28 @@ function providerConfigsEqual(a: ProviderConfig, b: ProviderConfig): boolean {
 }
 
 /**
- * Applies edited settings to the currently active session. Three cases:
+ * Applies edited settings to the currently active session. Two cases:
  *
  * 1. Workspace and/or mode only, provider/model unchanged: updated in
  *    place via agent:update-session-settings — the provider is never
  *    touched, so this is instant and carries zero risk.
- * 2. Provider/model changed, but NEITHER the old nor the new config is
- *    "embedded": safe to tear down and rebuild — reads the live session
- *    (not loadSession's disk record; a session with no completed task
- *    yet has never been persisted, so that would silently no-op here),
- *    cancels it, then re-runs beginSession() as a resume, exactly like
- *    resumeSession() does when reopening a session from the sidebar.
- * 3. Provider/model changed AND either side is "embedded": refused
- *    outright. Live testing found that starting a second embedded model
- *    load shortly after disposing the first crashes the whole Electron
- *    process — an uncaught native exception inside llama-addon.node, not
- *    something a try/catch in this file could ever stop. There's no safe
- *    way to do this in place today, so this says no clearly instead of
- *    risking it.
+ * 2. Provider/model changed (including switching between two embedded
+ *    models): reads the live session (not loadSession's disk record — a
+ *    session with no completed task yet has never been persisted, so
+ *    that would silently no-op here), cancels it, then re-runs
+ *    beginSession() as a resume, exactly like resumeSession() does when
+ *    reopening a session from the sidebar.
+ *
+ * Switching embedded models here used to be refused outright: starting a
+ * second embedded model load shortly after disposing the first crashed
+ * the whole Electron process with an uncaught native exception inside
+ * llama-addon.node. Root cause was EmbeddedLlamaProvider.dispose() never
+ * disposing the Llama instance itself (a distinct native backend object
+ * getLlama() returns, separate from and outliving the model/context built
+ * on it) — only the model and context were freed, leaking the backend
+ * every time. Fixed in embeddedLlama.ts; verified with the exact
+ * cancel-then-resume-under-the-same-id sequence this function performs,
+ * alternating models, no crash.
  */
 async function applySessionEdits(): Promise<void> {
   if (!sessionId || !activeProviderConfig) return;
@@ -617,15 +621,6 @@ async function applySessionEdits(): Promise<void> {
     return;
   }
 
-  const eitherEmbedded = activeProviderConfig.kind === "embedded" || newProvider.kind === "embedded";
-  if (eitherEmbedded) {
-    startError.textContent = "Changing the model isn't supported while a session is active yet — start a new session to use a different model.";
-    return;
-  }
-
-  // Neither the old nor the new provider touches node-llama-cpp's native
-  // addon (both are lightweight HTTP-based providers) — safe to tear down
-  // and rebuild.
   try {
     const snapshot = await window.agent.getLiveSession(idBeingEdited);
     if (!snapshot) {

@@ -165,6 +165,17 @@ export class EmbeddedLlamaProvider implements ModelProvider {
   private chatPromise: Promise<import("node-llama-cpp").LlamaChat> | undefined;
   private model: import("node-llama-cpp").LlamaModel | undefined;
   private context: import("node-llama-cpp").LlamaContext | undefined;
+  /**
+   * getLlama() returns a distinct native backend instance every call — its
+   * own GPU device handle, thread pool, and addon-level state, separate
+   * from (and outliving) whatever model/context are loaded on top of it.
+   * It has its own dispose(), and previously nothing ever called it: only
+   * the model and context were freed, leaking this instance every time a
+   * provider was torn down. Starting a second provider while a leaked
+   * Llama instance from a prior one was still alive crashed the whole
+   * process with an uncaught native exception (see dispose() below).
+   */
+  private llama: import("node-llama-cpp").Llama | undefined;
 
   constructor(
     private opts: {
@@ -188,6 +199,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
       signal: this.opts.signal,
     });
     const llama = await getLlama();
+    this.llama = llama;
     const model = await llama.loadModel({ modelPath });
     this.model = model;
     // contextSize defaults to "auto", which on a model with a large trained
@@ -203,10 +215,18 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     return new LlamaChat({ contextSequence: sequence });
   }
 
-  /** Frees the loaded model weights and KV cache/context. Safe to call even if loadChat() never ran or already failed. */
+  /**
+   * Frees the loaded model weights and KV cache/context, THEN the native
+   * backend instance itself (see the `llama` field's comment — skipping
+   * this last step is what let two live backend instances collide and
+   * crash the process). Order matters: the context and model must be torn
+   * down first, since they reference the backend, not the other way
+   * around. Safe to call even if loadChat() never ran or already failed.
+   */
   async dispose(): Promise<void> {
     if (this.context && !this.context.disposed) await this.context.dispose();
     if (this.model && !this.model.disposed) await this.model.dispose();
+    if (this.llama && !this.llama.disposed) await this.llama.dispose();
   }
 
   async listModels(): Promise<ModelInfo[]> {
