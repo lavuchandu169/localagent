@@ -124,14 +124,13 @@ async function withBusyLabel<T>(button: HTMLButtonElement, busyText: string, fn:
 
 const workspacePathEl = byId<HTMLSpanElement>("workspace-path");
 const chooseWorkspaceBtn = byId<HTMLButtonElement>("choose-workspace");
-const advancedDisclosure = byId<HTMLDetailsElement>("advanced-disclosure");
-const advancedProviderExternal = byId<HTMLInputElement>("advanced-provider-external");
-const advancedProviderAnthropic = byId<HTMLInputElement>("advanced-provider-anthropic");
 const externalFields = byId<HTMLDivElement>("external-fields");
 const anthropicFields = byId<HTMLDivElement>("anthropic-fields");
 const baseUrlInput = byId<HTMLInputElement>("base-url");
 const externalModelInput = byId<HTMLInputElement>("external-model");
-const embeddedSizeSelect = byId<HTMLSelectElement>("embedded-size");
+const modelSelect = byId<HTMLSelectElement>("model-select");
+const ANTHROPIC_MODEL_VALUE = "claude-sonnet-5";
+const CUSTOM_SERVER_VALUE = "custom-server";
 const modeSelect = byId<HTMLSelectElement>("mode");
 const modeDescription = byId<HTMLSpanElement>("mode-description");
 const startSessionBtn = byId<HTMLButtonElement>("start-session");
@@ -189,14 +188,17 @@ const toolCards = new Map<string, HTMLElement>();
 /** The workspace/provider/mode controls that lock once a session starts — shared by beginSession's success path, resetToSetup, and the edit-settings toggle so the same list isn't repeated three times. */
 function setSetupControlsDisabled(disabled: boolean): void {
   chooseWorkspaceBtn.disabled = disabled;
-  embeddedSizeSelect.disabled = disabled;
+  modelSelect.disabled = disabled;
   modeSelect.disabled = disabled;
   baseUrlInput.disabled = disabled;
   externalModelInput.disabled = disabled;
-  advancedProviderExternal.disabled = disabled;
-  advancedProviderAnthropic.disabled = disabled;
 }
 
+// One dropdown, one source of truth for "which model" — previously a
+// separate "Advanced" disclosure held radio buttons that silently
+// overrode this select's own visible value once expanded. Every choice
+// (embedded, Claude, or a custom server) now lives here as a single flat
+// list of options, grouped by kind.
 const EMBEDDED_CATEGORY_LABELS: Record<ModelCategory, string> = { coding: "Coding", chat: "Chat" };
 for (const category of Object.keys(EMBEDDED_CATEGORY_LABELS) as ModelCategory[]) {
   const group = document.createElement("optgroup");
@@ -210,8 +212,24 @@ for (const category of Object.keys(EMBEDDED_CATEGORY_LABELS) as ModelCategory[])
     if (id === DEFAULT_EMBEDDED_MODEL) option.selected = true;
     group.appendChild(option);
   }
-  embeddedSizeSelect.appendChild(group);
+  modelSelect.appendChild(group);
 }
+
+const cloudGroup = document.createElement("optgroup");
+cloudGroup.label = "Cloud";
+const anthropicOption = document.createElement("option");
+anthropicOption.value = ANTHROPIC_MODEL_VALUE;
+anthropicOption.textContent = "Claude Sonnet 5 (Anthropic API)";
+cloudGroup.appendChild(anthropicOption);
+modelSelect.appendChild(cloudGroup);
+
+const customGroup = document.createElement("optgroup");
+customGroup.label = "Custom";
+const customOption = document.createElement("option");
+customOption.value = CUSTOM_SERVER_VALUE;
+customOption.textContent = "Custom server (Ollama, LM Studio, vLLM)…";
+customGroup.appendChild(customOption);
+modelSelect.appendChild(customGroup);
 
 for (const mode of Object.keys(MODE_LABELS) as PermissionMode[]) {
   const option = document.createElement("option");
@@ -226,23 +244,24 @@ function updateModeDescription() {
 modeSelect.addEventListener("change", updateModeDescription);
 updateModeDescription();
 
-function updateAdvancedProviderFields() {
-  const useAnthropic = advancedProviderAnthropic.checked;
-  externalFields.hidden = useAnthropic;
-  anthropicFields.hidden = !useAnthropic;
+/** Shows/hides the two fields that only apply to one specific model-select value each — everything else needs neither. */
+function updateModelDependentFields() {
+  externalFields.hidden = modelSelect.value !== CUSTOM_SERVER_VALUE;
+  anthropicFields.hidden = modelSelect.value !== ANTHROPIC_MODEL_VALUE;
 }
-advancedProviderExternal.addEventListener("change", updateAdvancedProviderFields);
-advancedProviderAnthropic.addEventListener("change", updateAdvancedProviderFields);
-updateAdvancedProviderFields();
+modelSelect.addEventListener("change", updateModelDependentFields);
+updateModelDependentFields();
 
 /**
- * Rebuilds every model option's label from scratch (base name + size note,
- * then "recommended"/"downloaded" suffixes) rather than appending onto
- * whatever text is already there — so this is safe to call again after a
- * model is deleted or a download finishes, not just once at startup.
+ * Rebuilds every EMBEDDED model option's label from scratch (base name +
+ * size note, then "recommended"/"downloaded" suffixes) rather than
+ * appending onto whatever text is already there — so this is safe to call
+ * again after a model is deleted or a download finishes, not just once at
+ * startup. The Cloud/Custom options have no such state, so they're
+ * skipped (EMBEDDED_MODELS has no entry for their values).
  */
 function refreshEmbeddedModelLabels(cached: Record<string, boolean>): void {
-  for (const option of Array.from(embeddedSizeSelect.options)) {
+  for (const option of Array.from(modelSelect.options)) {
     const info = EMBEDDED_MODELS[option.value as EmbeddedModelId];
     if (!info) continue;
     const suffixes: string[] = [];
@@ -520,15 +539,13 @@ window.agent.onDownloadProgress((status) => {
   downloadLabel.textContent = `Downloading model: ${formatBytes(status.downloadedSize)} / ${formatBytes(status.totalSize)}${speedText}`;
 });
 
-/** Reads the provider config the form controls currently describe — shared by beginSession and applySessionEdits, which needs it BEFORE deciding whether beginSession's tear-down-and-rebuild path is even safe to take. */
+/** Reads the provider config the Model select (plus its dependent fields) currently describes — shared by beginSession and applySessionEdits, which needs it BEFORE deciding whether beginSession's tear-down-and-rebuild path is even safe to take. */
 function deriveProviderConfigFromForm(): ProviderConfig {
-  const useAnthropic = advancedDisclosure.open && advancedProviderAnthropic.checked;
-  const useExternal = advancedDisclosure.open && advancedProviderExternal.checked && baseUrlInput.value.trim().length > 0;
-  return useAnthropic
-    ? { kind: "anthropic" }
-    : useExternal
-      ? { kind: "openai-compatible", baseUrl: baseUrlInput.value.trim(), model: externalModelInput.value.trim() }
-      : { kind: "embedded", size: embeddedSizeSelect.value };
+  if (modelSelect.value === ANTHROPIC_MODEL_VALUE) return { kind: "anthropic" };
+  if (modelSelect.value === CUSTOM_SERVER_VALUE) {
+    return { kind: "openai-compatible", baseUrl: baseUrlInput.value.trim(), model: externalModelInput.value.trim() };
+  }
+  return { kind: "embedded", size: modelSelect.value };
 }
 
 /** The provider config the currently-active session actually started with — set whenever beginSession succeeds, compared against in applySessionEdits to decide whether a settings edit is safe to apply in place. */

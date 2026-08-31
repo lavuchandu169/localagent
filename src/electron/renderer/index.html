@@ -105,39 +105,26 @@
             <span id="workspace-path">No workspace selected — optional, you can just chat</span>
           </div>
 
-          <div id="embedded-fields" class="row">
+          <div class="row">
             <label>
               Model
-              <select id="embedded-size"></select>
+              <select id="model-select"></select>
             </label>
           </div>
 
-          <details id="advanced-disclosure">
-            <summary>Advanced: use a different provider</summary>
-            <div class="row">
-              <label class="radio-label">
-                <input type="radio" name="advanced-provider" id="advanced-provider-external" value="external" checked />
-                External server
-              </label>
-              <label class="radio-label">
-                <input type="radio" name="advanced-provider" id="advanced-provider-anthropic" value="anthropic" />
-                Claude API (Sonnet 5)
-              </label>
-            </div>
-            <div id="external-fields" class="row">
-              <label>
-                Base URL
-                <input id="base-url" type="text" placeholder="http://localhost:11434/v1" />
-              </label>
-              <label>
-                Model
-                <input id="external-model" type="text" placeholder="qwen2.5-coder:latest" />
-              </label>
-            </div>
-            <div id="anthropic-fields" class="row" hidden>
-              <span class="hint-text">Sends file contents and task context to Anthropic over the network. Needs an API key — set <code>ANTHROPIC_API_KEY</code> in your environment, or add one in Settings (gear icon).</span>
-            </div>
-          </details>
+          <div id="external-fields" class="row" hidden>
+            <label>
+              Base URL
+              <input id="base-url" type="text" placeholder="http://localhost:11434/v1" />
+            </label>
+            <label>
+              Model
+              <input id="external-model" type="text" placeholder="qwen2.5-coder:latest" />
+            </label>
+          </div>
+          <div id="anthropic-fields" class="row" hidden>
+            <span class="hint-text">Sends file contents and task context to Anthropic over the network. Needs an API key — set <code>ANTHROPIC_API_KEY</code> in your environment, or add one in Settings (gear icon).</span>
+          </div>
 
           <div class="row">
             <label>
