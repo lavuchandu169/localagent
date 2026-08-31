@@ -81,6 +81,11 @@
           <div id="settings-saved" class="hint-text" hidden>Saved.</div>
           <button id="settings-save">Save</button>
           <button id="settings-close">Close</button>
+
+          <hr />
+          <p>Downloaded models — delete one to free up disk space; it re-downloads automatically the next time you pick it.</p>
+          <ul id="downloaded-models-list"></ul>
+          <div id="downloaded-models-empty" class="hint-text">No models downloaded yet.</div>
         </div>
 
         <section id="setup">
@@ -141,11 +146,15 @@
               <div id="download-bar-fill"></div>
             </div>
             <span id="download-label"></span>
+            <button id="cancel-download" type="button">Cancel</button>
           </div>
         </section>
 
         <section id="run">
-          <div id="active-model-badge" hidden></div>
+          <div class="row">
+            <div id="active-model-badge" hidden></div>
+            <button id="edit-settings" type="button" hidden>Edit settings…</button>
+          </div>
           <div class="row">
             <textarea id="task-input" placeholder="Describe the task…" disabled></textarea>
             <button id="run-task" class="primary" disabled>Run</button>

@@ -63,6 +63,21 @@ export class AgentSession {
     return [...this.messages];
   }
 
+  /**
+   * Updates the workspace tools resolve paths against, in place — no
+   * provider/model involved, so this is safe to call on a live session
+   * between tasks (never call it mid-run() — the effect on a tool call
+   * already in flight is undefined).
+   */
+  setWorkspaceRoot(workspaceRoot: string): void {
+    this.opts.workspaceRoot = workspaceRoot;
+  }
+
+  /** Updates the permission policy in place — same in-place, between-tasks-only contract as setWorkspaceRoot. */
+  setPermissionMode(mode: PermissionMode): void {
+    this.permissions = new PermissionEngine(mode);
+  }
+
   cancel() {
     this.cancelled = true;
   }

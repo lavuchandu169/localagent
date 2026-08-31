@@ -167,7 +167,12 @@ export class EmbeddedLlamaProvider implements ModelProvider {
   private context: import("node-llama-cpp").LlamaContext | undefined;
 
   constructor(
-    private opts: { size: EmbeddedModelId; onDownloadProgress?: (status: { totalSize: number; downloadedSize: number }) => void }
+    private opts: {
+      size: EmbeddedModelId;
+      onDownloadProgress?: (status: { totalSize: number; downloadedSize: number }) => void;
+      /** Aborts an in-progress download — resolveModelFile rejects with an AbortError-shaped error when it fires. */
+      signal?: AbortSignal;
+    }
   ) {}
 
   private getChat(): Promise<import("node-llama-cpp").LlamaChat> {
@@ -180,6 +185,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     const modelPath = await resolveModelFile(EMBEDDED_MODELS[this.opts.size].uri, {
       cli: false,
       onProgress: this.opts.onDownloadProgress,
+      signal: this.opts.signal,
     });
     const llama = await getLlama();
     const model = await llama.loadModel({ modelPath });

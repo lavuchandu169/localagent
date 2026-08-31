@@ -1,9 +1,11 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
-import { checkCachedModels } from "./modelCache.js";
+import type { PermissionMode } from "../types.js";
+import { checkCachedModels, deleteModel } from "./modelCache.js";
+import { isEmbeddedModelId } from "../models.js";
 import { detectHardware, recommendModel } from "./hardwareInfo.js";
 import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken, getStoredEmail } from "./googleAuth.js";
 import { loadGoogleSettings, saveGoogleSettings, resolveGoogleCredentials } from "./googleSettings.js";
@@ -87,12 +89,43 @@ app.whenReady().then(() => {
     getOwnerEmail: () => getStoredEmail(authFilePath, storageCrypto),
   });
 
-  ipcMain.handle("agent:start-session", (event, config: SessionConfig, resume?: ResumePayload) =>
-    startSession(registry, config, {
-      onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
-      resume,
-    })
-  );
+  // Tracks the AbortController for whichever agent:start-session call is
+  // currently in flight, so agent:cancel-download has something to abort.
+  // A single slot, not a map keyed by session id, is deliberate: the
+  // renderer's own Start button is disabled while starting, so only one
+  // start attempt is ever actually in flight at a time — the download this
+  // cancels is always "the one currently starting up," not any particular
+  // already-running session's.
+  let currentStartAbortController: AbortController | null = null;
+
+  ipcMain.handle("agent:start-session", async (event, config: SessionConfig, resume?: ResumePayload) => {
+    const controller = new AbortController();
+    currentStartAbortController = controller;
+    try {
+      return await startSession(registry, config, {
+        onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
+        signal: controller.signal,
+        resume,
+      });
+    } catch (err) {
+      // EmbeddedLlamaProvider.healthCheck() catches every error internally
+      // (including an aborted download) and just returns false, so the
+      // original AbortError never reaches here — startSession only ever
+      // throws its own generic "health check failed" message regardless of
+      // cause. The controller itself is the only place left that still
+      // knows whether THIS failure was actually a deliberate cancel, so
+      // that's checked here instead of trying to sniff the (already-lost)
+      // error text on the renderer side.
+      if (controller.signal.aborted) throw new Error("Download cancelled.");
+      throw err;
+    } finally {
+      if (currentStartAbortController === controller) currentStartAbortController = null;
+    }
+  });
+
+  ipcMain.handle("agent:cancel-download", () => {
+    currentStartAbortController?.abort();
+  });
 
   ipcMain.handle("agent:run-task", (event, sessionId: string, task: string) =>
     runTask(registry, sessionId, task, (agentEvent) => {
@@ -107,6 +140,11 @@ app.whenReady().then(() => {
   ipcMain.handle("agent:cancel-session", (_event, sessionId: string) => cancelSession(registry, sessionId));
 
   ipcMain.handle("agent:list-cached-models", () => checkCachedModels());
+
+  ipcMain.handle("agent:delete-cached-model", (_event, id: string) => {
+    if (!isEmbeddedModelId(id)) return false;
+    return deleteModel(id);
+  });
 
   ipcMain.handle("agent:hardware-info", async () => {
     const info = await detectHardware();
@@ -195,6 +233,10 @@ app.whenReady().then(() => {
       return null;
     }
   });
+  ipcMain.handle("agent:get-live-session", (_event, id: string) => getLiveSessionSnapshot(registry, id));
+  ipcMain.handle("agent:update-session-settings", (_event, id: string, updates: { workspaceRoot?: string; mode?: PermissionMode }) =>
+    updateLiveSessionSettings(registry, id, updates)
+  );
   ipcMain.handle("agent:delete-session", async (_event, id: string) => {
     try {
       await removeSession(registry, id);

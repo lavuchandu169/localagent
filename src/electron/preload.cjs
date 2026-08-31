@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld("agent", {
   cancelSession: (sessionId) => ipcRenderer.invoke("agent:cancel-session", sessionId),
   pickWorkspace: () => ipcRenderer.invoke("agent:pick-workspace"),
   listCachedModels: () => ipcRenderer.invoke("agent:list-cached-models"),
+  deleteCachedModel: (id) => ipcRenderer.invoke("agent:delete-cached-model", id),
+  cancelDownload: () => ipcRenderer.invoke("agent:cancel-download"),
   getHardwareInfo: () => ipcRenderer.invoke("agent:hardware-info"),
   onEvent: (callback) => {
     const listener = (_event, sessionId, agentEvent) => callback(sessionId, agentEvent);
@@ -30,6 +32,8 @@ contextBridge.exposeInMainWorld("agent", {
   listSessions: () => ipcRenderer.invoke("agent:list-sessions"),
   searchSessions: (query) => ipcRenderer.invoke("agent:search-sessions", query),
   loadSession: (id) => ipcRenderer.invoke("agent:load-session", id),
+  getLiveSession: (id) => ipcRenderer.invoke("agent:get-live-session", id),
+  updateSessionSettings: (id, updates) => ipcRenderer.invoke("agent:update-session-settings", id, updates),
   deleteSession: (id) => ipcRenderer.invoke("agent:delete-session", id),
   onSessionsChanged: (callback) => {
     const listener = () => callback();

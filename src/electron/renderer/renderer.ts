@@ -49,6 +49,15 @@ interface ResumePayload {
   ownerEmail: string | null;
 }
 
+/** The live, in-memory shape of an active session — see getLiveSessionSnapshot in sessionRegistry.ts. Unlike SessionRecord, this is available even for a session that hasn't run a task (and so hasn't hit disk) yet. */
+interface LiveSessionSnapshot {
+  messages: ChatMessage[];
+  events: AgentEvent[];
+  title: string;
+  createdAt: number;
+  ownerEmail: string | null;
+}
+
 interface AgentBridge {
   startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string }>;
   runTask(sessionId: string, task: string): Promise<void>;
@@ -58,6 +67,8 @@ interface AgentBridge {
   onEvent(callback: (sessionId: string, event: AgentEvent) => void): () => void;
   onDownloadProgress(callback: (status: DownloadProgress) => void): () => void;
   listCachedModels(): Promise<Record<string, boolean>>;
+  deleteCachedModel(id: string): Promise<boolean>;
+  cancelDownload(): Promise<void>;
   getHardwareInfo(): Promise<HardwareInfo>;
   googleSignIn(): Promise<SignInResult>;
   signOut(): Promise<void>;
@@ -65,6 +76,8 @@ interface AgentBridge {
   listSessions(): Promise<SessionIndexEntry[]>;
   searchSessions(query: string): Promise<SessionIndexEntry[]>;
   loadSession(id: string): Promise<SessionRecord | null>;
+  getLiveSession(id: string): Promise<LiveSessionSnapshot | null>;
+  updateSessionSettings(id: string, updates: { workspaceRoot?: string; mode?: PermissionMode }): Promise<boolean>;
   deleteSession(id: string): Promise<void>;
   onSessionsChanged(callback: () => void): () => void;
   onCloudSyncScopeWarning(callback: () => void): () => void;
@@ -149,7 +162,11 @@ const authError = byId<HTMLDivElement>("auth-error");
 const downloadProgressRow = byId<HTMLDivElement>("download-progress");
 const downloadBarFill = byId<HTMLDivElement>("download-bar-fill");
 const downloadLabel = byId<HTMLSpanElement>("download-label");
+const cancelDownloadBtn = byId<HTMLButtonElement>("cancel-download");
 const activeModelBadge = byId<HTMLDivElement>("active-model-badge");
+const editSettingsBtn = byId<HTMLButtonElement>("edit-settings");
+const downloadedModelsList = byId<HTMLUListElement>("downloaded-models-list");
+const downloadedModelsEmpty = byId<HTMLDivElement>("downloaded-models-empty");
 const sidebarSessionList = byId<HTMLDivElement>("session-list");
 const sessionListEmpty = byId<HTMLDivElement>("session-list-empty");
 const sessionSearchInput = byId<HTMLInputElement>("session-search");
@@ -158,7 +175,20 @@ const newSessionBtn = byId<HTMLButtonElement>("new-session-btn");
 let workspaceRoot: string | null = null;
 let sessionId: string | null = null;
 let hardwareInfo: HardwareInfo | null = null;
+/** True while the setup controls are unlocked for editing an already-active session's workspace/model/mode — see editSettingsBtn/applySessionEdits. */
+let editingSession = false;
 const toolCards = new Map<string, HTMLElement>();
+
+/** The workspace/provider/mode controls that lock once a session starts — shared by beginSession's success path, resetToSetup, and the edit-settings toggle so the same list isn't repeated three times. */
+function setSetupControlsDisabled(disabled: boolean): void {
+  chooseWorkspaceBtn.disabled = disabled;
+  embeddedSizeSelect.disabled = disabled;
+  modeSelect.disabled = disabled;
+  baseUrlInput.disabled = disabled;
+  externalModelInput.disabled = disabled;
+  advancedProviderExternal.disabled = disabled;
+  advancedProviderAnthropic.disabled = disabled;
+}
 
 const EMBEDDED_CATEGORY_LABELS: Record<ModelCategory, string> = { coding: "Coding", chat: "Chat" };
 for (const category of Object.keys(EMBEDDED_CATEGORY_LABELS) as ModelCategory[]) {
@@ -198,17 +228,58 @@ advancedProviderExternal.addEventListener("change", updateAdvancedProviderFields
 advancedProviderAnthropic.addEventListener("change", updateAdvancedProviderFields);
 updateAdvancedProviderFields();
 
+/**
+ * Rebuilds every model option's label from scratch (base name + size note,
+ * then "recommended"/"downloaded" suffixes) rather than appending onto
+ * whatever text is already there — so this is safe to call again after a
+ * model is deleted or a download finishes, not just once at startup.
+ */
+function refreshEmbeddedModelLabels(cached: Record<string, boolean>): void {
+  for (const option of Array.from(embeddedSizeSelect.options)) {
+    const info = EMBEDDED_MODELS[option.value as EmbeddedModelId];
+    if (!info) continue;
+    const suffixes: string[] = [];
+    if (hardwareInfo && option.value === hardwareInfo.recommended) suffixes.push("recommended for this machine");
+    if (cached[option.value]) suffixes.push("downloaded");
+    option.textContent = suffixes.length > 0 ? `${info.name} — ${info.sizeNote} · ${suffixes.join(", ")}` : `${info.name} — ${info.sizeNote}`;
+  }
+}
+
+/** Populates the Settings panel's "Downloaded models" list — only models actually on disk, each with a Delete button. Re-fetches listCachedModels() fresh rather than trusting stale state, since this can be called after a delete or after a download completes elsewhere in the app. */
+async function refreshDownloadedModelsList(): Promise<void> {
+  const cached = await window.agent.listCachedModels();
+  refreshEmbeddedModelLabels(cached);
+
+  downloadedModelsList.innerHTML = "";
+  const cachedIds = (Object.keys(cached) as EmbeddedModelId[]).filter((id) => cached[id]);
+  downloadedModelsEmpty.hidden = cachedIds.length > 0;
+
+  for (const id of cachedIds) {
+    const info = EMBEDDED_MODELS[id];
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = `${info.name} — ${info.sizeNote}`;
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.addEventListener("click", () => {
+      void withBusyLabel(deleteBtn, "Deleting…", async () => {
+        await window.agent.deleteCachedModel(id);
+        await refreshDownloadedModelsList();
+      });
+    });
+    item.appendChild(label);
+    item.appendChild(deleteBtn);
+    downloadedModelsList.appendChild(item);
+  }
+}
+
 Promise.all([window.agent.listCachedModels(), window.agent.getHardwareInfo()]).then(([cached, hw]) => {
   hardwareInfo = hw;
   const ramGb = (hw.totalRamBytes / 1024 ** 3).toFixed(0);
   aboutHardware.textContent = hw.gpu ? `${ramGb}GB RAM · ${hw.gpu} GPU` : `${ramGb}GB RAM · CPU only`;
-  for (const option of Array.from(embeddedSizeSelect.options)) {
-    const suffixes: string[] = [];
-    if (option.value === hw.recommended) suffixes.push("recommended for this machine");
-    if (cached[option.value]) suffixes.push("downloaded");
-    if (suffixes.length > 0) option.textContent += ` · ${suffixes.join(", ")}`;
-    // Informational only — shows what fits the machine without changing the user's selection.
-  }
+  // Informational only — shows what fits the machine without changing the user's selection.
+  refreshEmbeddedModelLabels(cached);
 });
 
 aboutToggle.addEventListener("click", () => {
@@ -238,6 +309,7 @@ async function openSettingsPanel(): Promise<void> {
   settingsClientSecretInput.value = "";
   settingsClientSecretInput.placeholder = current.hasSecret ? "•••• saved" : "";
   settingsEnvOverrideNotice.hidden = !current.envOverride;
+  await refreshDownloadedModelsList();
 }
 
 settingsToggle.addEventListener("click", async () => {
@@ -406,16 +478,24 @@ window.agent.onDownloadProgress((status) => {
   downloadLabel.textContent = `Downloading model: ${formatBytes(status.downloadedSize)} / ${formatBytes(status.totalSize)}${speedText}`;
 });
 
-async function beginSession(resume?: ResumePayload): Promise<void> {
-  startError.textContent = "";
-
+/** Reads the provider config the form controls currently describe — shared by beginSession and applySessionEdits, which needs it BEFORE deciding whether beginSession's tear-down-and-rebuild path is even safe to take. */
+function deriveProviderConfigFromForm(): ProviderConfig {
   const useAnthropic = advancedDisclosure.open && advancedProviderAnthropic.checked;
   const useExternal = advancedDisclosure.open && advancedProviderExternal.checked && baseUrlInput.value.trim().length > 0;
-  const provider: ProviderConfig = useAnthropic
+  return useAnthropic
     ? { kind: "anthropic" }
     : useExternal
       ? { kind: "openai-compatible", baseUrl: baseUrlInput.value.trim(), model: externalModelInput.value.trim() }
       : { kind: "embedded", size: embeddedSizeSelect.value };
+}
+
+/** The provider config the currently-active session actually started with — set whenever beginSession succeeds, compared against in applySessionEdits to decide whether a settings edit is safe to apply in place. */
+let activeProviderConfig: ProviderConfig | null = null;
+
+async function beginSession(resume?: ResumePayload): Promise<void> {
+  startError.textContent = "";
+
+  const provider = deriveProviderConfigFromForm();
 
   // workspaceRoot omitted entirely when none was picked — startSession defaults
   // it to the home directory and hands back whichever path it actually used.
@@ -437,17 +517,12 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
       resume ? `Resumed session (${provider.kind}, mode=${config.mode})` : `Session started (${provider.kind}, mode=${config.mode})`,
       "log-status"
     );
-    // All setup controls lock here, not just Start: Foundation has no way to
-    // apply a changed workspace/provider/mode to an already-running session,
-    // so leaving them interactive would let the displayed value silently
-    // drift from what the session actually started with.
-    chooseWorkspaceBtn.disabled = true;
-    embeddedSizeSelect.disabled = true;
-    modeSelect.disabled = true;
-    baseUrlInput.disabled = true;
-    externalModelInput.disabled = true;
-    advancedProviderExternal.disabled = true;
-    advancedProviderAnthropic.disabled = true;
+    // All setup controls lock here, not just Start — see setSetupControlsDisabled.
+    setSetupControlsDisabled(true);
+    editingSession = false;
+    editSettingsBtn.textContent = "Edit settings…";
+    editSettingsBtn.hidden = false;
+    activeProviderConfig = provider;
 
     const modelText =
       provider.kind === "embedded"
@@ -464,16 +539,123 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
     activeModelBadge.hidden = false;
     await refreshSessionList(sessionSearchInput.value.trim());
   } catch (err: any) {
+    // A cancelled download surfaces here as a rejected startSession() call —
+    // main.ts's agent:start-session handler already turns that specific
+    // case into the plain "Download cancelled." message before it ever
+    // reaches the renderer, so this can just show whatever it received.
     startError.textContent = err?.message ?? String(err);
     startSessionBtn.disabled = false;
     startSessionBtn.textContent = "Start session";
+    // A failed edit-apply already cancelled the live session before getting
+    // here (see applySessionEdits) — there's nothing left to edit, so this
+    // falls back to a normal "start fresh" state rather than staying in
+    // edit mode pointed at a session that no longer exists.
+    editingSession = false;
+    editSettingsBtn.hidden = true;
   } finally {
     downloadProgressRow.hidden = true;
     progressLastTime = 0;
   }
 }
 
-startSessionBtn.addEventListener("click", () => void beginSession());
+startSessionBtn.addEventListener("click", () => {
+  if (editingSession) void applySessionEdits();
+  else void beginSession();
+});
+
+cancelDownloadBtn.addEventListener("click", () => {
+  void window.agent.cancelDownload();
+});
+
+function providerConfigsEqual(a: ProviderConfig, b: ProviderConfig): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Applies edited settings to the currently active session. Three cases:
+ *
+ * 1. Workspace and/or mode only, provider/model unchanged: updated in
+ *    place via agent:update-session-settings — the provider is never
+ *    touched, so this is instant and carries zero risk.
+ * 2. Provider/model changed, but NEITHER the old nor the new config is
+ *    "embedded": safe to tear down and rebuild — reads the live session
+ *    (not loadSession's disk record; a session with no completed task
+ *    yet has never been persisted, so that would silently no-op here),
+ *    cancels it, then re-runs beginSession() as a resume, exactly like
+ *    resumeSession() does when reopening a session from the sidebar.
+ * 3. Provider/model changed AND either side is "embedded": refused
+ *    outright. Live testing found that starting a second embedded model
+ *    load shortly after disposing the first crashes the whole Electron
+ *    process — an uncaught native exception inside llama-addon.node, not
+ *    something a try/catch in this file could ever stop. There's no safe
+ *    way to do this in place today, so this says no clearly instead of
+ *    risking it.
+ */
+async function applySessionEdits(): Promise<void> {
+  if (!sessionId || !activeProviderConfig) return;
+  const idBeingEdited = sessionId;
+  const newProvider = deriveProviderConfigFromForm();
+  const newMode = modeSelect.value as PermissionMode;
+  startError.textContent = "";
+
+  if (providerConfigsEqual(newProvider, activeProviderConfig)) {
+    startSessionBtn.disabled = true;
+    startSessionBtn.textContent = "Applying…";
+    const ok = await window.agent.updateSessionSettings(idBeingEdited, { workspaceRoot: workspaceRoot ?? undefined, mode: newMode });
+    editingSession = false;
+    if (!ok) {
+      startError.textContent = "Couldn't apply changes — the session may have already ended.";
+      startSessionBtn.disabled = false;
+      startSessionBtn.textContent = "Edit settings…";
+      return;
+    }
+    logLine(`Settings updated (mode=${newMode})`, "log-status");
+    setSetupControlsDisabled(true);
+    startSessionBtn.disabled = true;
+    startSessionBtn.textContent = "Starting…"; // matches beginSession's own (pre-existing, unchanged) post-success label
+    editSettingsBtn.textContent = "Edit settings…";
+    return;
+  }
+
+  const eitherEmbedded = activeProviderConfig.kind === "embedded" || newProvider.kind === "embedded";
+  if (eitherEmbedded) {
+    startError.textContent = "Changing the model isn't supported while a session is active yet — start a new session to use a different model.";
+    return;
+  }
+
+  // Neither the old nor the new provider touches node-llama-cpp's native
+  // addon (both are lightweight HTTP-based providers) — safe to tear down
+  // and rebuild.
+  try {
+    const snapshot = await window.agent.getLiveSession(idBeingEdited);
+    if (!snapshot) {
+      startError.textContent = "Couldn't read the current session to apply changes.";
+      return;
+    }
+    await window.agent.cancelSession(idBeingEdited);
+    sessionId = null;
+    taskInput.disabled = true;
+    runTaskBtn.disabled = true;
+    await beginSession({
+      sessionId: idBeingEdited,
+      initialMessages: snapshot.messages,
+      priorEvents: snapshot.events,
+      title: snapshot.title,
+      createdAt: snapshot.createdAt,
+      ownerEmail: snapshot.ownerEmail,
+    });
+  } finally {
+    editingSession = false;
+  }
+}
+
+editSettingsBtn.addEventListener("click", () => {
+  editingSession = !editingSession;
+  setSetupControlsDisabled(!editingSession);
+  startSessionBtn.disabled = !editingSession;
+  startSessionBtn.textContent = editingSession ? "Apply changes" : "Start session";
+  editSettingsBtn.textContent = editingSession ? "Cancel edit" : "Edit settings…";
+});
 
 function clearEventLog(): void {
   toolCards.clear();
@@ -486,21 +668,19 @@ function resetToSetup(): void {
   if (sessionId) void window.agent.cancelSession(sessionId);
   sessionId = null;
   workspaceRoot = null;
+  activeProviderConfig = null;
   clearEventLog();
   taskInput.value = "";
   taskInput.disabled = true;
   runTaskBtn.disabled = true;
   activeModelBadge.hidden = true;
+  editingSession = false;
+  editSettingsBtn.hidden = true;
+  editSettingsBtn.textContent = "Edit settings…";
   startError.textContent = "";
   workspacePathEl.textContent = "No workspace selected — optional, you can just chat";
   aboutWorkspace.textContent = "(none selected)";
-  chooseWorkspaceBtn.disabled = false;
-  embeddedSizeSelect.disabled = false;
-  modeSelect.disabled = false;
-  baseUrlInput.disabled = false;
-  externalModelInput.disabled = false;
-  advancedProviderExternal.disabled = false;
-  advancedProviderAnthropic.disabled = false;
+  setSetupControlsDisabled(false);
   startSessionBtn.disabled = false;
   startSessionBtn.textContent = "Start session";
   void refreshSessionList(sessionSearchInput.value.trim());

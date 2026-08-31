@@ -10,6 +10,8 @@ import {
   cancelSession,
   removeSession,
   buildProvider,
+  getLiveSessionSnapshot,
+  updateLiveSessionSettings,
 } from "../electron/sessionRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { loadSessionRecord } from "../sessionStore.js";
@@ -84,6 +86,24 @@ await (async () => {
       }
     );
     check("startSession forwards onDownloadProgress through to the provider factory", typeof receivedCallback === "function");
+  }
+
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      {
+        providerFactory: (_config, _onDownloadProgress, signal) => {
+          receivedSignal = signal;
+          return new MockProvider([]);
+        },
+        signal: controller.signal,
+      }
+    );
+    check("startSession forwards its signal through to the provider factory", receivedSignal === controller.signal);
   }
 
   {
@@ -187,6 +207,33 @@ await (async () => {
       "cancelSession ends the run with success:false",
       done?.type === "done" && done.success === false && done.summary === "Cancelled by user."
     );
+  }
+
+  {
+    // Regression: cancelling a session and immediately starting a NEW one
+    // under the SAME id (resume, mid-conversation, same sessionId — exactly
+    // what applying edited settings does) must not hang or redundantly
+    // re-finalize the already-torn-down old entry. Awaited fully this time,
+    // unlike the test above, to actually exercise cancelSession's cleanup.
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([]) }
+    );
+    await cancelSession(registry, sessionId);
+    check("cancelSession removes the entry from the registry once finalized", !registry.sessions.has(sessionId));
+
+    const restarted = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      {
+        providerFactory: () => new MockProvider([]),
+        resume: { sessionId, initialMessages: [{ role: "system", content: "sys" }], priorEvents: [], title: "t", createdAt: Date.now(), ownerEmail: null },
+      }
+    );
+    check("starting a new session under the same just-cancelled id succeeds", restarted.sessionId === sessionId);
+    check("the registry now holds exactly the new entry, not a stale one", registry.sessions.has(sessionId));
   }
 
   console.log("\nEvent buffering and persistence:");
@@ -493,6 +540,60 @@ await (async () => {
     await runTask(registry, sessionId, "continue the resumed session", () => {});
     const saved = await loadSessionRecord(sessionsDir, sessionId);
     check("a resumed session keeps its original owner regardless of who's currently signed in", saved?.ownerEmail === "original-owner@example.com");
+  }
+
+  {
+    // The exact scenario a disk-record-based read (loadSessionRecord) can't
+    // handle: a session that has started but never run a task yet, so
+    // persistSession has never fired — nothing has ever hit disk.
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([]) }
+    );
+    const onDisk = await loadSessionRecord(sessionsDir, sessionId).catch(() => null);
+    check("sanity check: a session with no completed task has no disk record yet", onDisk === null);
+
+    const snapshot = getLiveSessionSnapshot(registry, sessionId);
+    check("getLiveSessionSnapshot still finds it — reads the live entry, not disk", snapshot !== null);
+    check("its messages start with just the seeded system prompt, matching a freshly-started session", snapshot?.messages.length === 1 && snapshot.messages[0]?.role === "system");
+  }
+
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "hi there" } }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    await runTask(registry, sessionId, "say hi", () => {});
+    const snapshot = getLiveSessionSnapshot(registry, sessionId);
+    check("after a completed task, the live snapshot's events are non-empty", (snapshot?.events.length ?? 0) > 0);
+    check("after a completed task, the live snapshot's messages include the user's task", snapshot?.messages.some((m) => m.role === "user" && m.content === "say hi") === true);
+  }
+
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    check("getLiveSessionSnapshot returns null for an unknown session id", getLiveSessionSnapshot(registry, "nope-not-real") === null);
+  }
+
+  {
+    // The actual setWorkspaceRoot/setPermissionMode behavior is proven at
+    // the AgentSession level in agent.test.ts (a real read/edit against the
+    // changed workspace and mode) — this just confirms the registry-level
+    // wiring finds the right entry and reports success/failure correctly.
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([]) }
+    );
+    const updated = updateLiveSessionSettings(registry, sessionId, { workspaceRoot: "/some/other/path", mode: "ACCEPT_EDITS" });
+    check("updateLiveSessionSettings returns true for a live session", updated);
+    const notFound = updateLiveSessionSettings(registry, "nope-not-real", { mode: "PLAN" });
+    check("updateLiveSessionSettings returns false for an unknown session id", !notFound);
   }
 
   await fs.rm(sessionsDir, { recursive: true, force: true });

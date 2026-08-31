@@ -68,8 +68,12 @@ export function createSessionRegistry(sessionsDir: string, cloudSync?: CloudSync
   return { sessions: new Map(), sessionsDir, cloudSync };
 }
 
-/** Mirrors the provider construction in cli.ts's --base-url branch. */
-export function buildProvider(config: ProviderConfig, onDownloadProgress?: (status: ModelDownloadProgress) => void): ModelProvider {
+/** Mirrors the provider construction in cli.ts's --base-url branch. `signal` only matters for the embedded provider — it's the model download's cancellation handle; the other two providers make no download, so they simply ignore it. */
+export function buildProvider(
+  config: ProviderConfig,
+  onDownloadProgress?: (status: ModelDownloadProgress) => void,
+  signal?: AbortSignal
+): ModelProvider {
   if (config.kind === "openai-compatible") {
     return new OpenAICompatibleProvider({ baseUrl: config.baseUrl, local: true });
   }
@@ -79,19 +83,21 @@ export function buildProvider(config: ProviderConfig, onDownloadProgress?: (stat
   if (!isEmbeddedModelId(config.size)) {
     throw new Error(`Invalid embedded model size: ${config.size}`);
   }
-  return new EmbeddedLlamaProvider({ size: config.size, onDownloadProgress });
+  return new EmbeddedLlamaProvider({ size: config.size, onDownloadProgress, signal });
 }
 
 export async function startSession(
   registry: SessionRegistry,
   config: SessionConfig,
   deps: {
-    providerFactory?: (c: ProviderConfig, onDownloadProgress?: (status: ModelDownloadProgress) => void) => ModelProvider;
+    providerFactory?: (c: ProviderConfig, onDownloadProgress?: (status: ModelDownloadProgress) => void, signal?: AbortSignal) => ModelProvider;
     onDownloadProgress?: (status: ModelDownloadProgress) => void;
+    /** Lets the caller cancel an in-progress embedded-model download — see buildProvider. */
+    signal?: AbortSignal;
     resume?: ResumePayload;
   } = {}
 ): Promise<{ sessionId: string; workspaceRoot: string }> {
-  const provider = (deps.providerFactory ?? buildProvider)(config.provider, deps.onDownloadProgress);
+  const provider = (deps.providerFactory ?? buildProvider)(config.provider, deps.onDownloadProgress, deps.signal);
   const healthy = await provider.healthCheck();
   if (!healthy) {
     throw new Error(`Could not start provider "${provider.id}" — health check failed.`);
@@ -145,6 +151,56 @@ export async function startSession(
     ownerEmail,
   });
   return { sessionId, workspaceRoot };
+}
+
+/**
+ * Updates an active session's workspace and/or permission mode in place —
+ * deliberately the ONLY way to change a live session's settings without
+ * tearing down and rebuilding its provider. Editing the provider/model
+ * itself must go through cancelSession + startSession(resume) instead,
+ * and the embedded provider specifically must never do that while another
+ * one is live: node-llama-cpp's native addon crashed the whole process
+ * (an uncaught C++ exception, not a JS error catch could stop) when a
+ * second model load started shortly after the first's disposal — a real
+ * finding from live testing, not a hypothetical. This function exists so
+ * the overwhelmingly common edit (workspace or mode, not model) never has
+ * to risk that path at all.
+ */
+export function updateLiveSessionSettings(registry: SessionRegistry, sessionId: string, updates: { workspaceRoot?: string; mode?: PermissionMode }): boolean {
+  const entry = registry.sessions.get(sessionId);
+  if (!entry) return false;
+  if (updates.workspaceRoot !== undefined) entry.session.setWorkspaceRoot(updates.workspaceRoot);
+  if (updates.mode !== undefined) entry.session.setPermissionMode(updates.mode);
+  return true;
+}
+
+export interface LiveSessionSnapshot {
+  messages: ChatMessage[];
+  events: AgentEvent[];
+  title: string;
+  createdAt: number;
+  ownerEmail: string | null;
+}
+
+/**
+ * The live, in-memory state of an active session — same shape persistSession
+ * writes to disk, but read directly from the registry entry instead. A
+ * session is only ever saved to disk once its first task completes
+ * (persistSession runs from doRunTask, not from startSession), so a caller
+ * that needs "whatever this session currently is" — e.g. applying edited
+ * settings mid-conversation — can't rely on loadSessionRecord() returning
+ * anything for a session that hasn't run a task yet. This works regardless.
+ */
+export function getLiveSessionSnapshot(registry: SessionRegistry, sessionId: string): LiveSessionSnapshot | null {
+  const entry = registry.sessions.get(sessionId);
+  if (!entry) return null;
+  return {
+    messages: entry.session.getMessages(),
+    events: entry.events,
+    title: entry.title ?? "(untitled)",
+    createdAt: entry.createdAt,
+    ownerEmail: entry.ownerEmail,
+  };
 }
 
 async function persistSession(registry: SessionRegistry, sessionId: string, entry: SessionEntry): Promise<void> {
@@ -274,11 +330,37 @@ async function finalizeEntry(entry: SessionEntry): Promise<void> {
   await entry.provider.dispose?.().catch(() => {});
 }
 
-/** Cooperative: agent.ts checks the cancelled flag at loop boundaries, not mid-await. Frees the session's model resources once any in-flight task actually stops. */
+/**
+ * Cooperative: agent.ts checks the cancelled flag at loop boundaries, not
+ * mid-await. Frees the session's model resources once any in-flight task
+ * actually stops, and removes the entry from the registry — a cancelled
+ * session is no longer live, so nothing should keep finding it here.
+ *
+ * That removal matters beyond tidiness: startSession's own "an entry
+ * already exists under this id" cleanup path exists for a session whose
+ * previous in-memory entry was never cleaned up (e.g. a stale entry
+ * surviving an app reload). It was never meant to handle "this same,
+ * already-cancelled entry, seconds ago, in the same running process" — but
+ * that's exactly what happens when a caller cancels a session and then
+ * immediately calls startSession again with the same id to resume it
+ * (editing an active session's settings; also latent in the sidebar's
+ * resume flow if a user re-clicks the session that's already active).
+ * Without this removal, that second startSession call redundantly
+ * re-finalizes (and, for an embedded provider, re-disposes) the same
+ * already-torn-down entry while the new provider is concurrently loading a
+ * fresh copy of the model — real resource contention, not a deadlock, but
+ * severe enough to look like one.
+ */
 export async function cancelSession(registry: SessionRegistry, sessionId: string): Promise<void> {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return;
   await finalizeEntry(entry);
+  // Only remove if this is still the same entry — in principle a caller
+  // could already have started a new session under this id while this
+  // cancel's async teardown was in flight; that newer entry must survive.
+  if (registry.sessions.get(sessionId) === entry) {
+    registry.sessions.delete(sessionId);
+  }
 }
 
 /**

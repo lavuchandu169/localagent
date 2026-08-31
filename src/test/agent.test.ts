@@ -1,4 +1,5 @@
 import assert from "node:assert";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
@@ -7,7 +8,7 @@ import { AgentSession } from "../agent.js";
 import { defaultToolRegistry, ToolRegistry } from "../toolRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { toLlamaHistory, toLlamaFunctions, fromLlamaResult } from "../providers/embeddedLlama.js";
-import type { ChatResponse, Tool, ToolCall } from "../types.js";
+import type { AgentEvent, ChatResponse, Tool, ToolCall } from "../types.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -411,6 +412,70 @@ await (async () => {
     check("ACCEPT_EDITS allows editing a path that was read (even unsuccessfully) earlier this session", decision === "ALLOW");
     await fs.rm(path.join(workspaceRoot, scratchPath), { force: true });
   }
+})();
+
+console.log("\nsetWorkspaceRoot/setPermissionMode update a live session in place:");
+await (async () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const fixtureRoot = path.resolve(__dirname, "..", "..", "fixture-repo");
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-test-"));
+  const distinctFile = "only-in-tmp-dir.txt";
+  await fs.writeFile(path.join(tmpDir, distinctFile), "hello from the new workspace", "utf-8");
+
+  // First run(): read a file in the ORIGINAL workspace (fixture-repo/math.js).
+  // setWorkspaceRoot/setPermissionMode fire between the two run() calls
+  // (mirroring how the renderer only ever calls them between tasks, never
+  // mid-run). Second run(): read, then edit, the NEW workspace's file —
+  // ACCEPT_EDITS still requires a path be read this session before it'll
+  // auto-approve editing it (see the ACCEPT_EDITS test above), so this reads
+  // it first, same as a real model would.
+  const script: ChatResponse[] = [
+    { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "math.js" } }] } },
+    { turn: { type: "final", content: "read the original workspace's file" } },
+    { turn: { type: "tool_calls", toolCalls: [{ id: "c2", name: "read_file", arguments: { path: distinctFile } }] } },
+    { turn: { type: "tool_calls", toolCalls: [{ id: "c3", name: "edit_file", arguments: { path: distinctFile, content: "edited" } }] } },
+    { turn: { type: "final", content: "edited the new workspace's file" } },
+  ];
+  const session = new AgentSession({
+    workspaceRoot: fixtureRoot,
+    model: "mock",
+    provider: new MockProvider(script),
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN", // PLAN denies WRITE outright — the edit must not be reachable under the original mode
+  });
+
+  const firstEvents: AgentEvent[] = [];
+  for await (const event of session.run("read math.js")) firstEvents.push(event);
+  const readOk = firstEvents.find((e) => e.type === "tool.result" && e.call.name === "read_file");
+  check("before any update, read_file resolves against the original workspace (fixture-repo)", readOk?.type === "tool.result" && readOk.result.ok === true);
+
+  session.setWorkspaceRoot(tmpDir);
+  session.setPermissionMode("ACCEPT_EDITS");
+
+  const secondEvents: AgentEvent[] = [];
+  for await (const event of session.run("edit the tmp-dir-only file")) secondEvents.push(event);
+  const readNewOk = secondEvents.find((e) => e.type === "tool.result" && e.call.name === "read_file");
+  const editResult = secondEvents.find((e) => e.type === "tool.result" && e.call.name === "edit_file");
+  // permission.request fires for every tool call unconditionally (it carries
+  // the decision, not just an "asking the user" signal) — the actual thing
+  // to check is that this specific decision was ALLOW, not ASK/DENY.
+  const editPermissionEvent = secondEvents.find((e) => e.type === "permission.request" && e.call.name === "edit_file");
+  check(
+    "after setWorkspaceRoot, read_file resolves the NEW workspace's path — proving the workspace actually changed, not just that a stale reference happened to work",
+    readNewOk?.type === "tool.result" && readNewOk.result.ok === true
+  );
+  check(
+    "after setPermissionMode(ACCEPT_EDITS), editing a just-read path is auto-approved (decision ALLOW, not ASK)",
+    editPermissionEvent?.type === "permission.request" &&
+      editPermissionEvent.decision === "ALLOW" &&
+      editResult?.type === "tool.result" &&
+      editResult.result.ok === true
+  );
+  const writtenContent = await fs.readFile(path.join(tmpDir, distinctFile), "utf-8");
+  check("the file on disk in the NEW workspace actually got edited", writtenContent === "edited");
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
 })();
 
 console.log("\nAgent loop (scripted debug-fix scenario):");

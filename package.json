@@ -17,7 +17,7 @@
     "build": "node scripts/generate-embedded-credentials.mjs && tsc -p tsconfig.json && node scripts/copy-electron-assets.mjs",
     "start": "node dist/cli.js",
     "demo": "node dist/demo.js",
-    "test": "node dist/test/agent.test.js && node dist/test/sessionRegistry.test.js && node dist/test/modeLabels.test.js && node dist/test/hardwareInfo.test.js && node dist/test/filenameCandidates.test.js && node dist/test/anthropicProvider.test.js && node dist/test/googleAuth.test.js && node dist/test/sessionStore.test.js && node dist/test/cloudSync.test.js && node dist/test/loadEnvFile.test.js && node dist/test/googleSettings.test.js",
+    "test": "node dist/test/agent.test.js && node dist/test/sessionRegistry.test.js && node dist/test/modeLabels.test.js && node dist/test/hardwareInfo.test.js && node dist/test/filenameCandidates.test.js && node dist/test/anthropicProvider.test.js && node dist/test/googleAuth.test.js && node dist/test/sessionStore.test.js && node dist/test/cloudSync.test.js && node dist/test/loadEnvFile.test.js && node dist/test/googleSettings.test.js && node dist/test/modelCache.test.js",
     "electron": "electron .",
     "package:mac": "npm run build && electron-builder --mac",
     "package:win": "npm run build && electron-builder --win",
