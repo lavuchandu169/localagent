@@ -6,11 +6,28 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <div id="onboarding-overlay" hidden>
+      <div id="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+        <h2 id="onboarding-title">Welcome to localagent</h2>
+        <p>A local-first coding agent. Pick a model to get started — here's what each choice in the Model dropdown means:</p>
+        <dl>
+          <dt>Coding / Chat (embedded)</dt>
+          <dd>Runs entirely on this machine — no data ever leaves it. Slower to respond than the cloud, but completely private and free.</dd>
+          <dt>Claude Sonnet 5 (Anthropic API)</dt>
+          <dd>The best quality, but sends your code to Anthropic over the network. Needs an API key — add one in Settings (gear icon) or it's already built in on official downloads.</dd>
+          <dt>Custom server</dt>
+          <dd>Point it at your own Ollama, LM Studio, or vLLM server instead.</dd>
+        </dl>
+        <p class="hint-text">Google sign-in (top right) is entirely optional — everything works fully signed-out. Signing in just adds automatic backup of your session history to your own Google Drive.</p>
+        <button id="onboarding-dismiss" class="primary">Get started</button>
+      </div>
+    </div>
+
     <div id="app-shell">
       <aside id="sidebar">
         <div id="sidebar-header">
           <span id="sidebar-title">History</span>
-          <button id="new-session-btn" title="Start a new session — your current chat stays saved in the sidebar, one click away">+</button>
+          <button id="new-session-btn" title="Start a new session — your current chat stays saved in the sidebar, one click away" aria-label="Start a new session">+</button>
         </div>
         <input id="session-search" type="search" placeholder="Search sessions…" />
         <div id="session-list">
@@ -41,15 +58,15 @@
               </div>
               <div id="auth-error" class="error-text"></div>
             </div>
-            <button id="settings-toggle" aria-expanded="false" title="Settings">⚙</button>
-            <button id="about-toggle" aria-expanded="false" title="About">?</button>
+            <button id="settings-toggle" aria-expanded="false" aria-haspopup="true" title="Settings" aria-label="Settings">⚙</button>
+            <button id="about-toggle" aria-expanded="false" aria-haspopup="true" title="About" aria-label="About">?</button>
           </div>
         </header>
 
         <div id="update-banner" hidden>
           <span id="update-banner-text"></span>
           <a id="update-banner-link" href="#" target="_blank" rel="noopener">View release</a>
-          <button id="update-banner-dismiss" type="button" title="Dismiss">×</button>
+          <button id="update-banner-dismiss" type="button" title="Dismiss" aria-label="Dismiss update notice">×</button>
         </div>
 
         <div id="about-panel" hidden>
@@ -62,6 +79,7 @@
             <dt>Your machine</dt>
             <dd id="about-hardware">Detecting…</dd>
           </dl>
+          <a id="report-issue-link" href="#" target="_blank" rel="noopener">Report an issue…</a>
           <button id="about-close">Close</button>
         </div>
 
@@ -167,7 +185,7 @@
         </section>
 
         <section id="log-section">
-          <div id="event-log">
+          <div id="event-log" role="log" aria-live="polite">
             <div id="empty-state">Start a session, then describe a task — every read, edit, and command the agent runs will show up here.</div>
           </div>
         </section>

@@ -70,6 +70,7 @@ interface AgentBridge {
   deleteCachedModel(id: string): Promise<boolean>;
   cancelDownload(): Promise<void>;
   getHardwareInfo(): Promise<HardwareInfo>;
+  getDiagnostics(): Promise<{ appVersion: string; platform: string; osRelease: string; arch: string }>;
   googleSignIn(): Promise<SignInResult>;
   signOut(): Promise<void>;
   getAuthStatus(): Promise<AuthStatus>;
@@ -147,6 +148,9 @@ const updateBannerDismiss = byId<HTMLButtonElement>("update-banner-dismiss");
 const aboutToggle = byId<HTMLButtonElement>("about-toggle");
 const aboutPanel = byId<HTMLDivElement>("about-panel");
 const aboutClose = byId<HTMLButtonElement>("about-close");
+const reportIssueLink = byId<HTMLAnchorElement>("report-issue-link");
+const onboardingOverlay = byId<HTMLDivElement>("onboarding-overlay");
+const onboardingDismiss = byId<HTMLButtonElement>("onboarding-dismiss");
 const aboutWorkspace = byId<HTMLSpanElement>("about-workspace");
 const aboutHardware = byId<HTMLSpanElement>("about-hardware");
 const settingsToggle = byId<HTMLButtonElement>("settings-toggle");
@@ -293,6 +297,7 @@ async function refreshDownloadedModelsList(): Promise<void> {
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.textContent = "Delete";
+    deleteBtn.setAttribute("aria-label", `Delete ${info.name}`);
     deleteBtn.addEventListener("click", () => {
       void withBusyLabel(deleteBtn, "Deleting…", async () => {
         await window.agent.deleteCachedModel(id);
@@ -313,15 +318,39 @@ Promise.all([window.agent.listCachedModels(), window.agent.getHardwareInfo()]).t
   refreshEmbeddedModelLabels(cached);
 });
 
+/** Builds a GitHub "new issue" URL pre-filled with app version/OS/hardware, so a reporter doesn't have to dig this up themselves. */
+async function buildReportIssueUrl(): Promise<string> {
+  const diag = await window.agent.getDiagnostics();
+  const hwText = hardwareInfo
+    ? `${(hardwareInfo.totalRamBytes / 1024 ** 3).toFixed(0)}GB RAM, ${hardwareInfo.gpu ? `${hardwareInfo.gpu} GPU` : "CPU only"}`
+    : "unknown";
+  const body = [
+    "**Describe the issue:**\n\n\n",
+    "---",
+    `App version: ${diag.appVersion}`,
+    `Platform: ${diag.platform} ${diag.osRelease} (${diag.arch})`,
+    `Hardware: ${hwText}`,
+  ].join("\n");
+  return `https://github.com/lavuchandu169/localagent/issues/new?${new URLSearchParams({ body }).toString()}`;
+}
+
+/** Hides the panel, updates its toggle's aria-expanded, and returns focus to the toggle — the reverse of opening it, so a keyboard/screen-reader user always lands back where they started instead of on a now-hidden element. */
+function closeAboutPanel(): void {
+  aboutPanel.hidden = true;
+  aboutToggle.setAttribute("aria-expanded", "false");
+  aboutToggle.focus();
+}
+
 aboutToggle.addEventListener("click", () => {
   const opening = aboutPanel.hidden;
   aboutPanel.hidden = !opening;
   aboutToggle.setAttribute("aria-expanded", String(opening));
+  if (opening) {
+    void buildReportIssueUrl().then((url) => (reportIssueLink.href = url));
+    aboutClose.focus(); // moves focus into the panel, so a keyboard/screen-reader user actually lands on its content
+  }
 });
-aboutClose.addEventListener("click", () => {
-  aboutPanel.hidden = true;
-  aboutToggle.setAttribute("aria-expanded", "false");
-});
+aboutClose.addEventListener("click", closeAboutPanel);
 
 // Tracks whether the user actually typed into the secret field this time
 // it was open — saving must NOT overwrite a previously-saved secret just
@@ -359,17 +388,72 @@ async function openSettingsPanel(): Promise<void> {
   await refreshDownloadedModelsList();
 }
 
+/** Same contract as closeAboutPanel — hide, update aria-expanded, return focus to the toggle. */
+function closeSettingsPanel(): void {
+  settingsPanel.hidden = true;
+  settingsToggle.setAttribute("aria-expanded", "false");
+  settingsToggle.focus();
+}
+
 settingsToggle.addEventListener("click", async () => {
   const opening = settingsPanel.hidden;
   if (opening) await openSettingsPanel();
   settingsPanel.hidden = !opening;
   settingsToggle.setAttribute("aria-expanded", String(opening));
+  if (opening) settingsClose.focus();
 });
 
-settingsClose.addEventListener("click", () => {
-  settingsPanel.hidden = true;
-  settingsToggle.setAttribute("aria-expanded", "false");
+settingsClose.addEventListener("click", closeSettingsPanel);
+
+// Escape closes whichever of these dismissible panels/the onboarding
+// modal is currently open — the standard keyboard expectation. Onboarding
+// takes priority since it's the only truly modal one (blocks the rest of
+// the page); it can't be open at the same time as the other two anyway
+// (nothing else is interactive until it's dismissed).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!onboardingOverlay.hidden) dismissOnboarding();
+  else if (!aboutPanel.hidden) closeAboutPanel();
+  else if (!settingsPanel.hidden) closeSettingsPanel();
 });
+
+// A focus trap for the onboarding modal specifically — it's the one truly
+// modal overlay in this app, so Tab must never move focus out to the page
+// behind it. Single focusable element today (Get started), so trapping is
+// just "always land back on it."
+document.addEventListener("keydown", (e) => {
+  if (onboardingOverlay.hidden || e.key !== "Tab") return;
+  e.preventDefault();
+  onboardingDismiss.focus();
+});
+
+const ONBOARDING_SEEN_KEY = "localagent:onboarding-seen";
+
+/** Per-viewer UI preference only (not security/cross-device data) — localStorage is the right tool here, unlike everything else in this app which persists through the main process. */
+function showOnboardingIfFirstRun(): void {
+  let seen = false;
+  try {
+    seen = localStorage.getItem(ONBOARDING_SEEN_KEY) === "1";
+  } catch {
+    seen = true; // an inaccessible localStorage shouldn't block the app — treat as already seen
+  }
+  if (seen) return;
+  onboardingOverlay.hidden = false;
+  onboardingDismiss.focus();
+}
+
+function dismissOnboarding(): void {
+  onboardingOverlay.hidden = true;
+  try {
+    localStorage.setItem(ONBOARDING_SEEN_KEY, "1");
+  } catch {
+    // Best-effort — if this fails, onboarding just shows again next launch; not worth surfacing an error for.
+  }
+  modelSelect.focus();
+}
+
+onboardingDismiss.addEventListener("click", dismissOnboarding);
+showOnboardingIfFirstRun();
 
 settingsSaveBtn.addEventListener("click", () => {
   settingsError.textContent = "";
@@ -820,6 +904,7 @@ function renderSessionList(entries: SessionIndexEntry[]): void {
     deleteBtn.type = "button";
     deleteBtn.className = "session-item-delete";
     deleteBtn.title = "Delete session";
+    deleteBtn.setAttribute("aria-label", `Delete session: ${entry.title}`);
     deleteBtn.textContent = "×";
     deleteBtn.addEventListener("click", (e) => {
       e.stopPropagation();

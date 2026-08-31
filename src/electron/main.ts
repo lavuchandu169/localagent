@@ -9,6 +9,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
 import electronUpdaterPkg from "electron-updater";
 const { autoUpdater } = electronUpdaterPkg;
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
@@ -196,6 +197,15 @@ app.whenReady().then(() => {
     const info = await detectHardware();
     return { ...info, recommended: recommendModel(info) };
   });
+
+  // For the "Report an issue" link — app version + OS info to pre-fill a
+  // bug report with, so a reporter doesn't have to dig this up themselves.
+  ipcMain.handle("agent:diagnostics", () => ({
+    appVersion: app.getVersion(),
+    platform: process.platform,
+    osRelease: os.release(),
+    arch: process.arch,
+  }));
 
   ipcMain.handle("agent:pick-workspace", async () => {
     const result = await dialog.showOpenDialog(win, { properties: ["openDirectory"] });

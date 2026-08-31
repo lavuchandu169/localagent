@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("agent", {
   deleteCachedModel: (id) => ipcRenderer.invoke("agent:delete-cached-model", id),
   cancelDownload: () => ipcRenderer.invoke("agent:cancel-download"),
   getHardwareInfo: () => ipcRenderer.invoke("agent:hardware-info"),
+  getDiagnostics: () => ipcRenderer.invoke("agent:diagnostics"),
   onEvent: (callback) => {
     const listener = (_event, sessionId, agentEvent) => callback(sessionId, agentEvent);
     ipcRenderer.on("agent:event", listener);
