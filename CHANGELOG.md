@@ -3,6 +3,19 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.16 — 2026-09-01
+
+- Redesigned the UI as a switchable dark IDE theme: an activity bar,
+  an Explorer-style session sidebar, a tab for the open session, a
+  status bar, chat turns with a colored gutter instead of bubbles,
+  and tool calls as inline diagnostics. Two themes (Settings > Theme):
+  Warm Dark (default) and Mono Ink.
+- Chat-first: once a session starts, the setup form collapses out of
+  the way and the chat fills the window, with the composer docked to
+  the bottom. "Edit settings…" brings the form back.
+- Fixed the Model dropdown overflowing past the window edge on its
+  longest option label.
+
 ## v0.1.0-beta.15 — 2026-09-01
 
 - A real diff viewer: before you approve an edit, see the actual colored
