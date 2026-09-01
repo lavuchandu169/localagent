@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { PermissionEngine, classifyCommand } from "../permissions.js";
 import { AgentSession } from "../agent.js";
 import { defaultToolRegistry, ToolRegistry } from "../toolRegistry.js";
@@ -482,6 +484,114 @@ await (async () => {
       editEvent?.type === "permission.request" && editEvent.diff?.length === 1 && editEvent.diff[0]?.added === true && editEvent.diff[0]?.value === newFileContent
     );
   }
+})();
+
+console.log("\nCheckpoints — one per task, only in a real git workspace:");
+await (async () => {
+  const execFileAsync = promisify(execFile);
+  const git = async (cwd: string, args: string[]) => (await execFileAsync("git", args, { cwd })).stdout.trim();
+
+  // fixture-repo (used everywhere else in this file) is NOT its own git
+  // repo — it's a plain subdirectory of this project's own repo, so running
+  // checkpoint logic against it would create commits inside localagent's
+  // REAL .git. A dedicated temp repo avoids that entirely.
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-checkpoint-test-"));
+  await git(repo, ["init", "-q"]);
+  await git(repo, ["config", "user.email", "test@example.com"]);
+  await git(repo, ["config", "user.name", "Test"]);
+  await fs.writeFile(path.join(repo, "app.js"), "console.log('v1');\n", "utf-8");
+  await git(repo, ["add", "-A"]);
+  await git(repo, ["commit", "-q", "-m", "initial"]);
+
+  {
+    // Two tool calls this task: a read (no checkpoint) then a write (checkpoint).
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "app.js" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "app.js", content: "console.log('v2');\n" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: repo,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("bump the version string")) events.push(event);
+
+    const checkpointEvents = events.filter((e) => e.type === "checkpoint.created");
+    check("exactly one checkpoint.created event fires (not one per write, one per task)", checkpointEvents.length === 1);
+    check("no checkpoint fires for the read_file call itself", events.findIndex((e) => e.type === "checkpoint.created") > events.findIndex((e) => e.type === "tool.start" && e.call.id === "r1"));
+    check("session.getCheckpointHash() reflects the same hash the event carried", checkpointEvents[0]?.type === "checkpoint.created" && session.getCheckpointHash() === checkpointEvents[0].checkpointHash);
+
+    // Full round trip: the edit actually applied, then reverting via the
+    // real checkpoints module (not re-testing its internals, just proving
+    // the hash captured here is a genuinely usable revert target) restores
+    // the pre-task content.
+    const afterEdit = await fs.readFile(path.join(repo, "app.js"), "utf-8");
+    check("the edit actually applied to disk before revert", afterEdit === "console.log('v2');\n");
+
+    const { revertToCheckpoint } = await import("../checkpoints.js");
+    const hash = session.getCheckpointHash();
+    if (hash) await revertToCheckpoint(repo, hash);
+    const afterRevert = await fs.readFile(path.join(repo, "app.js"), "utf-8");
+    check("reverting to the session's captured checkpoint restores the pre-task content", afterRevert === "console.log('v1');\n");
+  }
+
+  {
+    // A read-only task must never take a checkpoint at all.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r2", name: "read_file", arguments: { path: "app.js" } }] } },
+      { turn: { type: "final", content: "it says v1" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: repo,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("what does app.js say")) events.push(event);
+    check("a read-only task takes no checkpoint at all", !events.some((e) => e.type === "checkpoint.created"));
+    check("a fresh session that only ever did a read-only task has no checkpoint (never set)", session.getCheckpointHash() === null);
+  }
+
+  {
+    // A non-git workspace must silently get no checkpoint — not an error,
+    // not a crash, the task just proceeds without one.
+    const nonGitDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-nongit-test-"));
+    await fs.writeFile(path.join(nonGitDir, "file.txt"), "hello\n", "utf-8");
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e3", name: "edit_file", arguments: { path: "file.txt", content: "hello v2\n" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: nonGitDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+      // edit_file on a path never read this session still gets ASKed even
+      // in ACCEPT_EDITS (the read-before-write override tested earlier in
+      // this file) — approve it so this block can focus purely on the
+      // checkpoint behavior, not re-test that override.
+      onApprovalNeeded: async () => true,
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("edit the file")) events.push(event);
+    check("a non-git workspace takes no checkpoint, and the write still succeeds normally", !events.some((e) => e.type === "checkpoint.created"));
+    check("session.getCheckpointHash() stays null for a non-git workspace", session.getCheckpointHash() === null);
+    const written = await fs.readFile(path.join(nonGitDir, "file.txt"), "utf-8");
+    check("the edit itself still worked fine despite no checkpoint being possible", written === "hello v2\n");
+    await fs.rm(nonGitDir, { recursive: true, force: true });
+  }
+
+  await fs.rm(repo, { recursive: true, force: true });
 })();
 
 console.log("\nsetWorkspaceRoot/setPermissionMode update a live session in place:");

@@ -12,6 +12,7 @@ import { ToolRegistry } from "./toolRegistry.js";
 import { PermissionEngine } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
 import { computeFileDiff } from "./diffUtil.js";
+import { createCheckpoint } from "./checkpoints.js";
 
 export interface AgentSessionOptions {
   workspaceRoot: string;
@@ -51,6 +52,10 @@ export class AgentSession {
   private cancelled = false;
   /** Paths read_file has been attempted on this session, success or not — evidence the model actually looked before writing. */
   private readPaths = new Set<string>();
+  /** The most recent task's checkpoint (see createCheckpoint) — one per task, not a deep undo stack. Overwritten the next time a task actually makes its first non-read tool call; a task that never writes anything leaves the previous task's checkpoint as the current "revert" target. */
+  private checkpointHash: string | null = null;
+  /** Whether THIS task has already attempted its one checkpoint — reset at the start of every run() call. Attempted, not "succeeded": a non-git workspace or any other createCheckpoint failure still marks this true so every subsequent write this task doesn't retry it. */
+  private checkpointAttemptedThisTask = false;
 
   constructor(private opts: AgentSessionOptions) {
     this.permissions = new PermissionEngine(opts.permissionMode);
@@ -74,6 +79,11 @@ export class AgentSession {
    */
   setWorkspaceRoot(workspaceRoot: string): void {
     this.opts.workspaceRoot = workspaceRoot;
+  }
+
+  /** The workspace a checkpoint hash (see getCheckpointHash) needs to be reverted against — reads the same live opts.workspaceRoot setWorkspaceRoot mutates, so this is never stale even after a mid-session workspace edit. */
+  getWorkspaceRoot(): string {
+    return this.opts.workspaceRoot;
   }
 
   /** Updates the permission policy in place — same in-place, between-tasks-only contract as setWorkspaceRoot. */
@@ -156,9 +166,15 @@ export class AgentSession {
     }
   }
 
+  /** The current revert target, if any — the most recent task that actually wrote/executed something in a git workspace. Read by the caller (sessionRegistry) after each run(), not pushed as its own event stream, since it needs to survive independently of whatever events a specific run() happened to yield. */
+  getCheckpointHash(): string | null {
+    return this.checkpointHash;
+  }
+
   async *run(task: string): AsyncGenerator<AgentEvent> {
     this.messages.push({ role: "user", content: task });
     this.state = "THINKING";
+    this.checkpointAttemptedThisTask = false;
     yield* this.autoReadNamedFiles(task);
     const maxTurns = this.opts.maxTurns ?? 25;
 
@@ -222,6 +238,21 @@ export class AgentSession {
 
         if (call.name === "read_file" && typeof call.arguments.path === "string") {
           this.readPaths.add(call.arguments.path);
+        }
+
+        // One checkpoint per task, taken before the FIRST tool call this
+        // task that isn't pure READ — regardless of what decision that call
+        // ends up getting (ALLOW/ASK/DENY), same principle as the diff
+        // above: capture proactively, before the outcome is known, so it's
+        // already in place if the call (or a later one this same task)
+        // does end up allowed. A task that only ever reads never takes one.
+        if (!this.checkpointAttemptedThisTask && tool.permission !== "READ") {
+          this.checkpointAttemptedThisTask = true;
+          const hash = await createCheckpoint(this.opts.workspaceRoot);
+          if (hash) {
+            this.checkpointHash = hash;
+            yield { type: "checkpoint.created", checkpointHash: hash };
+          }
         }
 
         let decision = this.permissions.evaluate(call, tool.permission);

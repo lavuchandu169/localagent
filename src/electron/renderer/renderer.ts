@@ -64,6 +64,8 @@ interface AgentBridge {
   runTask(sessionId: string, task: string): Promise<void>;
   respondPermission(sessionId: string, callId: string, approved: boolean): Promise<void>;
   cancelSession(sessionId: string): Promise<void>;
+  getCheckpoint(sessionId: string): Promise<string | null>;
+  revertCheckpoint(sessionId: string): Promise<{ ok: boolean; error?: string }>;
   pickWorkspace(): Promise<string | null>;
   onEvent(callback: (sessionId: string, event: AgentEvent) => void): () => void;
   onDownloadProgress(callback: (status: DownloadProgress) => void): () => void;
@@ -199,6 +201,7 @@ const downloadLabel = byId<HTMLSpanElement>("download-label");
 const cancelDownloadBtn = byId<HTMLButtonElement>("cancel-download");
 const activeModelBadge = byId<HTMLDivElement>("active-model-badge");
 const editSettingsBtn = byId<HTMLButtonElement>("edit-settings");
+const revertCheckpointBtn = byId<HTMLButtonElement>("revert-checkpoint");
 const downloadedModelsList = byId<HTMLUListElement>("downloaded-models-list");
 const downloadedModelsEmpty = byId<HTMLDivElement>("downloaded-models-empty");
 const sidebarSessionList = byId<HTMLDivElement>("session-list");
@@ -642,6 +645,10 @@ function renderEvent(event: AgentEvent): void {
       card.appendChild(prompt);
       break;
     }
+    case "checkpoint.created":
+      logLine("[checkpoint] Saved — this task can now be reverted.", "log-status");
+      revertCheckpointBtn.hidden = false;
+      break;
     case "text":
       logLine(event.text, "log-text");
       break;
@@ -733,6 +740,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
     editingSession = false;
     editSettingsBtn.textContent = "Edit settings…";
     editSettingsBtn.hidden = false;
+    revertCheckpointBtn.hidden = true; // a fresh/resumed/edited session has no checkpoint of its own yet — see the checkpoint.created event handler
     activeProviderConfig = provider;
 
     const modelText =
@@ -776,6 +784,23 @@ startSessionBtn.addEventListener("click", () => {
 
 cancelDownloadBtn.addEventListener("click", () => {
   void window.agent.cancelDownload();
+});
+
+revertCheckpointBtn.addEventListener("click", () => {
+  if (!sessionId) return;
+  const idToRevert = sessionId;
+  void withBusyLabel(revertCheckpointBtn, "Reverting…", async () => {
+    const result = await window.agent.revertCheckpoint(idToRevert);
+    if (result.ok) {
+      logLine("[checkpoint] Reverted — the workspace is back to how it was before this task.", "log-done");
+      revertCheckpointBtn.hidden = true;
+    } else {
+      // Same graceful-failure posture as everywhere else in this app: show
+      // the real reason (most likely "a task is running") rather than
+      // silently doing nothing or throwing.
+      logLine(`[checkpoint] Couldn't revert: ${result.error ?? "unknown error"}`, "log-error");
+    }
+  });
 });
 
 function providerConfigsEqual(a: ProviderConfig, b: ProviderConfig): boolean {
@@ -883,6 +908,7 @@ function resetToSetup(): void {
   editingSession = false;
   editSettingsBtn.hidden = true;
   editSettingsBtn.textContent = "Edit settings…";
+  revertCheckpointBtn.hidden = true;
   startError.textContent = "";
   workspacePathEl.textContent = "No workspace selected — optional, you can just chat";
   aboutWorkspace.textContent = "(none selected)";

@@ -9,6 +9,7 @@ import { isEmbeddedModelId } from "../models.js";
 import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, ChatMessage, ModelProvider, PermissionMode } from "../types.js";
+import { revertToCheckpoint } from "../checkpoints.js";
 
 export type ProviderConfig =
   | { kind: "openai-compatible"; baseUrl: string; model: string }
@@ -201,6 +202,30 @@ export function getLiveSessionSnapshot(registry: SessionRegistry, sessionId: str
     createdAt: entry.createdAt,
     ownerEmail: entry.ownerEmail,
   };
+}
+
+/** Whether the session currently has a checkpoint to revert to — used by the renderer to decide whether to show "Revert this task" at all. */
+export function getCheckpointHash(registry: SessionRegistry, sessionId: string): string | null {
+  return registry.sessions.get(sessionId)?.session.getCheckpointHash() ?? null;
+}
+
+/**
+ * Reverts the session's workspace to its current checkpoint (see
+ * AgentSession.getCheckpointHash — one per task, the most recent task that
+ * actually wrote/executed something). Refuses while a task is actively
+ * running: reverting mid-write risks either the in-flight write completing
+ * AFTER the revert (silently undoing it) or corrupting a file the revert
+ * and the write touch at the same instant — neither is a checkpoint bug to
+ * paper over, it's a real race to refuse outright instead.
+ */
+export async function revertSessionCheckpoint(registry: SessionRegistry, sessionId: string): Promise<{ ok: boolean; error?: string }> {
+  const entry = registry.sessions.get(sessionId);
+  if (!entry) return { ok: false, error: "Unknown session." };
+  if (entry.running) return { ok: false, error: "Can't revert while a task is running." };
+  const hash = entry.session.getCheckpointHash();
+  if (!hash) return { ok: false, error: "No checkpoint available for this session." };
+  await revertToCheckpoint(entry.session.getWorkspaceRoot(), hash);
+  return { ok: true };
 }
 
 async function persistSession(registry: SessionRegistry, sessionId: string, entry: SessionEntry): Promise<void> {

@@ -391,11 +391,15 @@ the exact same core interchangeably, and the desktop app was added with
 
 This is a vertical slice proving the harness is real and correct, not the
 full spec. Not built: a VS Code extension, Tree-sitter/LSP symbol
-intelligence, subagents, an MCP client, hooks, checkpoints/undo via git
-worktrees, sandboxed execution, and — within the Electron app itself —
-multi-session/tabs, a diff viewer, and Drive delete-propagation (deleting
-a session while signed out can reappear on the next sign-in; documented,
-not yet fixed).
+intelligence, subagents, an MCP client, hooks, sandboxed execution, and —
+within the Electron app itself — multi-session/tabs and Drive
+delete-propagation (deleting a session while signed out can reappear on
+the next sign-in; documented, not yet fixed).
+
+A real diff viewer and one-checkpoint-per-task revert (git repos only,
+via `git stash create` against a scratch index — never touches your
+actual index, HEAD, or branch) now exist; per-hunk approval and a deeper
+multi-checkpoint undo history don't.
 
 The architecture is intentionally the part designed to extend into all of
 that without rework — the provider interface, tool interface, permission

@@ -89,5 +89,6 @@ export type AgentEvent =
   | { type: "tool.start"; call: ToolCall }
   | { type: "tool.result"; call: ToolCall; result: ToolResult }
   | { type: "permission.request"; call: ToolCall; decision: PermissionDecision; diff?: Change[] }
+  | { type: "checkpoint.created"; checkpointHash: string }
   | { type: "done"; success: boolean; summary: string }
   | { type: "error"; message: string };

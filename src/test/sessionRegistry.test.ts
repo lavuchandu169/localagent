@@ -2,6 +2,8 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   createSessionRegistry,
   startSession,
@@ -12,6 +14,8 @@ import {
   buildProvider,
   getLiveSessionSnapshot,
   updateLiveSessionSettings,
+  getCheckpointHash,
+  revertSessionCheckpoint,
 } from "../electron/sessionRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { loadSessionRecord } from "../sessionStore.js";
@@ -594,6 +598,86 @@ await (async () => {
     check("updateLiveSessionSettings returns true for a live session", updated);
     const notFound = updateLiveSessionSettings(registry, "nope-not-real", { mode: "PLAN" });
     check("updateLiveSessionSettings returns false for an unknown session id", !notFound);
+  }
+
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    check("getCheckpointHash returns null for an unknown session id", getCheckpointHash(registry, "nope") === null);
+    const noCheckpointResult = await revertSessionCheckpoint(registry, "nope");
+    check("revertSessionCheckpoint returns ok:false for an unknown session id", noCheckpointResult.ok === false && !!noCheckpointResult.error);
+  }
+
+  {
+    // Real end-to-end through the registry API specifically (checkpoints.ts
+    // and AgentSession's own checkpoint wiring are already thoroughly
+    // tested elsewhere) — this just proves getCheckpointHash/
+    // revertSessionCheckpoint correctly read through to the live session
+    // and use ITS OWN getWorkspaceRoot(), not some other stored value.
+    const execFileAsync = promisify(execFile);
+    const git = async (cwd: string, args: string[]) => (await execFileAsync("git", args, { cwd })).stdout.trim();
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-registry-checkpoint-test-"));
+    await git(repo, ["init", "-q"]);
+    await git(repo, ["config", "user.email", "test@example.com"]);
+    await git(repo, ["config", "user.name", "Test"]);
+    await fs.writeFile(path.join(repo, "app.js"), "v1\n", "utf-8");
+    await git(repo, ["add", "-A"]);
+    await git(repo, ["commit", "-q", "-m", "initial"]);
+
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot: repo, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      {
+        providerFactory: () =>
+          new MockProvider([
+            // A read before the edit — otherwise the read-before-write
+            // safety override forces an ASK even in ACCEPT_EDITS, and
+            // sessionRegistry's real approval flow (unlike a raw
+            // AgentSession test) waits on an actual respondPermission()
+            // call that nothing in this test would ever send, hanging
+            // runTask forever instead of failing fast.
+            { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "app.js" } }] } },
+            { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "app.js", content: "v2\n" } }] } },
+            { turn: { type: "final", content: "done" } },
+          ]),
+      }
+    );
+
+    check("no checkpoint exists before any task runs", getCheckpointHash(registry, sessionId) === null);
+    const noCheckpointYet = await revertSessionCheckpoint(registry, sessionId);
+    check("reverting before any checkpoint exists fails with a clear error, not a crash", noCheckpointYet.ok === false && noCheckpointYet.error === "No checkpoint available for this session.");
+
+    await runTask(registry, sessionId, "bump the version", () => {});
+    const hash = getCheckpointHash(registry, sessionId);
+    check("a checkpoint exists after a task that wrote something", typeof hash === "string" && hash.length > 0);
+    const afterEdit = await fs.readFile(path.join(repo, "app.js"), "utf-8");
+    check("the edit actually applied", afterEdit === "v2\n");
+
+    const result = await revertSessionCheckpoint(registry, sessionId);
+    check("revertSessionCheckpoint reports ok:true for a real revert", result.ok === true);
+    const afterRevert = await fs.readFile(path.join(repo, "app.js"), "utf-8");
+    check("the workspace is actually back to its pre-task content", afterRevert === "v1\n");
+
+    await fs.rm(repo, { recursive: true, force: true });
+  }
+
+  {
+    // The running-guard: revertSessionCheckpoint must refuse while a task
+    // is actively in flight, not race a write against the revert.
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
+    );
+    const runPromise = runTask(registry, sessionId, "do something", () => {});
+    // entry.running is set synchronously inside runTask before its first
+    // await, so this check — made before awaiting runPromise — reliably
+    // lands while the task is still "running" from the registry's view,
+    // regardless of how fast MockProvider itself resolves.
+    const whileRunning = await revertSessionCheckpoint(registry, sessionId);
+    check("revertSessionCheckpoint refuses while a task is running", whileRunning.ok === false && whileRunning.error === "Can't revert while a task is running.");
+    await runPromise;
   }
 
   await fs.rm(sessionsDir, { recursive: true, force: true });

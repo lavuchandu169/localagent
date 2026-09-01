@@ -839,6 +839,15 @@ label .hint-text {
   margin-top: 4px;
 }
 
+#revert-checkpoint {
+  border-color: var(--warn-dot);
+  color: var(--warn);
+}
+
+#revert-checkpoint:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warn-dot) 12%, var(--surface));
+}
+
 .diff-view {
   margin-top: 6px;
   border: 1px solid var(--line);
