@@ -16,6 +16,7 @@ import {
   updateLiveSessionSettings,
   getCheckpointHash,
   revertSessionCheckpoint,
+  getSessionChanges,
 } from "../electron/sessionRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { loadSessionRecord } from "../sessionStore.js";
@@ -657,6 +658,56 @@ await (async () => {
     check("revertSessionCheckpoint reports ok:true for a real revert", result.ok === true);
     const afterRevert = await fs.readFile(path.join(repo, "app.js"), "utf-8");
     check("the workspace is actually back to its pre-task content", afterRevert === "v1\n");
+
+    await fs.rm(repo, { recursive: true, force: true });
+  }
+
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    const noSession = await getSessionChanges(registry, "nope");
+    check("getSessionChanges returns ok:false for an unknown session id", noSession.ok === false && !!noSession.error);
+  }
+
+  {
+    // Real end-to-end through the registry API — changesSince.ts's own
+    // git-plumbing correctness is already covered in its own test file;
+    // this just proves getSessionChanges reads through to the live
+    // session's real checkpoint and workspace.
+    const execFileAsync = promisify(execFile);
+    const git = async (cwd: string, args: string[]) => (await execFileAsync("git", args, { cwd })).stdout.trim();
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-registry-changes-test-"));
+    await git(repo, ["init", "-q"]);
+    await git(repo, ["config", "user.email", "test@example.com"]);
+    await git(repo, ["config", "user.name", "Test"]);
+    await fs.writeFile(path.join(repo, "app.js"), "v1\n", "utf-8");
+    await git(repo, ["add", "-A"]);
+    await git(repo, ["commit", "-q", "-m", "initial"]);
+
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot: repo, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      {
+        providerFactory: () =>
+          new MockProvider([
+            { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "app.js" } }] } },
+            { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "app.js", content: "v2\n" } }] } },
+            { turn: { type: "final", content: "done" } },
+          ]),
+      }
+    );
+
+    const beforeCheckpoint = await getSessionChanges(registry, sessionId);
+    check("no checkpoint yet reports ok:false with a clear error", beforeCheckpoint.ok === false && beforeCheckpoint.error === "No checkpoint available for this session.");
+
+    await runTask(registry, sessionId, "bump the version", () => {});
+
+    const changesResult = await getSessionChanges(registry, sessionId);
+    if (!changesResult.ok) throw new Error(`expected ok:true, got error: ${changesResult.error}`);
+    check("reports exactly the 1 changed file", changesResult.changes.length === 1);
+    check("the changed file is app.js, reported as modified", changesResult.changes[0]?.path === "app.js" && changesResult.changes[0]?.status === "modified");
+    check("its diff shows the old content removed", !!changesResult.changes[0]?.diff.some((c) => c.removed && c.value === "v1\n"));
+    check("its diff shows the new content added", !!changesResult.changes[0]?.diff.some((c) => c.added && c.value === "v2\n"));
 
     await fs.rm(repo, { recursive: true, force: true });
   }

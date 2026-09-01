@@ -1,6 +1,7 @@
 import type { AgentEvent, ChatMessage, PermissionMode, ToolCall } from "../../types.js";
 import type { Change } from "diff";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
+import type { FileChangeWithDiff } from "../../changesSince.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 
@@ -66,6 +67,7 @@ interface AgentBridge {
   cancelSession(sessionId: string): Promise<void>;
   getCheckpoint(sessionId: string): Promise<string | null>;
   revertCheckpoint(sessionId: string): Promise<{ ok: boolean; error?: string }>;
+  getChanges(sessionId: string): Promise<{ ok: true; changes: FileChangeWithDiff[] } | { ok: false; error: string }>;
   pickWorkspace(): Promise<string | null>;
   onEvent(callback: (sessionId: string, event: AgentEvent) => void): () => void;
   onDownloadProgress(callback: (status: DownloadProgress) => void): () => void;
@@ -202,6 +204,10 @@ const cancelDownloadBtn = byId<HTMLButtonElement>("cancel-download");
 const activeModelBadge = byId<HTMLDivElement>("active-model-badge");
 const editSettingsBtn = byId<HTMLButtonElement>("edit-settings");
 const revertCheckpointBtn = byId<HTMLButtonElement>("revert-checkpoint");
+const viewChangesBtn = byId<HTMLButtonElement>("view-changes");
+const changesPanel = byId<HTMLDivElement>("changes-panel");
+const changesPanelBody = byId<HTMLDivElement>("changes-panel-body");
+const changesPanelClose = byId<HTMLButtonElement>("changes-panel-close");
 const downloadedModelsList = byId<HTMLUListElement>("downloaded-models-list");
 const downloadedModelsEmpty = byId<HTMLDivElement>("downloaded-models-empty");
 const sidebarSessionList = byId<HTMLDivElement>("session-list");
@@ -472,13 +478,14 @@ settingsClose.addEventListener("click", closeSettingsPanel);
 // Escape closes whichever of these dismissible panels/the onboarding
 // modal is currently open — the standard keyboard expectation. Onboarding
 // takes priority since it's the only truly modal one (blocks the rest of
-// the page); it can't be open at the same time as the other two anyway
+// the page); it can't be open at the same time as the others anyway
 // (nothing else is interactive until it's dismissed).
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!onboardingOverlay.hidden) dismissOnboarding();
   else if (!aboutPanel.hidden) closeAboutPanel();
   else if (!settingsPanel.hidden) closeSettingsPanel();
+  else if (!changesPanel.hidden) closeChangesPanel();
 });
 
 // A focus trap for the onboarding modal specifically — it's the one truly
@@ -686,6 +693,7 @@ function renderEvent(event: AgentEvent): void {
     case "checkpoint.created":
       logLine("[checkpoint] Saved — this task can now be reverted.", "log-status");
       revertCheckpointBtn.hidden = false;
+      viewChangesBtn.hidden = false;
       break;
     case "text":
       logLine(event.text, "log-text");
@@ -779,6 +787,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
     editSettingsBtn.textContent = "Edit settings…";
     editSettingsBtn.hidden = false;
     revertCheckpointBtn.hidden = true; // a fresh/resumed/edited session has no checkpoint of its own yet — see the checkpoint.created event handler
+    viewChangesBtn.hidden = true;
     activeProviderConfig = provider;
     // Chat-first once a session is running: the setup form collapses out of
     // the way (Edit settings… brings it back) and a tab appears for the
@@ -839,6 +848,9 @@ revertCheckpointBtn.addEventListener("click", () => {
     if (result.ok) {
       logLine("[checkpoint] Reverted — the workspace is back to how it was before this task.", "log-done");
       revertCheckpointBtn.hidden = true;
+      // Nothing's changed anymore — reverting undid it all.
+      viewChangesBtn.hidden = true;
+      changesPanel.hidden = true;
     } else {
       // Same graceful-failure posture as everywhere else in this app: show
       // the real reason (most likely "a task is running") rather than
@@ -847,6 +859,79 @@ revertCheckpointBtn.addEventListener("click", () => {
     }
   });
 });
+
+const CHANGE_STATUS_LABEL: Record<FileChangeWithDiff["status"], string> = { added: "A", modified: "M", deleted: "D" };
+
+/** Sums the line count of every added (or every removed) chunk in a diff — the +N/-M counts shown next to each file, same source data renderDiff already walks. */
+function countDiffLines(diff: FileChangeWithDiff["diff"], kind: "added" | "removed"): number {
+  return diff.reduce((total, chunk) => total + (chunk[kind] ? (chunk.count ?? 0) : 0), 0);
+}
+
+/**
+ * Renders the "Files changed" panel — one section per file (path, status
+ * badge, +insertions/-deletions), each followed by its diff rendered with
+ * the exact same renderDiff() the per-edit approval view uses, so a whole
+ * task's changes read like a single GitHub commit/PR page instead of
+ * being scattered across individual approval prompts in the log.
+ */
+function renderChangesPanel(changes: FileChangeWithDiff[]): void {
+  changesPanelBody.innerHTML = "";
+  if (changes.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "hint-text";
+    empty.textContent = "No changes since the checkpoint.";
+    changesPanelBody.appendChild(empty);
+    return;
+  }
+  for (const file of changes) {
+    const section = document.createElement("div");
+    section.className = "changed-file";
+
+    const header = document.createElement("div");
+    header.className = "changed-file-header";
+    const badge = document.createElement("span");
+    badge.className = `change-status change-status-${file.status}`;
+    badge.textContent = CHANGE_STATUS_LABEL[file.status];
+    header.appendChild(badge);
+    const pathEl = document.createElement("span");
+    pathEl.className = "changed-file-path";
+    pathEl.textContent = file.path;
+    header.appendChild(pathEl);
+    const added = countDiffLines(file.diff, "added");
+    const removed = countDiffLines(file.diff, "removed");
+    const counts = document.createElement("span");
+    counts.className = "changed-file-counts";
+    counts.innerHTML = `<span class="diff-added-count">+${added}</span> <span class="diff-removed-count">-${removed}</span>`;
+    header.appendChild(counts);
+    section.appendChild(header);
+
+    section.appendChild(renderDiff(file.diff));
+    changesPanelBody.appendChild(section);
+  }
+}
+
+/** Same contract as closeAboutPanel/closeSettingsPanel — hide, return focus to the toggle. */
+function closeChangesPanel(): void {
+  changesPanel.hidden = true;
+  viewChangesBtn.focus();
+}
+
+viewChangesBtn.addEventListener("click", () => {
+  if (!sessionId) return;
+  const idToView = sessionId;
+  void withBusyLabel(viewChangesBtn, "Loading…", async () => {
+    const result = await window.agent.getChanges(idToView);
+    if (result.ok) {
+      renderChangesPanel(result.changes);
+      changesPanel.hidden = false;
+      changesPanelClose.focus();
+    } else {
+      logLine(`[changes] Couldn't load changes: ${result.error}`, "log-error");
+    }
+  });
+});
+
+changesPanelClose.addEventListener("click", closeChangesPanel);
 
 function providerConfigsEqual(a: ProviderConfig, b: ProviderConfig): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -959,6 +1044,8 @@ function resetToSetup(): void {
   editSettingsBtn.hidden = true;
   editSettingsBtn.textContent = "Edit settings…";
   revertCheckpointBtn.hidden = true;
+  viewChangesBtn.hidden = true;
+  changesPanel.hidden = true;
   startError.textContent = "";
   setWorkspaceText("No workspace selected — optional, you can just chat");
   aboutWorkspace.textContent = "(none selected)";

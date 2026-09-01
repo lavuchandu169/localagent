@@ -70,6 +70,14 @@
           <div id="tab-item"><span id="tab-dot"></span><span id="tab-label"></span></div>
         </div>
 
+        <div id="changes-panel" hidden>
+          <div id="changes-panel-header">
+            <span>Files changed</span>
+            <button id="changes-panel-close" type="button" aria-label="Close">Close</button>
+          </div>
+          <div id="changes-panel-body"></div>
+        </div>
+
         <div id="update-banner" hidden>
           <span id="update-banner-text"></span>
           <a id="update-banner-link" href="#" target="_blank" rel="noopener">View release</a>
@@ -206,6 +214,7 @@
             <span id="status-workspace"></span>
             <div id="active-model-badge" hidden></div>
             <button id="edit-settings" type="button" hidden>Edit settings…</button>
+            <button id="view-changes" type="button" hidden title="See every file changed since this task's checkpoint, with diffs — like a commit's Files Changed view.">Changes</button>
             <button id="revert-checkpoint" type="button" hidden title="Restores the workspace to how it was right before this task's first edit or command — including removing any file the task created since.">Revert this task</button>
           </div>
         </section>

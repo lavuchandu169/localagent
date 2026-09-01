@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("agent", {
   cancelSession: (sessionId) => ipcRenderer.invoke("agent:cancel-session", sessionId),
   getCheckpoint: (sessionId) => ipcRenderer.invoke("agent:get-checkpoint", sessionId),
   revertCheckpoint: (sessionId) => ipcRenderer.invoke("agent:revert-checkpoint", sessionId),
+  getChanges: (sessionId) => ipcRenderer.invoke("agent:get-changes", sessionId),
   pickWorkspace: () => ipcRenderer.invoke("agent:pick-workspace"),
   listCachedModels: () => ipcRenderer.invoke("agent:list-cached-models"),
   deleteCachedModel: (id) => ipcRenderer.invoke("agent:delete-cached-model", id),

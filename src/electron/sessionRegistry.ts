@@ -10,6 +10,7 @@ import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, ChatMessage, ModelProvider, PermissionMode } from "../types.js";
 import { revertToCheckpoint } from "../checkpoints.js";
+import { getChanges, type FileChangeWithDiff } from "../changesSince.js";
 
 export type ProviderConfig =
   | { kind: "openai-compatible"; baseUrl: string; model: string }
@@ -226,6 +227,28 @@ export async function revertSessionCheckpoint(registry: SessionRegistry, session
   if (!hash) return { ok: false, error: "No checkpoint available for this session." };
   await revertToCheckpoint(entry.session.getWorkspaceRoot(), hash);
   return { ok: true };
+}
+
+/**
+ * Every file changed since the session's current checkpoint, each with its
+ * full diff attached — read-only, so unlike revertSessionCheckpoint this is
+ * safe to call even while a task is actively running (it's just a snapshot
+ * of that instant, not a mutation racing the task's own writes).
+ */
+export async function getSessionChanges(
+  registry: SessionRegistry,
+  sessionId: string
+): Promise<{ ok: true; changes: FileChangeWithDiff[] } | { ok: false; error: string }> {
+  const entry = registry.sessions.get(sessionId);
+  if (!entry) return { ok: false, error: "Unknown session." };
+  const hash = entry.session.getCheckpointHash();
+  if (!hash) return { ok: false, error: "No checkpoint available for this session." };
+  try {
+    const changes = await getChanges(entry.session.getWorkspaceRoot(), hash);
+    return { ok: true, changes };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 async function persistSession(registry: SessionRegistry, sessionId: string, entry: SessionEntry): Promise<void> {

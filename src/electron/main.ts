@@ -12,7 +12,7 @@ import path from "node:path";
 import os from "node:os";
 import fsPromises from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import type { PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
@@ -231,6 +231,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle("agent:get-checkpoint", (_event, sessionId: string) => getCheckpointHash(registry, sessionId));
   ipcMain.handle("agent:revert-checkpoint", (_event, sessionId: string) => revertSessionCheckpoint(registry, sessionId));
+  ipcMain.handle("agent:get-changes", (_event, sessionId: string) => getSessionChanges(registry, sessionId));
 
   ipcMain.handle("agent:list-cached-models", () => checkCachedModels());
 

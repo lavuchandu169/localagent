@@ -477,6 +477,106 @@ summary:focus-visible {
   font-family: var(--font-sans);
 }
 
+/* The "Files changed" panel — like about/settings it's a dismissible
+   panel pushed into the document flow, but its content (a whole task's
+   worth of file diffs) can get long, so it scrolls within its own
+   bounded height instead of pushing the chat log down to nothing. */
+#changes-panel {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+  max-height: 45vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* #changes-panel's own `display: flex` is author-origin and beats the UA
+   [hidden] rule regardless of specificity — same pattern as #download-progress
+   and the others below. */
+#changes-panel[hidden] {
+  display: none;
+}
+
+#changes-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+#changes-panel-close {
+  font-size: 11px;
+  padding: 3px 9px;
+}
+
+#changes-panel-body {
+  overflow-y: auto;
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.changed-file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.change-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-weight: 700;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.change-status-added {
+  background: var(--diff-added-bg);
+  color: var(--diff-added);
+}
+
+.change-status-modified {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
+
+.change-status-deleted {
+  background: var(--diff-removed-bg);
+  color: var(--diff-removed);
+}
+
+.changed-file-path {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.changed-file-counts {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.diff-added-count {
+  color: var(--diff-added);
+}
+
+.diff-removed-count {
+  color: var(--diff-removed);
+}
+
 #about-panel p,
 #settings-panel p {
   margin: 0 0 10px;
@@ -732,6 +832,11 @@ label .hint-text {
   white-space: nowrap;
   flex-shrink: 1;
   min-width: 0;
+  /* Pushes everything after it (badge + however many of edit-settings/
+     view-changes/revert-checkpoint happen to be visible) to the right
+     edge — the container's own `gap` already spaces those out evenly,
+     so no per-button margin juggling is needed as visibility changes. */
+  margin-right: auto;
 }
 
 #status-workspace:empty {
@@ -749,8 +854,8 @@ label .hint-text {
 }
 
 #status-bar #edit-settings,
+#status-bar #view-changes,
 #status-bar #revert-checkpoint {
-  margin-left: auto;
   background: transparent;
   border: 1px solid var(--statusbar-text);
   color: var(--statusbar-text);
@@ -758,12 +863,8 @@ label .hint-text {
   padding: 3px 8px;
 }
 
-#status-bar #revert-checkpoint {
-  margin-left: 8px;
-  border-color: var(--statusbar-text);
-}
-
 #status-bar #edit-settings:hover:not(:disabled),
+#status-bar #view-changes:hover:not(:disabled),
 #status-bar #revert-checkpoint:hover:not(:disabled) {
   background: rgba(0, 0, 0, 0.15);
 }
