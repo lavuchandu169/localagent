@@ -3,6 +3,17 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.17 — 2026-09-01
+
+- New logo: a lambda mark on the dark IDE badge, replacing the old
+  cream/terracotta ring-and-dot from the retired warm-paper theme —
+  in the header and the packaged app icon.
+- A GitHub-style "Files changed" view: a "Changes" button next to
+  "Revert this task" opens a panel listing every file changed since
+  the task's checkpoint (added/modified/deleted, +/- counts), each
+  with its full diff — everything the task has done so far, in one
+  place, instead of scattered across individual approval prompts.
+
 ## v0.1.0-beta.16 — 2026-09-01
 
 - Redesigned the UI as a switchable dark IDE theme: an activity bar,
