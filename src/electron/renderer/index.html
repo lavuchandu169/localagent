@@ -24,9 +24,14 @@
     </div>
 
     <div id="app-shell">
+      <nav id="activity-bar" aria-label="Panels">
+        <button id="settings-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="Settings" aria-label="Settings">⚙</button>
+        <button id="about-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="About" aria-label="About">?</button>
+      </nav>
+
       <aside id="sidebar">
         <div id="sidebar-header">
-          <span id="sidebar-title">History</span>
+          <span id="sidebar-title">Sessions</span>
           <button id="new-session-btn" title="Start a new session — your current chat stays saved in the sidebar, one click away" aria-label="Start a new session">+</button>
         </div>
         <input id="session-search" type="search" placeholder="Search sessions…" />
@@ -58,10 +63,12 @@
               </div>
               <div id="auth-error" class="error-text"></div>
             </div>
-            <button id="settings-toggle" aria-expanded="false" aria-haspopup="true" title="Settings" aria-label="Settings">⚙</button>
-            <button id="about-toggle" aria-expanded="false" aria-haspopup="true" title="About" aria-label="About">?</button>
           </div>
         </header>
+
+        <div id="tab-bar" hidden>
+          <div id="tab-item"><span id="tab-dot"></span><span id="tab-label"></span></div>
+        </div>
 
         <div id="update-banner" hidden>
           <span id="update-banner-text"></span>
@@ -85,6 +92,16 @@
         </div>
 
         <div id="settings-panel" hidden>
+          <p>Appearance — pick the color theme.</p>
+          <label>
+            Theme
+            <select id="theme-select">
+              <option value="warm-dark">Warm Dark</option>
+              <option value="mono-ink">Mono Ink</option>
+            </select>
+          </label>
+
+          <hr />
           <p>Google sign-in needs your own OAuth Client ID (and sometimes a Client Secret) from Google Cloud Console. Saved locally, used only to sign in.</p>
           <ol>
             <li><a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a> → create or select a project.</li>
@@ -173,22 +190,23 @@
           </div>
         </section>
 
-        <section id="run">
-          <div class="row">
-            <div id="active-model-badge" hidden></div>
-            <button id="edit-settings" type="button" hidden>Edit settings…</button>
-            <button id="revert-checkpoint" type="button" hidden title="Restores the workspace to how it was right before this task's first edit or command — including removing any file the task created since.">Revert this task</button>
+        <section id="log-section">
+          <div id="event-log" role="log" aria-live="polite">
+            <div id="empty-state">Start a session, then describe a task — every read, edit, and command the agent runs will show up here.</div>
           </div>
-          <div class="row">
+        </section>
+
+        <section id="run">
+          <div class="row" id="composer-row">
             <textarea id="task-input" placeholder="Describe the task…" disabled></textarea>
             <button id="run-task" class="primary" disabled>Run</button>
           </div>
           <div id="task-input-hint" class="hint-text">Enter to run · Shift+Enter for a new line</div>
-        </section>
-
-        <section id="log-section">
-          <div id="event-log" role="log" aria-live="polite">
-            <div id="empty-state">Start a session, then describe a task — every read, edit, and command the agent runs will show up here.</div>
+          <div class="row" id="status-bar">
+            <span id="status-workspace"></span>
+            <div id="active-model-badge" hidden></div>
+            <button id="edit-settings" type="button" hidden>Edit settings…</button>
+            <button id="revert-checkpoint" type="button" hidden title="Restores the workspace to how it was right before this task's first edit or command — including removing any file the task created since.">Revert this task</button>
           </div>
         </section>
       </div>

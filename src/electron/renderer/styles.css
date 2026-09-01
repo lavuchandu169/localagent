@@ -33,40 +33,56 @@
   font-style: normal;
   font-display: swap;
 }
-@font-face {
-  font-family: "Source Serif 4";
-  src: url("./fonts/source-serif-4-latin-400-normal.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Source Serif 4";
-  src: url("./fonts/source-serif-4-latin-600-normal.woff2") format("woff2");
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
-}
 
+/*
+ * Two IDE-inspired dark themes, switched at runtime via [data-theme] on
+ * <html> (see renderer.ts's applyTheme/themeSelect). "Warm Dark" (default)
+ * carries localagent's existing terracotta accent into a dark shell; "Mono
+ * Ink" is pure grayscale with one quiet teal accent. Every color used
+ * anywhere below reads from one of these tokens — never a bare hex — so a
+ * theme switch is a single attribute change, not a stylesheet swap.
+ */
 :root {
-  color-scheme: light;
-  --paper: #f5f3ec;
-  --surface: #ffffff;
-  --surface-2: #ede9dd;
-  --line: #e4e0d3;
-  --ink: #2b2823;
-  --ink-dim: #6b6656;
-  /* Decorative-only (dots, fills, icons) — not text-contrast-checked against paper/surface. */
-  --accent: #c15f3c;
-  --warn-dot: #d89a2e;
-  /* Text-safe (checked ≥4.5:1 against --paper #f5f3ec). */
-  --accent-strong: #9c4a2e;
-  --warn: #7a5209;
-  --danger: #ab3434;
+  color-scheme: dark;
 
-  --font-serif: "Source Serif 4", Georgia, serif;
+  --bg: #17140f;
+  --bg-panel: #1c1811;
+  --bg-raised: #201b13;
+  --border: #0f0d09;
+  --text: #d8d2c2;
+  --text-dim: #8a8270;
+  --accent: #c15f3c;
+  --accent-contrast: #17140f;
+  --warn: #d89a2e;
+  --danger: #f85149;
+  --gutter-you: #d89a2e;
+  --gutter-agent: #c15f3c;
+  --statusbar-bg: #c15f3c;
+  --statusbar-text: #17140f;
+  --diff-added: #3fb950;
+  --diff-added-bg: rgba(63, 185, 80, 0.15);
+  --diff-removed: #f85149;
+  --diff-removed-bg: rgba(248, 81, 73, 0.15);
+
   --font-sans: "Public Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace;
+}
+
+:root[data-theme="mono-ink"] {
+  --bg: #121212;
+  --bg-panel: #171717;
+  --bg-raised: #1c1c1c;
+  --border: #050505;
+  --text: #d4d4d4;
+  --text-dim: #6e6e6e;
+  --accent: #7fb8a0;
+  --accent-contrast: #0d1512;
+  --warn: #d8c27f;
+  --danger: #f85149;
+  --gutter-you: #8a8a8a;
+  --gutter-agent: #7fb8a0;
+  --statusbar-bg: #262626;
+  --statusbar-text: #d4d4d4;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -85,9 +101,9 @@
 
 body {
   margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
   font-size: 13px;
   height: 100vh;
   overflow: hidden;
@@ -99,15 +115,51 @@ body {
   height: 100vh;
 }
 
+#activity-bar {
+  width: 40px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding-top: 10px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+}
+
+.activity-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.activity-icon:hover {
+  color: var(--text);
+  background: var(--bg-raised);
+}
+
+.activity-icon[aria-expanded="true"] {
+  color: var(--text);
+  border-left: 2px solid var(--accent);
+  border-radius: 0;
+}
+
 #sidebar {
-  width: 220px;
+  width: 200px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px;
-  border-right: 1px solid var(--line);
-  background: var(--surface-2);
+  padding: 10px 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
   overflow-y: auto;
 }
 
@@ -115,36 +167,41 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 0 10px;
 }
 
 #sidebar-title {
-  font-family: var(--font-serif);
+  font-family: var(--font-mono);
   font-weight: 600;
-  font-size: 13px;
-  color: var(--ink);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
 }
 
 #new-session-btn {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
   padding: 0;
   background: transparent;
-  color: var(--ink-dim);
-  border: 1px solid var(--line);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1;
 }
 
 #new-session-btn:hover {
-  color: var(--ink);
-  border-color: var(--ink-dim);
+  color: var(--text);
+  border-color: var(--text-dim);
 }
 
 #session-search {
-  font-size: 12px;
-  padding: 5px 8px;
+  font-size: 11px;
+  padding: 5px 10px;
+  margin: 0 10px;
+  width: calc(100% - 20px);
 }
 
 #session-list {
@@ -153,31 +210,30 @@ body {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  padding: 0 6px;
 }
 
 #session-list-empty {
-  font-size: 11px;
-  padding: 8px 4px;
+  font-size: 10px;
+  padding: 8px 6px;
 }
 
 .session-item {
   display: flex;
   align-items: center;
   gap: 4px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 4px 4px 4px 9px;
+  border-radius: 4px;
+  padding: 4px 4px 4px 8px;
 }
 
 .session-item:hover {
-  border-color: var(--ink-dim);
+  background: var(--bg-raised);
 }
 
 .session-item.active {
-  border-color: var(--accent-strong);
-  background: var(--surface-2);
+  background: var(--bg-raised);
+  border-left: 2px solid var(--accent);
 }
 
 .session-item-label {
@@ -187,8 +243,8 @@ body {
   background: transparent;
   border: none;
   padding: 3px 0;
-  font-size: 12px;
-  color: var(--ink);
+  font-size: 11px;
+  color: var(--text);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -197,15 +253,15 @@ body {
 
 .session-item-delete {
   flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
   padding: 0;
   background: transparent;
   border: none;
-  color: var(--ink-dim);
+  color: var(--text-dim);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
 }
 
@@ -234,10 +290,10 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line);
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  background: var(--surface);
+  background: var(--bg-panel);
 }
 
 #brand {
@@ -247,33 +303,15 @@ summary:focus-visible {
 }
 
 #brand-mark {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 #brand-name {
-  font-family: var(--font-serif);
+  font-family: var(--font-mono);
   font-weight: 600;
-  font-size: 15px;
-  color: var(--ink);
-}
-
-#about-toggle {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  padding: 0;
-  background: transparent;
-  color: var(--ink-dim);
-  border: 1px solid var(--line);
-  cursor: pointer;
   font-size: 12px;
-  line-height: 1;
-}
-
-#about-toggle:hover {
-  color: var(--ink);
-  border-color: var(--ink-dim);
+  color: var(--text);
 }
 
 #header-right {
@@ -288,26 +326,28 @@ summary:focus-visible {
 }
 
 #auth-control button {
-  font-size: 12px;
-  padding: 5px 10px;
+  font-size: 11px;
+  padding: 4px 9px;
 }
 
 #auth-signed-in {
-  font-size: 12px;
-  color: var(--ink);
+  font-size: 11px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
 }
 
 #auth-avatar {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   background-size: cover;
   background-position: center;
-  color: var(--ink-dim);
+  color: var(--text-dim);
   font-family: var(--font-sans);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -317,7 +357,7 @@ summary:focus-visible {
 
 #auth-name {
   font-family: var(--font-sans);
-  color: var(--ink);
+  color: var(--text);
 }
 
 #auth-error {
@@ -328,6 +368,38 @@ summary:focus-visible {
   display: none;
 }
 
+/* One open "tab" for the active session, shown once beginSession succeeds
+   and hidden again by resetToSetup — see renderer.ts. */
+#tab-bar {
+  flex-shrink: 0;
+  display: flex;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+#tab-bar[hidden] {
+  display: none;
+}
+
+#tab-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+}
+
+#tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex-shrink: 0;
+}
+
 #onboarding-overlay {
   position: fixed;
   inset: 0;
@@ -335,7 +407,7 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(43, 40, 35, 0.55);
+  background: rgba(0, 0, 0, 0.6);
 }
 
 #onboarding-overlay[hidden] {
@@ -348,23 +420,25 @@ summary:focus-visible {
   max-height: calc(100vh - 48px);
   overflow-y: auto;
   padding: 24px;
-  border-radius: 14px;
-  background: var(--paper);
-  border: 1px solid var(--line);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 
 #onboarding-title {
   margin: 0 0 10px;
-  font-family: var(--font-serif);
-  font-size: 18px;
-  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
 }
 
 #onboarding-modal p {
   margin: 0 0 12px;
-  color: var(--ink);
+  color: var(--text);
   line-height: 1.5;
+  font-family: var(--font-sans);
 }
 
 #onboarding-modal dl {
@@ -372,17 +446,18 @@ summary:focus-visible {
   display: grid;
   grid-template-columns: auto;
   gap: 2px 0;
+  font-family: var(--font-sans);
 }
 
 #onboarding-modal dt {
   margin-top: 8px;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--text);
 }
 
 #onboarding-modal dd {
   margin: 0;
-  color: var(--ink-dim);
+  color: var(--text-dim);
   line-height: 1.45;
 }
 
@@ -393,17 +468,19 @@ summary:focus-visible {
 #about-panel,
 #settings-panel {
   padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
   font-size: 12px;
-  color: var(--ink-dim);
+  color: var(--text-dim);
   flex-shrink: 0;
+  overflow-y: auto;
+  font-family: var(--font-sans);
 }
 
 #about-panel p,
 #settings-panel p {
   margin: 0 0 10px;
-  color: var(--ink);
+  color: var(--text);
   line-height: 1.5;
 }
 
@@ -415,27 +492,34 @@ summary:focus-visible {
 }
 
 #about-panel dt {
-  color: var(--ink-dim);
+  color: var(--text-dim);
 }
 
 #about-panel dd {
   margin: 0;
   font-family: var(--font-mono);
-  color: var(--ink);
+  color: var(--text);
 }
 
 #settings-panel ol {
   margin: 0 0 10px;
   padding-left: 18px;
-  color: var(--ink);
+  color: var(--text);
   line-height: 1.5;
+}
+
+#settings-panel hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
 }
 
 #settings-panel label {
   margin-bottom: 8px;
 }
 
-#settings-panel input {
+#settings-panel input,
+#settings-panel select {
   margin-top: 2px;
   width: 320px;
   max-width: 100%;
@@ -447,9 +531,16 @@ summary:focus-visible {
 
 section {
   padding: 10px 16px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  background: var(--surface);
+  background: var(--bg-panel);
+}
+
+/* #setup lives inside the dark shell as a plain form now (no separate
+   light "card" treatment) and collapses out of the way once a session is
+   active — see renderer.ts's setupSection.hidden toggling. */
+#setup {
+  background: var(--bg);
 }
 
 .row {
@@ -467,13 +558,25 @@ label {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  font-size: 11px;
-  color: var(--ink-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  /* A row's flex item defaults to min-width:auto, so a <select> with a long
+     option label (e.g. "Qwen2.5-Coder 1.5B Instruct — fastest, lowest
+     memory — default · downloaded") would otherwise force the whole row —
+     and the window — wider than the viewport instead of truncating. */
+  flex: 1;
+  min-width: 0;
+}
+
+#setup select {
+  width: 100%;
 }
 
 .hint-text code {
   font-family: var(--font-mono);
-  background: var(--surface-2);
+  background: var(--bg-raised);
   border-radius: 3px;
   padding: 1px 4px;
   font-size: 10px;
@@ -485,10 +588,10 @@ textarea,
 button {
   font-family: inherit;
   font-size: 13px;
-  background: var(--surface);
-  color: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
   padding: 6px 8px;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
@@ -496,7 +599,7 @@ button {
 select:hover,
 input:hover,
 textarea:hover {
-  border-color: var(--ink-dim);
+  border-color: var(--text-dim);
 }
 
 button {
@@ -505,13 +608,14 @@ button {
 }
 
 button.primary {
-  background: var(--accent-strong);
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-contrast);
   border: none;
+  font-weight: 600;
 }
 
 button.primary:hover:not(:disabled) {
-  background: #843d24;
+  filter: brightness(1.1);
 }
 
 button:disabled,
@@ -523,8 +627,9 @@ input:disabled {
 
 .hint-text {
   font-size: 11px;
-  color: var(--ink-dim);
+  color: var(--text-dim);
   max-width: 320px;
+  font-family: var(--font-sans);
 }
 
 #update-banner {
@@ -532,10 +637,11 @@ input:disabled {
   align-items: center;
   gap: 10px;
   padding: 6px 16px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--line);
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
   font-size: 12px;
-  color: var(--ink);
+  color: var(--text);
+  font-family: var(--font-sans);
 }
 
 #update-banner-text {
@@ -543,8 +649,8 @@ input:disabled {
 }
 
 #update-banner-link {
-  color: var(--accent-strong);
-  font-weight: 500;
+  color: var(--accent);
+  font-weight: 600;
   text-decoration: none;
 }
 
@@ -555,7 +661,7 @@ input:disabled {
 #update-banner-dismiss {
   background: none;
   border: none;
-  color: var(--ink-dim);
+  color: var(--text-dim);
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
@@ -563,7 +669,7 @@ input:disabled {
 }
 
 #update-banner-dismiss:hover {
-  color: var(--ink);
+  color: var(--text);
 }
 
 /* label's own `display: flex; flex-direction: column` (above) would otherwise
@@ -571,11 +677,14 @@ input:disabled {
    after the label text — e.g. "Client Secret (only if Google asks for one)". */
 label .hint-text {
   display: inline;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 #task-input-hint {
   margin-top: 6px;
   max-width: none;
+  padding: 0 16px;
 }
 
 /* .row's `display: flex` is author-origin and beats the UA [hidden] rule
@@ -595,21 +704,74 @@ label .hint-text {
 }
 
 #workspace-path {
-  color: var(--ink-dim);
+  color: var(--text-dim);
   font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The collapsed status bar shown once a session is active — VS Code's own
+   signature: a solid accent-colored strip along the bottom, above the
+   composer. #status-workspace/#active-model-badge/#edit-settings/
+   #revert-checkpoint are the same elements the setup form and prior
+   design used; only their container and styling changed. */
+#status-bar {
+  background: var(--statusbar-bg);
+  color: var(--statusbar-text);
+  margin: 0;
+  padding: 4px 16px;
+  gap: 14px;
+  font-size: 11px;
+}
+
+#status-workspace {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+#status-workspace:empty {
+  display: none;
+}
+
+#status-bar #active-model-badge {
+  margin: 0;
+  max-width: none;
+  flex-shrink: 0;
+}
+
+#status-bar #active-model-badge .signal-dot {
+  background: var(--statusbar-text);
+}
+
+#status-bar #edit-settings,
+#status-bar #revert-checkpoint {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--statusbar-text);
+  color: var(--statusbar-text);
+  font-size: 10px;
+  padding: 3px 8px;
+}
+
+#status-bar #revert-checkpoint {
+  margin-left: 8px;
+  border-color: var(--statusbar-text);
+}
+
+#status-bar #edit-settings:hover:not(:disabled),
+#status-bar #revert-checkpoint:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.15);
+}
+
 #active-model-badge {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--ink-dim);
-  margin-bottom: 10px;
-  max-width: 720px;
-  margin-left: auto;
-  margin-right: auto;
+  color: var(--text-dim);
 }
 
 #active-model-badge .signal-dot {
@@ -621,18 +783,38 @@ label .hint-text {
   margin-right: 6px;
 }
 
+/* The composer: a terminal-style input bar docked at the bottom of the
+   window (#run comes after #log-section in the DOM — see index.html —
+   so the chat fills all the remaining height above it). */
+#run {
+  padding: 0;
+  background: var(--bg-panel);
+}
+
+#composer-row {
+  margin: 0;
+  padding: 10px 16px 0;
+  gap: 10px;
+}
+
 #run textarea {
   flex: 1;
-  min-height: 48px;
+  min-height: 40px;
   resize: vertical;
-  font-family: var(--font-sans);
-  border-radius: 14px;
-  padding: 10px 14px;
+  font-family: var(--font-mono);
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 9px 12px;
+}
+
+#run textarea::placeholder {
+  color: var(--text-dim);
 }
 
 .error-text {
   color: var(--danger);
   font-size: 12px;
+  font-family: var(--font-sans);
 }
 
 #download-progress {
@@ -650,8 +832,8 @@ label .hint-text {
 #download-bar-track {
   height: 8px;
   border-radius: 5px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   overflow: hidden;
 }
 
@@ -659,7 +841,7 @@ label .hint-text {
   height: 100%;
   width: 0%;
   border-radius: 5px;
-  background: linear-gradient(90deg, #c15f3c, #d89a2e, #9c4a2e, #c15f3c);
+  background: linear-gradient(90deg, var(--accent), var(--warn), var(--accent));
   background-size: 300% 100%;
   animation: download-shimmer 2.5s linear infinite;
   transition: width 0.25s ease;
@@ -677,7 +859,7 @@ label .hint-text {
 #download-label {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--ink-dim);
+  color: var(--text-dim);
 }
 
 #log-section {
@@ -686,6 +868,7 @@ label .hint-text {
   padding: 0;
   min-height: 0;
   display: flex;
+  background: var(--bg);
 }
 
 #event-log {
@@ -695,8 +878,7 @@ label .hint-text {
   flex-direction: column;
   gap: 10px;
   font-family: var(--font-mono);
-  /* Claude-style centered conversation column instead of edge-to-edge. */
-  max-width: 720px;
+  max-width: 760px;
   width: 100%;
   margin: 0 auto;
   /* Tool arguments/results can contain long unbreakable tokens (paths, blobs) —
@@ -710,7 +892,7 @@ label .hint-text {
 }
 
 #empty-state {
-  color: var(--ink-dim);
+  color: var(--text-dim);
   font-family: var(--font-sans);
   font-size: 12px;
   line-height: 1.7;
@@ -724,58 +906,62 @@ label .hint-text {
   width: 32px;
   height: 32px;
   margin: 0 auto 14px;
-  border-radius: 9px;
-  border: 2px solid var(--line);
+  border-radius: 6px;
+  border: 2px solid var(--border);
   background: radial-gradient(circle, var(--accent) 0 4px, transparent 5px);
   opacity: 0.5;
 }
 
 .log-status {
-  color: var(--ink-dim);
+  color: var(--text-dim);
   font-family: var(--font-sans);
   font-size: 12px;
 }
 
+/* No chat bubbles — each turn gets a colored left gutter instead, closer
+   to a source diff than a messaging app. "you" and "agent" are the only
+   two roles this app renders as full turns. */
 .log-task {
-  align-self: flex-end;
-  max-width: 75%;
-  background: var(--surface-2);
-  color: var(--ink);
+  align-self: stretch;
+  color: var(--text);
   font-family: var(--font-sans);
-  padding: 10px 14px;
-  border-radius: 16px 16px 4px 16px;
+  padding: 2px 2px 2px 12px;
+  border-left: 3px solid var(--gutter-you);
   white-space: pre-wrap;
 }
 
 .log-text {
   align-self: stretch;
   white-space: pre-wrap;
-  color: var(--ink);
-  padding: 2px 2px;
+  color: var(--text);
+  padding: 2px 2px 2px 12px;
+  border-left: 3px solid var(--gutter-agent);
   font-family: var(--font-sans);
   line-height: 1.65;
   font-size: 13.5px;
 }
 
 .log-done {
-  color: var(--accent-strong);
-  font-weight: 500;
+  color: var(--accent);
+  font-weight: 600;
   font-family: var(--font-sans);
   font-size: 12px;
 }
 
 .log-error {
   color: var(--danger);
-  font-weight: 500;
+  font-weight: 600;
   font-family: var(--font-sans);
   font-size: 12px;
 }
 
+/* Tool calls render as inline diagnostic pills (like a linter warning),
+   not cards with a card-shaped chrome. */
 .tool-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 8px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 10px;
   animation: card-in 0.15s ease;
 }
 
@@ -791,10 +977,11 @@ label .hint-text {
 }
 
 .tool-card-header {
-  color: var(--ink);
+  color: var(--text);
   display: flex;
   align-items: flex-start;
   gap: 7px;
+  font-size: 12px;
 }
 
 .pulse-dot {
@@ -803,11 +990,11 @@ label .hint-text {
   border-radius: 50%;
   flex-shrink: 0;
   margin-top: 3px;
-  background: var(--ink-dim);
+  background: var(--text-dim);
 }
 
 .tool-card.pending .pulse-dot {
-  background: var(--warn-dot);
+  background: var(--warn);
   animation: pulse 1.1s ease-in-out infinite;
 }
 
@@ -822,36 +1009,38 @@ label .hint-text {
 @keyframes pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn-dot) 55%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 55%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn-dot) 0%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 0%, transparent);
   }
 }
 
 .tool-card-ok {
-  color: var(--accent-strong);
+  color: var(--accent);
   margin-top: 4px;
+  font-size: 11px;
 }
 
 .tool-card-error {
   color: var(--danger);
   margin-top: 4px;
+  font-size: 11px;
 }
 
 #revert-checkpoint {
-  border-color: var(--warn-dot);
+  border-color: var(--warn);
   color: var(--warn);
 }
 
 #revert-checkpoint:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--warn-dot) 12%, var(--surface));
+  background: color-mix(in srgb, var(--warn) 12%, var(--bg-raised));
 }
 
 .diff-view {
   margin-top: 6px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -864,21 +1053,21 @@ label .hint-text {
 }
 
 .diff-added {
-  background: rgba(46, 160, 67, 0.15);
-  color: #1a7f37;
+  background: var(--diff-added-bg);
+  color: var(--diff-added);
 }
 
 .diff-removed {
-  background: rgba(248, 81, 73, 0.15);
-  color: var(--danger);
+  background: var(--diff-removed-bg);
+  color: var(--diff-removed);
 }
 
 .diff-context {
-  color: var(--ink-dim);
+  color: var(--text-dim);
 }
 
 .diff-truncated {
-  color: var(--ink-dim);
+  color: var(--text-dim);
   font-style: italic;
   text-align: center;
   padding: 4px 8px;
@@ -905,9 +1094,10 @@ label .hint-text {
 }
 
 .permission-prompt .approve-btn {
-  background: var(--accent-strong);
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-contrast);
   border: none;
+  font-weight: 600;
 }
 
 .permission-prompt .deny-btn {

@@ -208,6 +208,44 @@ const sidebarSessionList = byId<HTMLDivElement>("session-list");
 const sessionListEmpty = byId<HTMLDivElement>("session-list-empty");
 const sessionSearchInput = byId<HTMLInputElement>("session-search");
 const newSessionBtn = byId<HTMLButtonElement>("new-session-btn");
+const setupSection = byId<HTMLElement>("setup");
+const tabBar = byId<HTMLDivElement>("tab-bar");
+const tabLabel = byId<HTMLSpanElement>("tab-label");
+const statusWorkspaceEl = byId<HTMLSpanElement>("status-workspace");
+const themeSelect = byId<HTMLSelectElement>("theme-select");
+
+// Theme (Warm Dark / Mono Ink) — a per-viewer UI preference only, so
+// localStorage is the right tool here (same reasoning as the onboarding
+// seen-flag above), not the main-process settings store the API keys use.
+const THEME_KEY = "localagent:theme";
+const DEFAULT_THEME = "warm-dark";
+function applyTheme(theme: string): void {
+  document.documentElement.setAttribute("data-theme", theme);
+}
+function loadTheme(): string {
+  try {
+    return localStorage.getItem(THEME_KEY) ?? DEFAULT_THEME;
+  } catch {
+    return DEFAULT_THEME;
+  }
+}
+const initialTheme = loadTheme();
+applyTheme(initialTheme);
+themeSelect.value = initialTheme;
+themeSelect.addEventListener("change", () => {
+  applyTheme(themeSelect.value);
+  try {
+    localStorage.setItem(THEME_KEY, themeSelect.value);
+  } catch {
+    // Best-effort — if this fails, the theme just resets next launch; not worth surfacing an error for.
+  }
+});
+
+/** Sets both the setup form's workspace text and its collapsed status-bar echo shown once a session is active — kept in one place so the two never drift apart. */
+function setWorkspaceText(text: string): void {
+  workspacePathEl.textContent = text;
+  statusWorkspaceEl.textContent = text;
+}
 
 let workspaceRoot: string | null = null;
 let sessionId: string | null = null;
@@ -529,7 +567,7 @@ chooseWorkspaceBtn.addEventListener("click", async () => {
   const picked = await window.agent.pickWorkspace();
   if (picked) {
     workspaceRoot = picked;
-    workspacePathEl.textContent = picked;
+    setWorkspaceText(picked);
     aboutWorkspace.textContent = picked;
   }
 });
@@ -726,7 +764,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
     sessionId = result.sessionId;
     if (!workspaceRoot) {
       workspaceRoot = result.workspaceRoot;
-      workspacePathEl.textContent = `${result.workspaceRoot} (default — no folder chosen)`;
+      setWorkspaceText(`${result.workspaceRoot} (default — no folder chosen)`);
       aboutWorkspace.textContent = result.workspaceRoot;
     }
     taskInput.disabled = false;
@@ -742,6 +780,13 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
     editSettingsBtn.hidden = false;
     revertCheckpointBtn.hidden = true; // a fresh/resumed/edited session has no checkpoint of its own yet — see the checkpoint.created event handler
     activeProviderConfig = provider;
+    // Chat-first once a session is running: the setup form collapses out of
+    // the way (Edit settings… brings it back) and a tab appears for the
+    // now-open session — see resetToSetup and editSettingsBtn's handler for
+    // the reverse.
+    setupSection.hidden = true;
+    tabLabel.textContent = resume?.title ?? "New session";
+    tabBar.hidden = false;
 
     const modelText =
       provider.kind === "embedded"
@@ -854,6 +899,7 @@ async function applySessionEdits(): Promise<void> {
     startSessionBtn.disabled = true;
     startSessionBtn.textContent = "Starting…"; // matches beginSession's own (pre-existing, unchanged) post-success label
     editSettingsBtn.textContent = "Edit settings…";
+    setupSection.hidden = true;
     return;
   }
 
@@ -886,6 +932,10 @@ editSettingsBtn.addEventListener("click", () => {
   startSessionBtn.disabled = !editingSession;
   startSessionBtn.textContent = editingSession ? "Apply changes" : "Start session";
   editSettingsBtn.textContent = editingSession ? "Cancel edit" : "Edit settings…";
+  // Editing brings the collapsed setup form back into view; cancelling
+  // (without applying) collapses it again — applying goes through
+  // applySessionEdits/beginSession above, which already re-collapse it.
+  setupSection.hidden = editingSession ? false : true;
 });
 
 function clearEventLog(): void {
@@ -910,11 +960,14 @@ function resetToSetup(): void {
   editSettingsBtn.textContent = "Edit settings…";
   revertCheckpointBtn.hidden = true;
   startError.textContent = "";
-  workspacePathEl.textContent = "No workspace selected — optional, you can just chat";
+  setWorkspaceText("No workspace selected — optional, you can just chat");
   aboutWorkspace.textContent = "(none selected)";
   setSetupControlsDisabled(false);
   startSessionBtn.disabled = false;
   startSessionBtn.textContent = "Start session";
+  setupSection.hidden = false;
+  tabBar.hidden = true;
+  tabLabel.textContent = "";
   void refreshSessionList(sessionSearchInput.value.trim());
 }
 
