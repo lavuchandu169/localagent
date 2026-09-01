@@ -3,6 +3,21 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.15 — 2026-09-01
+
+- A real diff viewer: before you approve an edit, see the actual colored
+  +/- line-level diff, not just a filename. Computed before the tool
+  ever runs and attached to the permission-request regardless of the
+  decision, so you can see what a denied edit would have changed too.
+- One-checkpoint-per-task revert for git workspaces: before a task's
+  first write or command, the whole workspace (tracked and untracked
+  files) is snapshotted into a real git commit via a scratch index —
+  never touches your actual index, HEAD, or branch. A "Revert this
+  task" button appears once a checkpoint exists; reverting restores
+  everything to that point, including removing files the task created
+  since. Not offered outside a git repo, and refuses while a task is
+  actively running.
+
 ## v0.1.0-beta.14 — 2026-08-31
 
 - This file — a running history of every release, instead of scanning
