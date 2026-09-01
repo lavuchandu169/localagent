@@ -1,4 +1,5 @@
 // Core shared types — kept provider/IDE agnostic (Section 4, 70).
+import type { Change } from "diff";
 
 export type PermissionLevel = "READ" | "WRITE" | "EXECUTE" | "NETWORK" | "DANGEROUS";
 
@@ -87,6 +88,6 @@ export type AgentEvent =
   | { type: "text"; text: string }
   | { type: "tool.start"; call: ToolCall }
   | { type: "tool.result"; call: ToolCall; result: ToolResult }
-  | { type: "permission.request"; call: ToolCall; decision: PermissionDecision }
+  | { type: "permission.request"; call: ToolCall; decision: PermissionDecision; diff?: Change[] }
   | { type: "done"; success: boolean; summary: string }
   | { type: "error"; message: string };

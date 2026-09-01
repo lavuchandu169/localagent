@@ -1,4 +1,5 @@
 import type { AgentEvent, ChatMessage, PermissionMode, ToolCall } from "../../types.js";
+import type { Change } from "diff";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
@@ -556,6 +557,34 @@ function toolCard(call: ToolCall): HTMLElement {
   return card;
 }
 
+const DIFF_LINE_CAP = 300;
+
+/** Renders a Change[] (from the `diff` package, computed in agent.ts before the tool ever runs) as colored +/- lines, capped so a whole-file rewrite of a large file can't flood the event log. */
+function renderDiff(diff: Change[]): HTMLElement {
+  const container = document.createElement("div");
+  container.className = "diff-view";
+  let linesShown = 0;
+  outer: for (const chunk of diff) {
+    const lines = chunk.value.split("\n");
+    if (lines[lines.length - 1] === "") lines.pop(); // split("\n") on a trailing-newline string leaves one empty entry
+    for (const line of lines) {
+      if (linesShown >= DIFF_LINE_CAP) {
+        const truncated = document.createElement("div");
+        truncated.className = "diff-line diff-truncated";
+        truncated.textContent = "… diff truncated …";
+        container.appendChild(truncated);
+        break outer;
+      }
+      const lineEl = document.createElement("div");
+      lineEl.className = `diff-line ${chunk.added ? "diff-added" : chunk.removed ? "diff-removed" : "diff-context"}`;
+      lineEl.textContent = `${chunk.added ? "+" : chunk.removed ? "-" : " "} ${line}`;
+      container.appendChild(lineEl);
+      linesShown++;
+    }
+  }
+  return container;
+}
+
 function renderEvent(event: AgentEvent): void {
   switch (event.type) {
     case "status":
@@ -575,11 +604,23 @@ function renderEvent(event: AgentEvent): void {
       break;
     }
     case "permission.request": {
-      if (event.decision !== "ASK") {
+      const hasDiff = !!event.diff && event.diff.length > 0;
+      if (event.decision !== "ASK" && !hasDiff) {
         logLine(`[permission] ${event.call.name} -> ${event.decision}`, "log-status");
         break;
       }
       const card = toolCards.get(event.call.id) ?? toolCard(event.call);
+      if (hasDiff) card.appendChild(renderDiff(event.diff!));
+      if (event.decision !== "ASK") {
+        // Not asking (ALLOW/DENY), but still had a diff worth showing — no
+        // approve/deny buttons needed, just the diff plus the same status
+        // line the no-diff path above already logs for every other call.
+        const status = document.createElement("div");
+        status.className = "log-status";
+        status.textContent = `[permission] ${event.call.name} -> ${event.decision}`;
+        card.appendChild(status);
+        break;
+      }
       const prompt = document.createElement("div");
       prompt.className = "permission-prompt";
       const approve = document.createElement("button");

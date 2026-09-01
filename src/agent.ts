@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type {
   AgentEvent,
   AgentState,
@@ -9,6 +11,7 @@ import type {
 import { ToolRegistry } from "./toolRegistry.js";
 import { PermissionEngine } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
+import { computeFileDiff } from "./diffUtil.js";
 
 export interface AgentSessionOptions {
   workspaceRoot: string;
@@ -80,6 +83,36 @@ export class AgentSession {
 
   cancel() {
     this.cancelled = true;
+  }
+
+  /**
+   * Computes a diff for an edit_file call to attach to its permission.request
+   * event, so the UI can show a real diff instead of just a filename before
+   * the user decides — computed here (before the tool ever runs), not inside
+   * editFileTool itself, since the whole point is showing it BEFORE the write
+   * happens. Reads the file fresh from disk rather than relying on an earlier
+   * read_file result in the conversation, so the diff reflects the file's
+   * actual current state even if it changed since the model last read it.
+   * Returns undefined for anything that isn't a well-formed edit_file call
+   * (including whenever the tool's own execute() would itself refuse it —
+   * e.g. a path escaping the workspace root) — the permission-request event
+   * just omits `diff` in that case, same as for every non-edit_file call.
+   */
+  private async computeEditDiffForCall(call: ToolCall) {
+    if (call.name !== "edit_file") return undefined;
+    const relPath = call.arguments.path;
+    const newContent = call.arguments.content;
+    if (typeof relPath !== "string" || typeof newContent !== "string") return undefined;
+    const workspaceRoot = path.resolve(this.opts.workspaceRoot);
+    const abs = path.resolve(workspaceRoot, relPath);
+    if (!abs.startsWith(workspaceRoot)) return undefined;
+    let oldContent: string | null;
+    try {
+      oldContent = await fs.readFile(abs, "utf8");
+    } catch {
+      oldContent = null; // doesn't exist yet — the whole new content shows as added
+    }
+    return computeFileDiff(oldContent, newContent);
   }
 
   getState(): AgentState {
@@ -203,7 +236,8 @@ export class AgentSession {
           // otherwise auto-allow writes.
           decision = "ASK";
         }
-        yield { type: "permission.request", call, decision };
+        const diff = await this.computeEditDiffForCall(call);
+        yield diff ? { type: "permission.request", call, decision, diff } : { type: "permission.request", call, decision };
 
         if (decision === "DENY") {
           this.messages.push({

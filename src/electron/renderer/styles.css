@@ -839,6 +839,42 @@ label .hint-text {
   margin-top: 4px;
 }
 
+.diff-view {
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.diff-line {
+  padding: 0 8px;
+  white-space: pre;
+}
+
+.diff-added {
+  background: rgba(46, 160, 67, 0.15);
+  color: #1a7f37;
+}
+
+.diff-removed {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--danger);
+}
+
+.diff-context {
+  color: var(--ink-dim);
+}
+
+.diff-truncated {
+  color: var(--ink-dim);
+  font-style: italic;
+  text-align: center;
+  padding: 4px 8px;
+}
+
 .permission-prompt {
   display: flex;
   align-items: center;

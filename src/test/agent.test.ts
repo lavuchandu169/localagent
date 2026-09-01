@@ -414,6 +414,76 @@ await (async () => {
   }
 })();
 
+console.log("\nA permission.request for edit_file carries a real diff:");
+await (async () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const workspaceRoot = path.resolve(__dirname, "..", "..", "fixture-repo");
+
+  {
+    // math.js's real content: "function add(a, b) {\n  return a + b;\n}\nmodule.exports = { add };\n"
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "math.js" } }] } },
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "math.js", content: "function add(a, b) {\n  return a + b + 1;\n}\nmodule.exports = { add };\n" } }],
+        },
+      },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN", // PLAN denies WRITE outright — the diff must still be computed and attached even when the decision ends up DENY, not just on ALLOW/ASK
+    });
+
+    let editEvent: AgentEvent | undefined;
+    for await (const event of session.run("look at math.js")) {
+      if (event.type === "permission.request" && event.call.id === "e1") editEvent = event;
+    }
+
+    check("the edit_file permission.request event has a diff attached", editEvent?.type === "permission.request" && Array.isArray(editEvent.diff));
+    if (editEvent?.type === "permission.request" && editEvent.diff) {
+      const removed = editEvent.diff.filter((c) => c.removed);
+      const added = editEvent.diff.filter((c) => c.added);
+      check("the diff shows the real old line as removed", removed.some((c) => c.value.includes("return a + b;")));
+      check("the diff shows the real new line as added", added.some((c) => c.value.includes("return a + b + 1;")));
+      check("unrelated unchanged lines aren't marked as changed", editEvent.diff.some((c) => !c.added && !c.removed && c.value.includes("module.exports")));
+    }
+    check("this is attached even though PLAN denies the edit outright", editEvent?.type === "permission.request" && editEvent.decision === "DENY");
+  }
+
+  {
+    // A brand-new file (never read, doesn't exist on disk) — diffed against
+    // nothing, so it should show as entirely added, not throw or omit the diff.
+    const newFileContent = "export const x = 1;\n";
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e2", name: "edit_file", arguments: { path: "brand-new-file.ts", content: newFileContent } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+
+    let editEvent: AgentEvent | undefined;
+    for await (const event of session.run("create a new file")) {
+      if (event.type === "permission.request" && event.call.id === "e2") editEvent = event;
+    }
+
+    check(
+      "a brand-new file's diff shows the whole content as added, not an error",
+      editEvent?.type === "permission.request" && editEvent.diff?.length === 1 && editEvent.diff[0]?.added === true && editEvent.diff[0]?.value === newFileContent
+    );
+  }
+})();
+
 console.log("\nsetWorkspaceRoot/setPermissionMode update a live session in place:");
 await (async () => {
   const __filename = fileURLToPath(import.meta.url);
