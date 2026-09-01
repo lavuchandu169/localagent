@@ -3,6 +3,18 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.18 — 2026-09-01
+
+- Fixed a real reliability gap: asked to create/build/design something,
+  the embedded model could answer entirely in prose (code shown in
+  markdown, nothing ever written to disk) instead of actually calling
+  edit_file. Now caught and corrected at runtime — verified live
+  against the exact reported failure, which now writes real files.
+- Along the way, fixed a related embedded-model quirk: when it falls
+  back to writing a tool call as JSON text, one inconsistently-escaped
+  quote could break recovery entirely; that JSON is now repaired
+  best-effort instead of being discarded.
+
 ## v0.1.0-beta.17 — 2026-09-01
 
 - New logo: a lambda mark on the dark IDE badge, replacing the old
