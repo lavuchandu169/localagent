@@ -6,7 +6,7 @@ import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { PermissionEngine, classifyCommand } from "../permissions.js";
-import { AgentSession } from "../agent.js";
+import { AgentSession, DEFAULT_SYSTEM_PROMPT } from "../agent.js";
 import { defaultToolRegistry, ToolRegistry } from "../toolRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { toLlamaHistory, toLlamaFunctions, fromLlamaResult } from "../providers/embeddedLlama.js";
@@ -22,7 +22,17 @@ function check(name: string, cond: boolean) {
   }
 }
 
-console.log("Command risk classification:");
+console.log("Default system prompt:");
+check(
+  "instructs materializing created/written files via edit_file rather than describing them only in the reply — the exact gap that let a small model answer a \"design a website\" task in prose with no files ever written",
+  DEFAULT_SYSTEM_PROMPT.includes("materialize it for real via edit_file")
+);
+check(
+  "gives a concrete WRONG/RIGHT example of the failure mode, not just an abstract rule",
+  DEFAULT_SYSTEM_PROMPT.includes("WRONG:") && DEFAULT_SYSTEM_PROMPT.includes("RIGHT:")
+);
+
+console.log("\nCommand risk classification:");
 check("rm is DESTRUCTIVE", classifyCommand("rm -rf foo") === "DESTRUCTIVE");
 check("git status is SAFE_READ", classifyCommand("git status") === "SAFE_READ");
 check("npm install is NETWORK", classifyCommand("npm install left-pad") === "NETWORK");
@@ -179,6 +189,35 @@ console.log("\nEmbedded llama provider conversion:");
     "fromLlamaResult still leaves prose with an unrelated JSON-looking fragment as a final turn",
     turn.type === "final"
   );
+}
+{
+  // The exact failure observed live from Qwen2.5-Coder 1.5B: correctly
+  // escapes quotes almost everywhere in a large HTML content value, but
+  // leaves ONE pair raw (`href="/"` instead of `href=\"/\"`) — otherwise
+  // well-formed JSON that a strict JSON.parse rejects outright.
+  const response =
+    '{"name": "edit_file", "arguments": {"path": "public/index.html", ' +
+    '"content": "<a href=\\"/cart\\">Cart</a> and <a href="/">Home</a> and <a href=\\"/checkout\\">Checkout</a>"}}';
+  const { turn } = fromLlamaResult({ response, functionCalls: undefined });
+  check(
+    "fromLlamaResult recovers a tool call despite one unescaped quote pair amid otherwise-correct escaping",
+    turn.type === "tool_calls" && turn.toolCalls[0]?.name === "edit_file" && turn.toolCalls[0]?.arguments.path === "public/index.html"
+  );
+  check(
+    "the recovered content preserves the correctly-escaped parts exactly, and keeps the unescaped quotes as literal quote characters",
+    turn.type === "tool_calls" &&
+      turn.toolCalls[0]?.arguments.content === '<a href="/cart">Cart</a> and <a href="/">Home</a> and <a href="/checkout">Checkout</a>'
+  );
+}
+{
+  // A genuinely broken candidate (an actually-unbalanced/nonsense object,
+  // not just a missed escape) must still fail cleanly rather than recover
+  // something wrong — the repair pass is best-effort, not a guarantee.
+  const { turn } = fromLlamaResult({
+    response: '{"name": "edit_file", "arguments": {"path": "a.js", "content": "unterminated',
+    functionCalls: undefined,
+  });
+  check("a truly malformed candidate still falls back to a final (prose) turn, not a wrong recovery", turn.type === "final");
 }
 
 console.log("\nAuto-read named files before the first turn:");
@@ -654,6 +693,99 @@ await (async () => {
   );
   const writtenContent = await fs.readFile(path.join(tmpDir, distinctFile), "utf-8");
   check("the file on disk in the NEW workspace actually got edited", writtenContent === "edited");
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
+})();
+
+console.log("\nCorrective nudge — a 'create X' task answered with code-in-prose instead of a real edit_file call:");
+await (async () => {
+  // A throwaway temp dir, not fixture-repo — this scenario actually writes
+  // a file, and fixture-repo is a real subdirectory of this project itself.
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-nudge-test-"));
+
+  {
+    // The exact reported failure: a creation task, first answered with
+    // fenced code and zero tool calls. Should get nudged once, then
+    // (script's second entry) actually call edit_file and complete.
+    const script: ChatResponse[] = [
+      { turn: { type: "final", content: "Here's widget.js:\n```js\nconsole.log('hi');\n```" } },
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "widget.js" } },
+            { id: "e1", name: "edit_file", arguments: { path: "widget.js", content: "console.log('hi');\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "Created widget.js." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("create a new file called widget.js that logs hi")) {
+      events.push(event);
+    }
+
+    const nudgeStatus = events.find((e) => e.type === "status" && e.message.includes("nudging the model"));
+    check("a nudge status event fires exactly once", events.filter((e) => e.type === "status" && e.message.includes("nudging")).length === 1);
+    check("the nudge event exists at all", !!nudgeStatus);
+    const doneEvents = events.filter((e) => e.type === "done");
+    check("the task still completes successfully after the nudge", doneEvents.length === 1 && doneEvents[0]?.type === "done" && doneEvents[0].success === true);
+    const writtenContent = await fs.readFile(path.join(tmpDir, "widget.js"), "utf-8").catch(() => null);
+    check("the file was actually written to disk on the second attempt", writtenContent === "console.log('hi');\n");
+  }
+
+  {
+    // Not a creation task — a fenced code block in the final answer is a
+    // completely normal way to answer "how does X work", so no nudge.
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "It works like this:\n```js\nfoo();\n```" } }];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("what does the foo function do")) {
+      events.push(event);
+    }
+    check("a non-creation question with example code in the answer is never nudged", !events.some((e) => e.type === "status" && e.message.includes("nudging")));
+    check("it completes normally on the first turn", events.filter((e) => e.type === "done").length === 1);
+  }
+
+  {
+    // The model DID try to write and was refused (PLAN mode denies WRITE
+    // outright) — that's a real policy decision already surfaced to the
+    // model, not the "never even tried" failure the nudge exists to catch.
+    // Its next final answer (even with fenced code) must not be nudged again.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "widget2.js", content: "x\n" } }] } },
+      { turn: { type: "final", content: "Can't write in PLAN mode, so here's what it would contain:\n```js\nx\n```" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("create widget2.js")) {
+      events.push(event);
+    }
+    check("a task where the model already attempted a write (denied) is not nudged again", !events.some((e) => e.type === "status" && e.message.includes("nudging")));
+    check("it still completes", events.filter((e) => e.type === "done").length === 1);
+  }
 
   await fs.rm(tmpDir, { recursive: true, force: true });
 })();

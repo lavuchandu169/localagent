@@ -88,6 +88,39 @@ function findJsonObjectCandidates(text: string): string[] {
   return candidates;
 }
 
+/**
+ * Escapes `"` characters that don't look like a real JSON string boundary —
+ * recovers the specific mistake observed live from Qwen2.5-Coder 1.5B: it
+ * escapes most embedded quotes correctly (e.g. in a large HTML/code
+ * `content` value) but occasionally leaves one pair raw, which breaks
+ * JSON.parse even though the object is otherwise well-formed. A `"` is
+ * judged a real boundary only if what's immediately around it looks like
+ * one — opening a key/value (preceded by `{ [ , :` or whitespace after
+ * those, or the very start of the string) or closing one (followed by
+ * `, } ] :` or whitespace before those). Anything else is almost certainly
+ * literal content the model forgot to escape, so it gets escaped here
+ * instead. Already-escaped quotes (preceded by a backslash) are left alone.
+ * Best-effort only: used solely as a second attempt after a direct
+ * JSON.parse has already failed, so a candidate this can't actually fix
+ * just fails again exactly as before — no regression versus not trying.
+ */
+function repairUnescapedQuotes(text: string): string {
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch !== '"' || text[i - 1] === "\\") {
+      result += ch;
+      continue;
+    }
+    const before = text.slice(Math.max(0, i - 4), i);
+    const after = text.slice(i + 1, i + 5);
+    const looksLikeOpen = i === 0 || /[{[,:]\s*$/.test(before);
+    const looksLikeClose = /^\s*[,}\]:]/.test(after);
+    result += looksLikeOpen || looksLikeClose ? '"' : '\\"';
+  }
+  return result;
+}
+
 function isToolCallShape(parsed: unknown): parsed is { name: string; arguments: Record<string, unknown> } {
   return (
     parsed !== null &&
@@ -119,11 +152,16 @@ function tryParseFallbackToolCall(response: string): { name: string; arguments: 
 
   const candidates = findJsonObjectCandidates(searchText);
   for (let i = candidates.length - 1; i >= 0; i--) {
+    const candidate = candidates[i]!;
     let parsed: unknown;
     try {
-      parsed = JSON.parse(candidates[i]!);
+      parsed = JSON.parse(candidate);
     } catch {
-      continue;
+      try {
+        parsed = JSON.parse(repairUnescapedQuotes(candidate));
+      } catch {
+        continue;
+      }
     }
     if (isToolCallShape(parsed)) return parsed;
   }

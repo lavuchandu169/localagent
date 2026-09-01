@@ -28,21 +28,53 @@ export interface AgentSessionOptions {
   onApprovalNeeded?: (call: ToolCall) => Promise<boolean>;
 }
 
-const DEFAULT_SYSTEM_PROMPT = `You are a careful autonomous coding agent operating on a local repository.
-You have tools that read files directly from disk. If you need to see a file to
-answer, call read_file (or list_directory / grep to find it first) instead of
-asking the user for it. Use the exact filename mentioned in the task, not a
-placeholder path — if you're not sure of the exact path, call list_directory
-first rather than guessing one. If a tool call fails (e.g. file not found),
-that's a signal to look again with list_directory or grep, not to give up and
-ask the user to supply the path themselves.
+export const DEFAULT_SYSTEM_PROMPT = `You are a careful autonomous coding agent operating on a local repository.
+You have tools that read files directly from disk and write real changes to
+them. If you need to see a file to answer, call read_file (or list_directory
+/ grep to find it first) instead of asking the user for it. Use the exact
+filename mentioned in the task, not a placeholder path — if you're not sure
+of the exact path, call list_directory first rather than guessing one. If a
+tool call fails (e.g. file not found), that's a signal to look again with
+list_directory or grep, not to give up and ask the user to supply the path
+themselves.
+
+IMPORTANT — creating or changing a file means calling edit_file. It is never
+done by describing the change in your reply:
+Whenever the task asks you to create, write, build, design, fix, add,
+implement, or scaffold anything — a file, a function, a component, a whole
+project — the ONLY way to actually do that is to call edit_file, once per
+file. Putting the code in your chat reply as a markdown code block instead
+does NOT create or change anything; it is invisible to the user's real
+files. A reply that describes files instead of writing them has not
+completed the task, no matter how complete or correct the code in it looks.
+  WRONG: replying with "Here's index.html:" followed by a \`\`\`html code
+  block, then stopping — nothing was written, this is not done.
+  RIGHT: calling edit_file with path="index.html" and the real file content
+  (repeated for every other file the task needs), THEN, once every file is
+  actually written, replying in plain text to summarize what you did.
+Only put code directly in your plain-text reply when the user is asking a
+question about code (e.g. "how would I..." or "explain this function") —
+never when they've asked you to create or change something in this
+workspace.
+
 Rules:
 1. Gather evidence with read-only tools before modifying unfamiliar code, and before answering any question about what a specific file contains, does, or how it could be improved — read it first rather than describing what a typical file like that might contain.
 2. Prefer targeted, minimal changes over rewrites.
 3. Never claim a command ran or a test passed unless you actually invoked the tool and saw the result.
 4. When you believe the task is complete and verified, respond with plain text (no further tool calls) summarizing what changed and how it was verified.
 5. If you lack information required to proceed safely, say so instead of guessing.
-6. For tasks that require understanding a whole project (summarizing, reviewing, documenting, or answering "what does this codebase do"), use list_directory and grep to build a complete picture and read every file that's actually relevant — don't stop after one or two files just because you have *an* answer, if the task implies covering the whole thing.`;
+6. For tasks that require understanding a whole project (summarizing, reviewing, documenting, or answering "what does this codebase do"), use list_directory and grep to build a complete picture and read every file that's actually relevant — don't stop after one or two files just because you have *an* answer, if the task implies covering the whole thing.
+7. When asked to create, write, build, design, or scaffold something, materialize it for real via edit_file — one call per file, never all of it crammed into a single call, and never left as code in your reply instead of a real tool call. See the IMPORTANT section above.`;
+
+/** A rough "this task is asking for something to be built" signal — deliberately generous (false positives just cost one harmless extra nudge turn; false negatives bring back the exact bug this exists to catch), used only to gate the corrective nudge below. */
+function taskImpliesCreation(task: string): boolean {
+  return /\b(create|write|build|design|scaffold|make|generate|implement|add)\b/i.test(task);
+}
+
+/** Whether a response's text contains a real fenced code block (as opposed to a stray inline single backtick) — the tell-tale sign the model wrote out file content instead of calling edit_file. */
+function containsFencedCode(content: string): boolean {
+  return (content.match(/```/g)?.length ?? 0) >= 2;
+}
 
 export class AgentSession {
   private messages: ChatMessage[] = [];
@@ -56,6 +88,10 @@ export class AgentSession {
   private checkpointHash: string | null = null;
   /** Whether THIS task has already attempted its one checkpoint — reset at the start of every run() call. Attempted, not "succeeded": a non-git workspace or any other createCheckpoint failure still marks this true so every subsequent write this task doesn't retry it. */
   private checkpointAttemptedThisTask = false;
+  /** Whether THIS task has attempted (called, regardless of approval outcome) any WRITE-permission tool yet — reset at the start of every run() call. Feeds the corrective-nudge check below: if the model already tried to write and was denied, that's a real policy decision, not the "described code instead of writing it" failure the nudge exists to catch. */
+  private wroteThisTask = false;
+  /** Whether the one-shot corrective nudge (see the "final" branch in run()) has already fired this task — reset at the start of every run() call. At most one nudge per task, so a model that ignores it too doesn't loop forever. */
+  private correctiveNudgeSentThisTask = false;
 
   constructor(private opts: AgentSessionOptions) {
     this.permissions = new PermissionEngine(opts.permissionMode);
@@ -175,6 +211,8 @@ export class AgentSession {
     this.messages.push({ role: "user", content: task });
     this.state = "THINKING";
     this.checkpointAttemptedThisTask = false;
+    this.wroteThisTask = false;
+    this.correctiveNudgeSentThisTask = false;
     yield* this.autoReadNamedFiles(task);
     const maxTurns = this.opts.maxTurns ?? 25;
 
@@ -203,6 +241,36 @@ export class AgentSession {
       }
 
       if (response.turn.type === "final") {
+        // Runtime-enforced correction, same principle as autoReadNamedFiles
+        // above: prompt wording alone proved unreliable at stopping a small
+        // local model from answering a "create/build/design X" task with
+        // the code written out in prose instead of real edit_file calls
+        // (verified live — the model repeated this exact failure even with
+        // an explicit system-prompt rule against it). Fires at most once
+        // per task, and only when the model never even tried to write —
+        // if it tried and got denied, that's a real policy decision to
+        // respect, not this failure mode.
+        if (
+          !this.correctiveNudgeSentThisTask &&
+          !this.wroteThisTask &&
+          taskImpliesCreation(task) &&
+          containsFencedCode(response.turn.content)
+        ) {
+          this.correctiveNudgeSentThisTask = true;
+          this.messages.push({ role: "assistant", content: response.turn.content });
+          this.messages.push({
+            role: "user",
+            content:
+              "You wrote file content in your reply but never called edit_file, so nothing was actually created or changed. " +
+              "If you meant to create or modify files, call edit_file now for each one — one call per file, using the real content you just described. " +
+              "If you were only explaining and didn't mean to produce real files, say that explicitly instead of including full file contents.",
+          });
+          yield { type: "status", message: "Turn produced code without writing it — nudging the model to call edit_file instead." };
+          this.turn++;
+          this.state = "THINKING";
+          continue;
+        }
+
         this.messages.push({ role: "assistant", content: response.turn.content });
         yield { type: "text", text: response.turn.content };
         this.state = "COMPLETED";
@@ -238,6 +306,13 @@ export class AgentSession {
 
         if (call.name === "read_file" && typeof call.arguments.path === "string") {
           this.readPaths.add(call.arguments.path);
+        }
+        // Attempted, not "succeeded" — even a call that goes on to get
+        // denied proves the model knows how to reach for edit_file, which
+        // is exactly what the corrective nudge below needs to know it
+        // doesn't need to fire.
+        if (tool.permission === "WRITE") {
+          this.wroteThisTask = true;
         }
 
         // One checkpoint per task, taken before the FIRST tool call this
