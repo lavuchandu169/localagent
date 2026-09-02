@@ -957,6 +957,57 @@ await (async () => {
   }
 })();
 
+console.log("\nAttachments thread through to the first pushed message:");
+await (async () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const workspaceRoot = path.resolve(__dirname, "..", "..", "fixture-repo");
+
+  {
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "got it" } }];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+
+    for await (const _event of session.run("look at this", {
+      images: [{ name: "a.png", mediaType: "image/png", dataBase64: "abc123" }],
+      textAttachments: [{ name: "b.txt", content: "hello" }],
+    })) {
+      // draining the generator is enough — the assertion below reads the session's own history
+    }
+
+    const messages = session.getMessages();
+    const firstUserMessage = messages.find((m) => m.role === "user");
+    check("the first user message carries the images unchanged", firstUserMessage?.images?.[0]?.name === "a.png" && firstUserMessage?.images?.[0]?.dataBase64 === "abc123");
+    check("the first user message carries the textAttachments unchanged", firstUserMessage?.textAttachments?.[0]?.content === "hello");
+  }
+
+  {
+    // No attachments passed at all — the existing zero-argument call
+    // shape from every other test in this file must still work exactly
+    // as before (images/textAttachments simply absent, not undefined
+    // fields sitting on the message).
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "ok" } }];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+    for await (const _event of session.run("no attachments here")) {
+      // drain
+    }
+    const firstUserMessage = session.getMessages().find((m) => m.role === "user");
+    check("run() with no second argument still works, with no images field", firstUserMessage?.images === undefined);
+    check("run() with no second argument still works, with no textAttachments field", firstUserMessage?.textAttachments === undefined);
+  }
+})();
+
 console.log("\nAgent loop (scripted debug-fix scenario):");
 {
   const __filename = fileURLToPath(import.meta.url);

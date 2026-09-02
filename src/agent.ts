@@ -3,6 +3,8 @@ import path from "node:path";
 import type {
   AgentEvent,
   AgentState,
+  AttachedImage,
+  AttachedText,
   ChatMessage,
   ModelProvider,
   PermissionMode,
@@ -224,8 +226,11 @@ export class AgentSession {
     return this.checkpointHash;
   }
 
-  async *run(task: string): AsyncGenerator<AgentEvent> {
-    this.messages.push({ role: "user", content: task });
+  async *run(
+    task: string,
+    attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }
+  ): AsyncGenerator<AgentEvent> {
+    this.messages.push({ role: "user", content: task, ...attachments });
     this.state = "THINKING";
     this.checkpointAttemptedThisTask = false;
     this.wroteThisTask = false;
