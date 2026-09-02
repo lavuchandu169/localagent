@@ -1,4 +1,63 @@
-import type { ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+
+/**
+ * Builds one message's `content` for the wire request — a plain string
+ * when there are no attachments (unchanged from before this feature
+ * existed), or a content-part array when there are: a leading text part
+ * (task text plus every attached text file folded in, the same format
+ * every provider uses), then one image_url part per attached image, sent
+ * optimistically in the standard OpenAI vision format. Whether the
+ * server/loaded model actually supports it is between it and the
+ * request — an unsupported image surfaces as this provider's existing
+ * `Provider error ${status}` path, nothing new needed for that.
+ */
+function buildMessageContent(m: ChatMessage): string | Array<Record<string, unknown>> {
+  if (!m.images?.length && !m.textAttachments?.length) return m.content;
+
+  const textParts = [m.content, ...(m.textAttachments ?? []).map((a) => `\n\n--- Attached file: ${a.name} ---\n${a.content}\n---`)];
+  const text = textParts.join("");
+
+  if (!m.images?.length) return text;
+
+  const parts: Array<Record<string, unknown>> = [];
+  if (text) parts.push({ type: "text", text });
+  for (const img of m.images) {
+    parts.push({ type: "image_url", image_url: { url: `data:${img.mediaType};base64,${img.dataBase64}` } });
+  }
+  return parts;
+}
+
+/** The request-body-building half of `chat()`, pulled out as its own pure, exported function so it's unit-testable without a real HTTP server — mirrors toAnthropicMessages/toLlamaHistory in the other two providers. */
+export function buildChatBody(request: ChatRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: request.model,
+    messages: request.messages.map((m) => ({
+      role: m.role,
+      content: buildMessageContent(m),
+      ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+      ...(m.name ? { name: m.name } : {}),
+      ...(m.tool_calls
+        ? {
+            tool_calls: m.tool_calls.map((tc) => ({
+              id: tc.id,
+              type: "function",
+              function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+            })),
+          }
+        : {}),
+    })),
+    max_tokens: request.maxTokens ?? 2048,
+  };
+
+  if (request.tools && request.tools.length > 0) {
+    body.tools = request.tools.map((t) => ({
+      type: "function",
+      function: { name: t.name, description: t.description, parameters: t.inputSchema },
+    }));
+  }
+
+  return body;
+}
 
 interface Options {
   baseUrl: string; // e.g. http://localhost:11434/v1 or http://localhost:1234/v1
@@ -43,32 +102,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const body: Record<string, unknown> = {
-      model: request.model,
-      messages: request.messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-        ...(m.name ? { name: m.name } : {}),
-        ...(m.tool_calls
-          ? {
-              tool_calls: m.tool_calls.map((tc) => ({
-                id: tc.id,
-                type: "function",
-                function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-              })),
-            }
-          : {}),
-      })),
-      max_tokens: request.maxTokens ?? 2048,
-    };
-
-    if (request.tools && request.tools.length > 0) {
-      body.tools = request.tools.map((t) => ({
-        type: "function",
-        function: { name: t.name, description: t.description, parameters: t.inputSchema },
-      }));
-    }
+    const body = buildChatBody(request);
 
     const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
       method: "POST",
