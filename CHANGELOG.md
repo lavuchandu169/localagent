@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.20 — 2026-09-02
+
+- A new "Research & Reasoning" model group in the Model dropdown, with
+  three bigger local models: Qwen2.5 14B Instruct, DeepSeek-R1-Distill-
+  Qwen 14B (reasoning-distilled, best for research/analysis), and
+  Qwen2.5 32B Instruct (the most capable local option, clearly labeled
+  as needing a powerful machine).
+
 ## v0.1.0-beta.19 — 2026-09-01
 
 - Two more Claude models in the Cloud group, alongside Sonnet 5: Claude
