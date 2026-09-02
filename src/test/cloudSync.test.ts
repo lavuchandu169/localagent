@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { listRemoteSessions, downloadSession, uploadSession, deleteRemoteSession, DriveScopeError, reconcileSessions } from "../cloudSync.js";
 import type { SessionRecord } from "../sessionStore.js";
 import { loadSessionRecord, saveSession } from "../sessionStore.js";
+import type { ChatMessage } from "../types.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -82,6 +83,92 @@ console.log("\nuploadSession — update path (existing file):");
   check(
     "issues a media PATCH to the found file id when one exists",
     !!patchCall && patchCall.url.includes("existing-file") && patchCall.url.includes("uploadType=media")
+  );
+}
+
+console.log("\nuploadSession — strips image/text attachments before upload:");
+{
+  // Uses the update (PATCH) path — its request body is the raw JSON record,
+  // not multipart-wrapped like the create path, which keeps this test's
+  // job (asserting on the exact serialized body) simple and direct.
+  const messages: ChatMessage[] = [
+    {
+      role: "user",
+      content: "please look at this",
+      images: [{ name: "photo.png", mediaType: "image/png", dataBase64: "aGVsbG8=" }],
+      textAttachments: [{ name: "notes.txt", content: "some attached text content" }],
+    },
+    { role: "assistant", content: "sure, looking now" },
+  ];
+  const record: SessionRecord = {
+    id: "with-attachments",
+    title: "attachment session",
+    messages,
+    events: [],
+    createdAt: 100,
+    updatedAt: 100,
+    ownerEmail: null,
+  };
+
+  let capturedBody: string | undefined;
+  const fakeFetch: typeof fetch = async (url, init) => {
+    if (!init?.method) {
+      // findRemoteFile lookup: an existing file, so uploadSession takes the PATCH path.
+      return new Response(JSON.stringify({ files: [{ id: "existing-file" }] }), { status: 200 });
+    }
+    if (init.method === "PATCH") {
+      capturedBody = init.body as string;
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  await uploadSession("tok", record, fakeFetch);
+
+  const uploaded = JSON.parse(capturedBody!) as SessionRecord;
+  const uploadedUserMessage = uploaded.messages[0] as any;
+  const uploadedAssistantMessage = uploaded.messages[1] as any;
+
+  check("the uploaded user message has no 'images' key at all", !("images" in uploadedUserMessage));
+  check("the uploaded user message has no 'textAttachments' key at all", !("textAttachments" in uploadedUserMessage));
+  check("the uploaded user message's text content is unaffected", uploadedUserMessage.content === "please look at this");
+  check("the uploaded assistant message's content is unaffected", uploadedAssistantMessage.content === "sure, looking now");
+
+  // The ORIGINAL record and its messages must be untouched — local
+  // persistence (sessionRegistry.ts) reads this same object independently
+  // and needs full attachment content to still be there.
+  check("the original record's user message still carries its images array", Array.isArray(messages[0]!.images) && messages[0]!.images!.length === 1);
+  check(
+    "the original record's user message still carries its textAttachments array",
+    Array.isArray(messages[0]!.textAttachments) && messages[0]!.textAttachments!.length === 1
+  );
+}
+
+console.log("\nuploadSession — a message with no attachments round-trips unaffected:");
+{
+  const messages: ChatMessage[] = [{ role: "user", content: "plain task, no attachments" }, { role: "assistant", content: "plain response" }];
+  const record: SessionRecord = {
+    id: "no-attachments",
+    title: "plain session",
+    messages,
+    events: [],
+    createdAt: 100,
+    updatedAt: 100,
+    ownerEmail: null,
+  };
+
+  let capturedBody: string | undefined;
+  const fakeFetch: typeof fetch = async (url, init) => {
+    if (!init?.method) return new Response(JSON.stringify({ files: [{ id: "existing-file" }] }), { status: 200 });
+    if (init.method === "PATCH") capturedBody = init.body as string;
+    return new Response("{}", { status: 200 });
+  };
+
+  await uploadSession("tok", record, fakeFetch);
+
+  const uploaded = JSON.parse(capturedBody!) as SessionRecord;
+  check(
+    "an attachment-free record uploads with all messages intact",
+    uploaded.messages.length === 2 && uploaded.messages[0]?.content === "plain task, no attachments" && uploaded.messages[1]?.content === "plain response"
   );
 }
 

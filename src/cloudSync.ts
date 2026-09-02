@@ -77,10 +77,33 @@ export async function downloadSession(accessToken: string, driveFileId: string, 
   return (await response.json()) as SessionRecord;
 }
 
+/**
+ * Strips the heavyweight attachment payloads (`images`, with base64 image
+ * data, and `textAttachments`) from every message before a record is
+ * serialized for Drive upload. A handful of multi-MB images base64-encoded
+ * can easily blow past this file's fixed 10s request timeout, and the
+ * caller treats upload as best-effort and swallows any failure — so without
+ * this, an image-heavy session's cloud sync silently degrades. Only the
+ * Drive-synced copy loses the attachment payload: this returns a new
+ * object/array (never mutates `record` or `record.messages`), since the
+ * same `record` reference is also used by the caller's own local
+ * persistence (sessionRegistry.ts's persistSession), which must keep full
+ * attachment content for local resume.
+ */
+function stripAttachmentsForUpload(record: SessionRecord): SessionRecord {
+  return {
+    ...record,
+    messages: record.messages.map((message) => {
+      const { images, textAttachments, ...rest } = message;
+      return rest;
+    }),
+  };
+}
+
 /** Creates or updates (by sessionId lookup) the Drive file for this session record. */
 export async function uploadSession(accessToken: string, record: SessionRecord, fetchImpl: FetchImpl = fetch): Promise<void> {
   const existingFileId = await findRemoteFile(accessToken, record.id, fetchImpl);
-  const content = JSON.stringify(record);
+  const content = JSON.stringify(stripAttachmentsForUpload(record));
 
   if (existingFileId) {
     const response = await fetchImpl(`${DRIVE_UPLOAD_ENDPOINT}/${existingFileId}?uploadType=media`, {
