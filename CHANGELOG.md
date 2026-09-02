@@ -3,6 +3,13 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.19 — 2026-09-01
+
+- Two more Claude models in the Cloud group, alongside Sonnet 5: Claude
+  Opus 5 (most capable, for the hardest/largest tasks) and Claude Haiku
+  4.5 (fastest and cheapest, for quick/simple tasks). Same saved API
+  key as before — just pick the model per session.
+
 ## v0.1.0-beta.18 — 2026-09-01
 
 - Fixed a real reliability gap: asked to create/build/design something,
