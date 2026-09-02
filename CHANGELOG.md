@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.21 — 2026-09-02
+
+- New "Plan first" option (off by default): hold a task's very first
+  move — the files it wants to read/write or the command it wants to
+  run — for your approval before any of it executes, instead of only
+  finding out after the fact. Approve and it proceeds exactly as
+  proposed; reject and nothing runs, nothing changes.
+
 ## v0.1.0-beta.20 — 2026-09-02
 
 - A new "Research & Reasoning" model group in the Model dropdown, with
