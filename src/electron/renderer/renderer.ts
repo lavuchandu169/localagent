@@ -1,7 +1,8 @@
-import type { AgentEvent, ChatMessage, PermissionMode, ProposedPlan, ToolCall } from "../../types.js";
+import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, PermissionMode, ProposedPlan, ToolCall } from "../../types.js";
 import type { Change } from "diff";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
+import type { PickedAttachment } from "../attachments.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 
@@ -62,7 +63,8 @@ interface LiveSessionSnapshot {
 
 interface AgentBridge {
   startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string }>;
-  runTask(sessionId: string, task: string): Promise<void>;
+  runTask(sessionId: string, task: string, attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }): Promise<void>;
+  pickAttachments(): Promise<{ attachments: PickedAttachment[]; errors: { name: string; error: string }[] }>;
   respondPermission(sessionId: string, callId: string, approved: boolean): Promise<void>;
   respondPlan(sessionId: string, approved: boolean): Promise<void>;
   cancelSession(sessionId: string): Promise<void>;
@@ -171,6 +173,8 @@ const startSessionBtn = byId<HTMLButtonElement>("start-session");
 const startError = byId<HTMLDivElement>("start-error");
 const taskInput = byId<HTMLTextAreaElement>("task-input");
 const runTaskBtn = byId<HTMLButtonElement>("run-task");
+const attachFileBtn = byId<HTMLButtonElement>("attach-file");
+const attachmentChipsRow = byId<HTMLDivElement>("attachment-chips");
 const eventLog = byId<HTMLDivElement>("event-log");
 const emptyState = byId<HTMLDivElement>("empty-state");
 const updateBanner = byId<HTMLDivElement>("update-banner");
@@ -269,6 +273,78 @@ let hardwareInfo: HardwareInfo | null = null;
 /** True while the setup controls are unlocked for editing an already-active session's workspace/model/mode — see editSettingsBtn/applySessionEdits. */
 let editingSession = false;
 const toolCards = new Map<string, HTMLElement>();
+
+const MAX_ATTACHMENTS_PER_TASK = 5;
+
+let pendingAttachments: PickedAttachment[] = [];
+
+/**
+ * Builds one chip — shared by the composer's removable row (Step 3 below)
+ * and the read-only copy shown under a sent task's `.log-task` bubble
+ * (Step 5), so what a chip looks like is defined in exactly one place.
+ * `onRemove` omitted means read-only: no × button.
+ */
+function buildAttachmentChip(attachment: PickedAttachment, onRemove?: () => void): HTMLElement {
+  const chip = document.createElement("span");
+  chip.className = "attachment-chip";
+  const icon = document.createElement("span");
+  icon.className = "attachment-chip-icon";
+  icon.textContent = attachment.kind === "image" ? "🖼" : "📄";
+  chip.appendChild(icon);
+  const label = document.createElement("span");
+  label.textContent = attachment.name;
+  chip.appendChild(label);
+  if (attachment.truncated) {
+    const badge = document.createElement("span");
+    badge.className = "attachment-chip-truncated";
+    badge.textContent = "truncated";
+    chip.appendChild(badge);
+  }
+  if (onRemove) {
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "attachment-chip-remove";
+    removeBtn.textContent = "×";
+    removeBtn.setAttribute("aria-label", `Remove ${attachment.name}`);
+    removeBtn.addEventListener("click", onRemove);
+    chip.appendChild(removeBtn);
+  }
+  return chip;
+}
+
+/** Rebuilds the composer's chip row from `pendingAttachments` — called after every add/remove, same "just re-render from state" pattern renderSessionList already uses for the sidebar. */
+function renderAttachmentChips(): void {
+  attachmentChipsRow.innerHTML = "";
+  attachmentChipsRow.hidden = pendingAttachments.length === 0;
+  for (const [index, attachment] of pendingAttachments.entries()) {
+    attachmentChipsRow.appendChild(
+      buildAttachmentChip(attachment, () => {
+        pendingAttachments = pendingAttachments.filter((_, i) => i !== index);
+        renderAttachmentChips();
+      })
+    );
+  }
+}
+
+attachFileBtn.addEventListener("click", () => {
+  void withBusyLabel(attachFileBtn, "…", async () => {
+    const remaining = MAX_ATTACHMENTS_PER_TASK - pendingAttachments.length;
+    if (remaining <= 0) {
+      logLine(`[attachments] Already at the ${MAX_ATTACHMENTS_PER_TASK}-attachment limit for this task — remove one before adding another.`, "log-error");
+      return;
+    }
+    const { attachments, errors } = await window.agent.pickAttachments();
+    for (const err of errors) {
+      logLine(`[attachments] Couldn't attach ${err.name}: ${err.error}`, "log-error");
+    }
+    const accepted = attachments.slice(0, remaining);
+    if (attachments.length > accepted.length) {
+      logLine(`[attachments] Only added ${accepted.length} of ${attachments.length} picked files — the ${MAX_ATTACHMENTS_PER_TASK}-attachment limit was reached.`, "log-error");
+    }
+    pendingAttachments = [...pendingAttachments, ...accepted];
+    renderAttachmentChips();
+  });
+});
 
 /** The workspace/provider/mode controls that lock once a session starts — shared by beginSession's success path, resetToSetup, and the edit-settings toggle so the same list isn't repeated three times. */
 function setSetupControlsDisabled(disabled: boolean): void {
@@ -865,6 +941,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
       aboutWorkspace.textContent = result.workspaceRoot;
     }
     taskInput.disabled = false;
+    attachFileBtn.disabled = false;
     runTaskBtn.disabled = false;
     logLine(
       resume ? `Resumed session (${provider.kind}, mode=${config.mode})` : `Session started (${provider.kind}, mode=${config.mode})`,
@@ -1093,6 +1170,7 @@ async function applySessionEdits(): Promise<void> {
     await window.agent.cancelSession(idBeingEdited);
     sessionId = null;
     taskInput.disabled = true;
+    attachFileBtn.disabled = true;
     runTaskBtn.disabled = true;
     await beginSession({
       sessionId: idBeingEdited,
@@ -1134,7 +1212,10 @@ function resetToSetup(): void {
   clearEventLog();
   taskInput.value = "";
   taskInput.disabled = true;
+  attachFileBtn.disabled = true;
   runTaskBtn.disabled = true;
+  pendingAttachments = [];
+  renderAttachmentChips();
   activeModelBadge.hidden = true;
   editingSession = false;
   editSettingsBtn.hidden = true;
@@ -1180,6 +1261,7 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
     }
     sessionId = null;
     taskInput.disabled = true;
+    attachFileBtn.disabled = true;
     runTaskBtn.disabled = true;
 
     clearEventLog();
@@ -1265,8 +1347,36 @@ runTaskBtn.addEventListener("click", async () => {
   toolCards.clear();
   runTaskBtn.disabled = true;
   const task = taskInput.value;
+  const sentAttachments = pendingAttachments;
+
   logLine(task, "log-task");
-  await window.agent.runTask(sessionId, task);
+  // A read-only copy of the same chips shown under the sent task bubble,
+  // so the log reflects exactly what went out — same chip look as the
+  // composer's removable row, just without the × (buildAttachmentChip
+  // with no onRemove argument), and appended as the log-task line's next
+  // sibling rather than inside it.
+  if (sentAttachments.length > 0) {
+    const sentChipsRow = document.createElement("div");
+    sentChipsRow.className = "attachment-chips sent";
+    for (const attachment of sentAttachments) {
+      sentChipsRow.appendChild(buildAttachmentChip(attachment));
+    }
+    eventLog.appendChild(sentChipsRow);
+    eventLog.scrollTop = eventLog.scrollHeight;
+  }
+
+  const images = sentAttachments.filter((a) => a.kind === "image");
+  const textAttachments = sentAttachments.filter((a) => a.kind === "text");
+  const attachments = sentAttachments.length > 0
+    ? {
+        images: images.map((img) => ({ name: img.name, mediaType: img.mediaType!, dataBase64: img.dataBase64! })),
+        textAttachments: textAttachments.map((t) => ({ name: t.name, content: t.content! })),
+      }
+    : undefined;
+
+  pendingAttachments = [];
+  renderAttachmentChips();
+  await window.agent.runTask(sessionId, task, attachments);
   await refreshSessionList(sessionSearchInput.value.trim());
 });
 

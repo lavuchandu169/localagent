@@ -917,6 +917,77 @@ label .hint-text {
   gap: 10px;
 }
 
+#attach-file {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+  align-self: flex-end;
+}
+
+#attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 16px 0;
+}
+
+#attachment-chips[hidden] {
+  display: none;
+}
+
+/* The read-only copy shown under a sent task's .log-task bubble in the
+   event log (a plain class, not the #attachment-chips id — a separate
+   element in a separate part of the page) — same chip look, just without
+   the composer row's outer padding, since .log-task already sits inside
+   #event-log's own padded flex column. */
+.attachment-chips.sent {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-left: 12px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.attachment-chip-icon {
+  font-size: 11px;
+}
+
+.attachment-chip-truncated {
+  color: var(--warn);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.attachment-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.attachment-chip-remove:hover {
+  color: var(--danger);
+}
+
 #run textarea {
   flex: 1;
   min-height: 40px;

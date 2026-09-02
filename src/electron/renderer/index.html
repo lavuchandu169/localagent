@@ -213,11 +213,13 @@
         </section>
 
         <section id="run">
+          <div id="attachment-chips" hidden></div>
           <div class="row" id="composer-row">
+            <button id="attach-file" type="button" disabled title="Attach a file (text or image)" aria-label="Attach a file">📎</button>
             <textarea id="task-input" placeholder="Describe the task…" disabled></textarea>
             <button id="run-task" class="primary" disabled>Run</button>
           </div>
-          <div id="task-input-hint" class="hint-text">Enter to run · Shift+Enter for a new line</div>
+          <div id="task-input-hint" class="hint-text">Enter to run · Shift+Enter for a new line · up to 5 attachments per task</div>
           <div class="row" id="status-bar">
             <span id="status-workspace"></span>
             <div id="active-model-badge" hidden></div>
