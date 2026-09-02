@@ -39,15 +39,63 @@ function detectImageMediaType(buf: Buffer): string | null {
   return null;
 }
 
+// How much of a large file's head to sniff before deciding whether reading
+// the rest is worth it (see readAttachment below). Comfortably covers every
+// current image magic-number signature (WebP's 12-byte "RIFF....WEBP" check
+// is the longest) with plenty of room left to reliably catch a null byte in
+// real binary formats (video/audio containers, etc.) — without approaching
+// a full read of a huge file.
+const PREFIX_SNIFF_BYTES = 64 * 1024;
+
+/** Reads just the first `byteCount` bytes of a file (or fewer, if the file is shorter), without reading the rest. */
+async function readFilePrefix(filePath: string, byteCount: number): Promise<Buffer> {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const buf = Buffer.alloc(byteCount);
+    const { bytesRead } = await handle.read(buf, 0, byteCount, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
 /**
  * Reads and classifies one picked file — an image (by magic-number
  * signature) or text (by UTF-8 validity), never by extension. Throws for
  * an oversized image or a file that's neither: the caller (the
  * agent:pick-attachments IPC handler, Task 6) catches per-file so one bad
  * file in a multi-file pick doesn't lose the others.
+ *
+ * Stats the file before reading it in full. A file over the 5MB image cap
+ * (the larger of the two caps) is pre-checked with a bounded read of just
+ * its head (PREFIX_SNIFF_BYTES):
+ *   - If that prefix matches a recognized image signature, this falls
+ *     through to the full read below unchanged — the oversized-image
+ *     error path needs the real total byte count for its message, so that
+ *     case is behavior-identical to before this change.
+ *   - Otherwise, a literal null byte anywhere in the prefix is treated as
+ *     a reliable binary signal (real text essentially never contains one)
+ *     and the file is rejected immediately, without ever reading the rest
+ *     of it — this is what protects the main process from an
+ *     accidentally-picked huge file (e.g. a 900MB video) freezing on a
+ *     full read just to be thrown away.
+ *   - A large file whose prefix has no null byte is NOT pre-rejected: a
+ *     legitimate large text file is accepted (truncated to MAX_TEXT_BYTES)
+ *     regardless of size, exactly as before — so it still falls through to
+ *     the full read/classify path below.
  */
 export async function readAttachment(filePath: string): Promise<PickedAttachment> {
   const name = path.basename(filePath);
+
+  const stat = await fs.stat(filePath);
+  if (stat.size > MAX_IMAGE_BYTES) {
+    const prefix = await readFilePrefix(filePath, PREFIX_SNIFF_BYTES);
+    const isRecognizedImage = detectImageMediaType(prefix) !== null;
+    if (!isRecognizedImage && prefix.includes(0)) {
+      throw new Error(`${name}: not a recognized image and not valid UTF-8 text.`);
+    }
+  }
+
   const buf = await fs.readFile(filePath);
 
   const imageMediaType = detectImageMediaType(buf);

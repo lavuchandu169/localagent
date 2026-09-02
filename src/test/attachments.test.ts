@@ -134,5 +134,55 @@ console.log("readAttachment:");
   check("a text-like file with a literal null byte is rejected", threw);
 }
 
+{
+  // A large (well over the 5MB image cap) file that isn't a recognized
+  // image and has a null byte within its first bytes — like a real video
+  // container's binary header. Proves readAttachment rejects it via the
+  // new stat-based pre-check, WITHOUT ever calling fs.readFile on the
+  // whole file: readFile is monkey-patched to record whether it's called
+  // at all, which is more reliable than timing.
+  const bigBinary = Buffer.concat([
+    Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]), // fake mp4-ish box header, includes null bytes
+    Buffer.alloc(8 * 1024 * 1024, 0x41), // padding well past the 5MB cap
+  ]);
+  const filePath = await withTempFile("huge.mp4", bigBinary);
+
+  let readFileCalled = false;
+  const originalReadFile = fs.readFile;
+  // @ts-expect-error -- intentionally monkey-patching for this one assertion
+  fs.readFile = async (...args: Parameters<typeof fs.readFile>) => {
+    readFileCalled = true;
+    return originalReadFile(...args);
+  };
+
+  let threw = false;
+  let message = "";
+  try {
+    await readAttachment(filePath);
+  } catch (err) {
+    threw = true;
+    message = err instanceof Error ? err.message : String(err);
+  } finally {
+    fs.readFile = originalReadFile;
+  }
+
+  check("a large non-image file with an early null byte is rejected", threw);
+  check("the rejection message matches the not-image/not-text style", message.includes("huge.mp4") && message.includes("not a recognized image"));
+  check("the rejection happens WITHOUT a full fs.readFile of the file (stat-based pre-check)", !readFileCalled);
+}
+
+{
+  // A large text-looking file (over the 5MB image cap, no null bytes in its
+  // head) must still be ACCEPTED (truncated to the 200KB text cap) — the
+  // stat-based pre-check must never reject a large file just because it's
+  // large and not an image; only a large file that also looks binary gets
+  // pre-rejected. This is the regression guard for that invariant.
+  const bigText = "y".repeat(6 * 1024 * 1024);
+  const filePath = await withTempFile("huge.log", bigText);
+  const result = await readAttachment(filePath);
+  check("a large legitimate text file is still accepted, not pre-rejected", result.kind === "text" && result.truncated === true);
+  check("its truncated content still ends with the truncation marker", result.content!.endsWith("\n…truncated…\n"));
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
