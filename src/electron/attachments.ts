@@ -58,12 +58,13 @@ export async function readAttachment(filePath: string): Promise<PickedAttachment
     return { name, kind: "image", mediaType: imageMediaType, dataBase64: buf.toString("base64") };
   }
 
-  // Buffer#toString("utf-8") never throws on invalid bytes — it silently
-  // substitutes U+FFFD for anything that isn't valid UTF-8. A binary file
-  // decoded this way is riddled with replacement characters; genuine text
-  // has none. That's the actual signal a binary/unsupported file gets
-  // rejected on, not a try/catch around the decode itself.
-  // Also reject files with null bytes, which indicate binary data.
+  // Detect binary/unsupported files by two criteria:
+  // 1. Literal null bytes (0x00) in the buffer — nearly always binary, even
+  //    if the rest decodes as valid UTF-8 (e.g., RIFF headers like WAV).
+  // 2. UTF-8 decoding with U+FFFD (replacement character) — indicates
+  //    invalid byte sequences. Buffer#toString("utf-8") never throws; it
+  //    silently substitutes U+FFFD for invalid sequences. Real text files
+  //    have none; binary files are riddled with them.
   if (buf.includes(0)) {
     throw new Error(`${name}: not a recognized image and not valid UTF-8 text.`);
   }

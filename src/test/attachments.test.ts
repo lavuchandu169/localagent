@@ -118,5 +118,21 @@ console.log("readAttachment:");
   check("a binary file that isn't a recognized image is rejected", threw);
 }
 
+{
+  // A text-like buffer that IS valid UTF-8 (no U+FFFD replacement characters)
+  // but contains a literal null byte among otherwise-printable ASCII content.
+  // This is the null-byte rejection criterion in isolation — the test proves
+  // the new check catches binary files that happen to decode as otherwise-valid UTF-8.
+  const textWithNull = Buffer.from([0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x00, 0x77, 0x6f, 0x72, 0x6c, 0x64]); // "hello\0world"
+  const filePath = await withTempFile("null-text.txt", textWithNull);
+  let threw = false;
+  try {
+    await readAttachment(filePath);
+  } catch {
+    threw = true;
+  }
+  check("a text-like file with a literal null byte is rejected", threw);
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
