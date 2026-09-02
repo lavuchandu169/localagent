@@ -7,7 +7,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("agent", {
   startSession: (config, resume) => ipcRenderer.invoke("agent:start-session", config, resume),
-  runTask: (sessionId, task) => ipcRenderer.invoke("agent:run-task", sessionId, task),
+  runTask: (sessionId, task, attachments) => ipcRenderer.invoke("agent:run-task", sessionId, task, attachments),
   respondPermission: (sessionId, callId, approved) =>
     ipcRenderer.invoke("agent:respond-permission", sessionId, callId, approved),
   respondPlan: (sessionId, approved) => ipcRenderer.invoke("agent:respond-plan", sessionId, approved),
@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("agent", {
   revertCheckpoint: (sessionId) => ipcRenderer.invoke("agent:revert-checkpoint", sessionId),
   getChanges: (sessionId) => ipcRenderer.invoke("agent:get-changes", sessionId),
   pickWorkspace: () => ipcRenderer.invoke("agent:pick-workspace"),
+  pickAttachments: () => ipcRenderer.invoke("agent:pick-attachments"),
   listCachedModels: () => ipcRenderer.invoke("agent:list-cached-models"),
   deleteCachedModel: (id) => ipcRenderer.invoke("agent:delete-cached-model", id),
   cancelDownload: () => ipcRenderer.invoke("agent:cancel-download"),

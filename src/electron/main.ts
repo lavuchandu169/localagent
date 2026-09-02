@@ -14,7 +14,7 @@ import fsPromises from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
-import type { PermissionMode } from "../types.js";
+import type { AttachedImage, AttachedText, PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
 import { isEmbeddedModelId } from "../models.js";
 import { detectHardware, recommendModel } from "./hardwareInfo.js";
@@ -26,6 +26,7 @@ import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 import { loadEnvFile } from "./loadEnvFile.js";
 import { isSecureStorageAvailable, electronStorageCrypto } from "./secureStorage.js";
 import { appendErrorLog } from "./errorLog.js";
+import { readAttachment, type PickedAttachment } from "./attachments.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -225,11 +226,35 @@ app.whenReady().then(() => {
     currentStartAbortController?.abort();
   });
 
-  ipcMain.handle("agent:run-task", (event, sessionId: string, task: string) =>
-    runTask(registry, sessionId, task, (agentEvent) => {
-      event.sender.send("agent:event", sessionId, agentEvent);
-    })
+  ipcMain.handle(
+    "agent:run-task",
+    (event, sessionId: string, task: string, attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }) =>
+      runTask(
+        registry,
+        sessionId,
+        task,
+        (agentEvent) => {
+          event.sender.send("agent:event", sessionId, agentEvent);
+        },
+        attachments
+      )
   );
+
+  ipcMain.handle("agent:pick-attachments", async () => {
+    const result = await dialog.showOpenDialog(win, { properties: ["openFile", "multiSelections"] });
+    if (result.canceled) return { attachments: [], errors: [] };
+
+    const attachments: PickedAttachment[] = [];
+    const errors: { name: string; error: string }[] = [];
+    for (const filePath of result.filePaths) {
+      try {
+        attachments.push(await readAttachment(filePath));
+      } catch (err) {
+        errors.push({ name: path.basename(filePath), error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { attachments, errors };
+  });
 
   ipcMain.handle("agent:respond-permission", (_event, sessionId: string, callId: string, approved: boolean) =>
     respondPermission(registry, sessionId, callId, approved)

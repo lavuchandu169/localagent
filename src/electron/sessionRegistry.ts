@@ -8,7 +8,7 @@ import { AnthropicProvider } from "../providers/anthropicProvider.js";
 import { isEmbeddedModelId } from "../models.js";
 import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
-import type { AgentEvent, ChatMessage, ModelProvider, PermissionMode } from "../types.js";
+import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode } from "../types.js";
 import { revertToCheckpoint } from "../checkpoints.js";
 import { getChanges, type FileChangeWithDiff } from "../changesSince.js";
 
@@ -321,7 +321,8 @@ async function doRunTask(
   sessionId: string,
   entry: SessionEntry,
   task: string,
-  onEvent: (event: AgentEvent) => void
+  onEvent: (event: AgentEvent) => void,
+  attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }
 ): Promise<void> {
   if (entry.title === null) {
     entry.title = task.length > 60 ? `${task.slice(0, 60)}…` : task;
@@ -333,7 +334,7 @@ async function doRunTask(
     // or a provider error — always yields "done" as its final event, with
     // "error" (when present) yielded immediately before it. Persisting on
     // both would just save the same final state twice.
-    for await (const event of entry.session.run(task)) {
+    for await (const event of entry.session.run(task, attachments)) {
       entry.events.push(event);
       onEvent(event);
       if (event.type === "done") {
@@ -354,12 +355,13 @@ export async function runTask(
   registry: SessionRegistry,
   sessionId: string,
   task: string,
-  onEvent: (event: AgentEvent) => void
+  onEvent: (event: AgentEvent) => void,
+  attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }
 ): Promise<void> {
   const entry = registry.sessions.get(sessionId);
   if (!entry) throw new Error(`Unknown session: ${sessionId}`);
 
-  const runPromise = doRunTask(registry, sessionId, entry, task, onEvent);
+  const runPromise = doRunTask(registry, sessionId, entry, task, onEvent, attachments);
   entry.running = runPromise;
   try {
     await runPromise;

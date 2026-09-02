@@ -795,6 +795,27 @@ await (async () => {
     await runPromise;
   }
 
+  {
+    // Real end-to-end: attachments passed to runTask actually reach the
+    // first pushed message, proving the plumbing through doRunTask ->
+    // AgentSession.run is wired, not just type-compatible.
+    const registry = createSessionRegistry(sessionsDir);
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "got it" } }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+
+    await runTask(registry, sessionId, "look at this", () => {}, {
+      images: [{ name: "a.png", mediaType: "image/png", dataBase64: "AAAA" }],
+    });
+
+    const snapshot = getLiveSessionSnapshot(registry, sessionId);
+    const firstUserMessage = snapshot?.messages.find((m) => m.role === "user");
+    check("runTask's attachments argument reaches the session's actual message history", firstUserMessage?.images?.[0]?.name === "a.png");
+  }
+
   await fs.rm(sessionsDir, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
