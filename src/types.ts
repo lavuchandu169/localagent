@@ -16,6 +16,17 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+export interface AttachedImage {
+  name: string;
+  mediaType: string;
+  dataBase64: string;
+}
+
+export interface AttachedText {
+  name: string;
+  content: string;
+}
+
 export interface ToolContext {
   workspaceRoot: string;
   log: (msg: string) => void;
@@ -36,6 +47,8 @@ export interface ChatMessage {
   tool_call_id?: string;
   name?: string;
   tool_calls?: ToolCall[];
+  images?: AttachedImage[];
+  textAttachments?: AttachedText[];
 }
 
 export interface ModelInfo {
