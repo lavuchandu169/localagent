@@ -790,6 +790,173 @@ await (async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 })();
 
+console.log("\nPlan first — a task's first turn held for approval before anything runs:");
+await (async () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const workspaceRoot = path.resolve(__dirname, "..", "..", "fixture-repo");
+
+  {
+    // Approved: the exact same tool_calls response the model already
+    // produced gets executed — no re-fetch from the provider.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "math.js" } }] } },
+      { turn: { type: "final", content: "It adds two numbers." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+      planFirst: true,
+      onPlanApprovalNeeded: async () => true,
+    });
+
+    const events: AgentEvent[] = [];
+    // Deliberately doesn't name a real file — this is testing planFirst's
+    // gate on the model's OWN first turn, not autoReadNamedFiles' separate
+    // pre-loop grounding step (which runs before the turn loop and isn't
+    // gated by planFirst at all — a task that names a real file would
+    // trigger its own tool.start before the model's turn even happens,
+    // which is correct but would make this specific ordering assertion
+    // meaningless).
+    for await (const event of session.run("look at a file and tell me what it does")) events.push(event);
+
+    const planIndex = events.findIndex((e) => e.type === "plan.proposed");
+    const toolStartIndex = events.findIndex((e) => e.type === "tool.start");
+    check("a plan.proposed event fires", planIndex !== -1);
+    check(
+      "the proposed plan carries the exact tool call the model produced",
+      events[planIndex]?.type === "plan.proposed" &&
+        events[planIndex].plan.kind === "tool_calls" &&
+        events[planIndex].plan.toolCalls[0]?.name === "read_file"
+    );
+    check("the plan is shown BEFORE any tool actually starts", planIndex < toolStartIndex);
+    check("approving still executes the proposed call (real read, no re-fetch)", toolStartIndex !== -1);
+    check("the task completes normally after an approved plan", events.some((e) => e.type === "done" && e.success === true));
+  }
+
+  {
+    // Rejected: nothing from that turn ever executes.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "should-not-exist.txt", content: "x" } }] } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+      planFirst: true,
+      onPlanApprovalNeeded: async () => false,
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("create should-not-exist.txt")) events.push(event);
+
+    check("a rejected plan never starts any tool", !events.some((e) => e.type === "tool.start"));
+    check(
+      "the task ends with success:false and a clear summary",
+      events.some((e) => e.type === "done" && e.success === false && e.summary === "Plan rejected — nothing was changed.")
+    );
+    const fileExists = await fs
+      .access(path.join(workspaceRoot, "should-not-exist.txt"))
+      .then(() => true)
+      .catch(() => false);
+    check("the file the rejected plan would have created was never written", !fileExists);
+  }
+
+  {
+    // A plain text answer as the "plan", also approvable.
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "It's just a sum function." } }];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+      planFirst: true,
+      onPlanApprovalNeeded: async () => true,
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("what does math.js do, briefly")) events.push(event);
+
+    const plan = events.find((e) => e.type === "plan.proposed");
+    check(
+      "a text-only first turn is proposed as a text-kind plan",
+      plan?.type === "plan.proposed" && plan.plan.kind === "text" && plan.plan.content === "It's just a sum function."
+    );
+    check("approving a text plan still completes the task normally", events.some((e) => e.type === "done" && e.success === true));
+  }
+
+  {
+    // planFirst off (the default) — completely unaffected, exactly as
+    // every other test in this file already assumes.
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "done" } }];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("anything")) events.push(event);
+    check("planFirst defaults to off — no plan.proposed event without opting in", !events.some((e) => e.type === "plan.proposed"));
+  }
+
+  {
+    // Only turn 1 is gated — a second turn in the same task runs normally.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "math.js" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r2", name: "read_file", arguments: { path: "math.js" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+      planFirst: true,
+      onPlanApprovalNeeded: async () => true,
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("read math.js twice")) events.push(event);
+    check("only one plan.proposed fires for a multi-turn task — turn 2 is never re-gated", events.filter((e) => e.type === "plan.proposed").length === 1);
+  }
+
+  {
+    // Per-task, not per-session: a second run() call on the same session
+    // gates its own first turn too.
+    const script: ChatResponse[] = [
+      { turn: { type: "final", content: "first answer" } },
+      { turn: { type: "final", content: "second answer" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+      planFirst: true,
+      onPlanApprovalNeeded: async () => true,
+    });
+
+    const firstEvents: AgentEvent[] = [];
+    for await (const event of session.run("first task")) firstEvents.push(event);
+    const secondEvents: AgentEvent[] = [];
+    for await (const event of session.run("second task")) secondEvents.push(event);
+
+    check("the first task's first turn is gated", firstEvents.some((e) => e.type === "plan.proposed"));
+    check("a second, separate task is gated again too — planProposedThisTask resets per task", secondEvents.some((e) => e.type === "plan.proposed"));
+  }
+})();
+
 console.log("\nAgent loop (scripted debug-fix scenario):");
 {
   const __filename = fileURLToPath(import.meta.url);

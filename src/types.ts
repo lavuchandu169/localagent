@@ -83,6 +83,11 @@ export type AgentState =
   | "FAILED"
   | "CANCELLED";
 
+/** What the model's very first turn of a task proposes to do — shown for approval before any of it runs, when planFirst is on (AgentSessionOptions.planFirst). Named distinctly from the unrelated PermissionMode "PLAN" (a read-only exploration mode) to avoid confusion — this is "propose, then approve, then execute", independent of which PermissionMode governs the execution that follows. */
+export type ProposedPlan =
+  | { kind: "tool_calls"; toolCalls: ToolCall[]; content?: string }
+  | { kind: "text"; content: string };
+
 export type AgentEvent =
   | { type: "status"; message: string }
   | { type: "text"; text: string }
@@ -90,5 +95,6 @@ export type AgentEvent =
   | { type: "tool.result"; call: ToolCall; result: ToolResult }
   | { type: "permission.request"; call: ToolCall; decision: PermissionDecision; diff?: Change[] }
   | { type: "checkpoint.created"; checkpointHash: string }
+  | { type: "plan.proposed"; plan: ProposedPlan }
   | { type: "done"; success: boolean; summary: string }
   | { type: "error"; message: string };

@@ -781,6 +781,25 @@ label .hint-text {
   letter-spacing: normal;
 }
 
+/* "Plan first" is a checkbox-then-text label, not the usual
+   label-above-input stack — override the general label's column layout
+   for just this one. */
+#plan-first-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+#plan-first {
+  width: auto;
+  cursor: pointer;
+}
+
 #task-input-hint {
   margin-top: 6px;
   max-width: none;
@@ -1172,6 +1191,37 @@ label .hint-text {
   font-style: italic;
   text-align: center;
   padding: 4px 8px;
+}
+
+/* The plan-first card: a task's proposed first move, held for approval
+   before any of it runs. Same left-border-accent language as a session's
+   status bar/warn elements — "this needs your attention" — rather than
+   the plain .tool-card chrome, since nothing has actually happened yet. */
+.plan-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: 5px;
+  padding: 8px 10px;
+  animation: card-in 0.15s ease;
+}
+
+.plan-card-header {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.plan-call {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  padding: 2px 0;
+  overflow-wrap: anywhere;
 }
 
 .permission-prompt {

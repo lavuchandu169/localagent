@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   ModelProvider,
   PermissionMode,
+  ProposedPlan,
   ToolCall,
 } from "./types.js";
 import { ToolRegistry } from "./toolRegistry.js";
@@ -26,6 +27,15 @@ export interface AgentSessionOptions {
   initialMessages?: ChatMessage[];
   /** Called when a tool call needs ASK approval. Return true to allow. */
   onApprovalNeeded?: (call: ToolCall) => Promise<boolean>;
+  /**
+   * When true, every task's very first turn is held for approval before any
+   * of it runs — see run()'s interception right after the first provider
+   * call. Off by default, so existing sessions are unaffected unless this
+   * is explicitly turned on.
+   */
+  planFirst?: boolean;
+  /** Called with the first turn's proposed plan when planFirst is on. Return true to proceed with it exactly as proposed (no re-fetch — the same response is then processed normally); false aborts the task with nothing executed. */
+  onPlanApprovalNeeded?: (plan: ProposedPlan) => Promise<boolean>;
 }
 
 export const DEFAULT_SYSTEM_PROMPT = `You are a careful autonomous coding agent operating on a local repository.
@@ -92,6 +102,8 @@ export class AgentSession {
   private wroteThisTask = false;
   /** Whether the one-shot corrective nudge (see the "final" branch in run()) has already fired this task — reset at the start of every run() call. At most one nudge per task, so a model that ignores it too doesn't loop forever. */
   private correctiveNudgeSentThisTask = false;
+  /** Whether THIS task's first-turn plan has already been proposed — reset at the start of every run() call. Gates only turn 1; once a task's plan has been shown (and approved), later turns in that same task run normally. */
+  private planProposedThisTask = false;
 
   constructor(private opts: AgentSessionOptions) {
     this.permissions = new PermissionEngine(opts.permissionMode);
@@ -125,6 +137,11 @@ export class AgentSession {
   /** Updates the permission policy in place — same in-place, between-tasks-only contract as setWorkspaceRoot. */
   setPermissionMode(mode: PermissionMode): void {
     this.permissions = new PermissionEngine(mode);
+  }
+
+  /** Updates whether the next task's first turn gets held for approval before executing — same in-place, between-tasks-only contract as setWorkspaceRoot/setPermissionMode. */
+  setPlanFirst(planFirst: boolean): void {
+    this.opts.planFirst = planFirst;
   }
 
   cancel() {
@@ -213,6 +230,7 @@ export class AgentSession {
     this.checkpointAttemptedThisTask = false;
     this.wroteThisTask = false;
     this.correctiveNudgeSentThisTask = false;
+    this.planProposedThisTask = false;
     yield* this.autoReadNamedFiles(task);
     const maxTurns = this.opts.maxTurns ?? 25;
 
@@ -238,6 +256,36 @@ export class AgentSession {
         yield { type: "error", message: `Model provider error: ${err.message}` };
         yield { type: "done", success: false, summary: "Provider error." };
         return;
+      }
+
+      // Holds the task's very first turn for approval before any of it
+      // runs — deliberately not a separate "plan-only, don't call tools
+      // yet" turn: prompting a model to withhold tool calls proved
+      // unreliable elsewhere in this file (see the corrective-nudge
+      // comment below), so instead of fighting that, this intercepts
+      // whatever the model naturally proposes first — a batch of tool
+      // calls, or a direct text answer — and shows exactly that as the
+      // plan. Approving falls through to process this SAME response
+      // normally (no re-fetch); rejecting ends the task with nothing
+      // executed and nothing added to history. Only gates turn 1 — once
+      // a task's plan is approved, its later turns are ungated.
+      if (this.opts.planFirst && !this.planProposedThisTask) {
+        this.planProposedThisTask = true;
+        const plan: ProposedPlan =
+          response.turn.type === "tool_calls"
+            ? { kind: "tool_calls", toolCalls: response.turn.toolCalls, content: response.turn.content }
+            : { kind: "text", content: response.turn.content };
+        yield { type: "plan.proposed", plan };
+        const approved = this.opts.onPlanApprovalNeeded ? await this.opts.onPlanApprovalNeeded(plan) : false;
+        if (!approved) {
+          // A deliberate user decision, not an error — same "declined,
+          // not failed" spirit as a cancelled task, hence this state
+          // rather than FAILED (reserved for real errors elsewhere in
+          // this loop: max-turns-exceeded, a provider error).
+          this.state = "CANCELLED";
+          yield { type: "done", success: false, summary: "Plan rejected — nothing was changed." };
+          return;
+        }
       }
 
       if (response.turn.type === "final") {

@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("agent", {
   runTask: (sessionId, task) => ipcRenderer.invoke("agent:run-task", sessionId, task),
   respondPermission: (sessionId, callId, approved) =>
     ipcRenderer.invoke("agent:respond-permission", sessionId, callId, approved),
+  respondPlan: (sessionId, approved) => ipcRenderer.invoke("agent:respond-plan", sessionId, approved),
   cancelSession: (sessionId) => ipcRenderer.invoke("agent:cancel-session", sessionId),
   getCheckpoint: (sessionId) => ipcRenderer.invoke("agent:get-checkpoint", sessionId),
   revertCheckpoint: (sessionId) => ipcRenderer.invoke("agent:revert-checkpoint", sessionId),

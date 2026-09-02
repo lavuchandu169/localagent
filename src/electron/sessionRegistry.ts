@@ -22,6 +22,8 @@ export interface SessionConfig {
   workspaceRoot?: string;
   provider: ProviderConfig;
   mode: PermissionMode;
+  /** When true, every task's first turn is held for approval before executing — see AgentSessionOptions.planFirst. Omitted/false preserves today's behavior. */
+  planFirst?: boolean;
 }
 
 export type ModelDownloadProgress = { totalSize: number; downloadedSize: number };
@@ -50,6 +52,8 @@ interface SessionEntry {
   session: AgentSession;
   provider: ModelProvider;
   pendingApprovals: Map<string, (approved: boolean) => void>;
+  /** At most one pending plan approval per session (only turn 1 of a task is ever gated) — a mutable single-slot object rather than a Map, wired into AgentSession's onPlanApprovalNeeded before this entry exists (see startSession), same reason pendingApprovals is a pre-built Map rather than something attached after the fact. */
+  pendingPlanApproval: { resolve: ((approved: boolean) => void) | null };
   events: AgentEvent[];
   title: string | null;
   createdAt: number;
@@ -107,6 +111,7 @@ export async function startSession(
 
   const sessionId = deps.resume?.sessionId ?? crypto.randomUUID();
   const pendingApprovals = new Map<string, (approved: boolean) => void>();
+  const pendingPlanApproval: { resolve: ((approved: boolean) => void) | null } = { resolve: null };
   const workspaceRoot = config.workspaceRoot ?? os.homedir();
 
   // Starting a session under an id that's already live (a resume of a
@@ -133,6 +138,11 @@ export async function startSession(
       new Promise<boolean>((resolve) => {
         pendingApprovals.set(call.id, resolve);
       }),
+    planFirst: config.planFirst,
+    onPlanApprovalNeeded: () =>
+      new Promise<boolean>((resolve) => {
+        pendingPlanApproval.resolve = resolve;
+      }),
   });
 
   // Fixed once here: a resumed session keeps its original owner regardless
@@ -145,6 +155,7 @@ export async function startSession(
     session,
     provider,
     pendingApprovals,
+    pendingPlanApproval,
     events: deps.resume ? [...deps.resume.priorEvents] : [],
     title: deps.resume?.title ?? null,
     createdAt: deps.resume?.createdAt ?? Date.now(),
@@ -168,11 +179,16 @@ export async function startSession(
  * the overwhelmingly common edit (workspace or mode, not model) never has
  * to risk that path at all.
  */
-export function updateLiveSessionSettings(registry: SessionRegistry, sessionId: string, updates: { workspaceRoot?: string; mode?: PermissionMode }): boolean {
+export function updateLiveSessionSettings(
+  registry: SessionRegistry,
+  sessionId: string,
+  updates: { workspaceRoot?: string; mode?: PermissionMode; planFirst?: boolean }
+): boolean {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return false;
   if (updates.workspaceRoot !== undefined) entry.session.setWorkspaceRoot(updates.workspaceRoot);
   if (updates.mode !== undefined) entry.session.setPermissionMode(updates.mode);
+  if (updates.planFirst !== undefined) entry.session.setPlanFirst(updates.planFirst);
   return true;
 }
 
@@ -362,6 +378,16 @@ export function respondPermission(registry: SessionRegistry, sessionId: string, 
   resolve(approved);
 }
 
+/** Same contract as respondPermission, for the single pending plan approval (see SessionEntry.pendingPlanApproval) — no callId, since at most one plan is ever pending per session. */
+export function respondPlan(registry: SessionRegistry, sessionId: string, approved: boolean): void {
+  const entry = registry.sessions.get(sessionId);
+  if (!entry) return;
+  const resolve = entry.pendingPlanApproval.resolve;
+  if (!resolve) return;
+  entry.pendingPlanApproval.resolve = null;
+  resolve(approved);
+}
+
 /**
  * Shared teardown for a live entry: resolves any pending permission prompt
  * with `false` (so a run awaiting approval can't hang forever once its
@@ -373,6 +399,10 @@ export function respondPermission(registry: SessionRegistry, sessionId: string, 
 async function finalizeEntry(entry: SessionEntry): Promise<void> {
   for (const resolve of entry.pendingApprovals.values()) resolve(false);
   entry.pendingApprovals.clear();
+  if (entry.pendingPlanApproval.resolve) {
+    entry.pendingPlanApproval.resolve(false);
+    entry.pendingPlanApproval.resolve = null;
+  }
   entry.session.cancel();
   await entry.running?.catch(() => {});
   await entry.provider.dispose?.().catch(() => {});

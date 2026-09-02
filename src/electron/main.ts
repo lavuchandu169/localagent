@@ -12,7 +12,7 @@ import path from "node:path";
 import os from "node:os";
 import fsPromises from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import type { PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
@@ -235,6 +235,8 @@ app.whenReady().then(() => {
     respondPermission(registry, sessionId, callId, approved)
   );
 
+  ipcMain.handle("agent:respond-plan", (_event, sessionId: string, approved: boolean) => respondPlan(registry, sessionId, approved));
+
   ipcMain.handle("agent:cancel-session", (_event, sessionId: string) => cancelSession(registry, sessionId));
 
   ipcMain.handle("agent:get-checkpoint", (_event, sessionId: string) => getCheckpointHash(registry, sessionId));
@@ -379,7 +381,7 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.handle("agent:get-live-session", (_event, id: string) => getLiveSessionSnapshot(registry, id));
-  ipcMain.handle("agent:update-session-settings", (_event, id: string, updates: { workspaceRoot?: string; mode?: PermissionMode }) =>
+  ipcMain.handle("agent:update-session-settings", (_event, id: string, updates: { workspaceRoot?: string; mode?: PermissionMode; planFirst?: boolean }) =>
     updateLiveSessionSettings(registry, id, updates)
   );
   ipcMain.handle("agent:delete-session", async (_event, id: string) => {

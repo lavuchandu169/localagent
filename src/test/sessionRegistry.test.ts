@@ -17,6 +17,7 @@ import {
   getCheckpointHash,
   revertSessionCheckpoint,
   getSessionChanges,
+  respondPlan,
 } from "../electron/sessionRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { loadSessionRecord } from "../sessionStore.js";
@@ -190,6 +191,69 @@ await (async () => {
       "respondPermission unblocks a pending ASK and the run completes",
       events.some((e) => e.type === "tool.result" && e.result.ok) && events[events.length - 1]?.type === "done"
     );
+  }
+
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    check(
+      "respondPlan on an unknown session is a silent no-op",
+      (() => {
+        try {
+          respondPlan(registry, "nope", true);
+          return true;
+        } catch {
+          return false;
+        }
+      })()
+    );
+  }
+
+  {
+    // Real end-to-end through the registry API: planFirst set at
+    // startSession, the resulting plan.proposed event carries a real
+    // pending approval, and respondPlan unblocks it exactly like
+    // respondPermission does for a per-edit ASK.
+    const registry = createSessionRegistry(sessionsDir);
+    // "pwd" classifies as SAFE_READ (permissions.ts), so once the plan
+    // itself is approved it auto-executes with no second ASK to handle —
+    // an UNKNOWN-classified command here would hang this test forever on
+    // an unhandled permission.request, the exact same class of gap
+    // documented on the checkpoint tests elsewhere in this file.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "pwd" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "AUTO_SAFE", planFirst: true },
+      { providerFactory: () => new MockProvider(script) }
+    );
+
+    const events: AgentEvent[] = [];
+    const runPromise = runTask(registry, sessionId, "run echo", (e: AgentEvent) => {
+      events.push(e);
+      if (e.type === "plan.proposed") {
+        setImmediate(() => respondPlan(registry, sessionId, true));
+      }
+    });
+    await runPromise;
+
+    check("a plan.proposed event fired for the planFirst session", events.some((e) => e.type === "plan.proposed"));
+    check(
+      "respondPlan(true) let the proposed command actually execute",
+      events.some((e) => e.type === "tool.result" && e.result.ok) && events[events.length - 1]?.type === "done"
+    );
+  }
+
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider([]) }
+    );
+    const updated = updateLiveSessionSettings(registry, sessionId, { planFirst: true });
+    check("updateLiveSessionSettings accepts a planFirst change for a live session", updated);
   }
 
   {

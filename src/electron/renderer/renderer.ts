@@ -1,4 +1,4 @@
-import type { AgentEvent, ChatMessage, PermissionMode, ToolCall } from "../../types.js";
+import type { AgentEvent, ChatMessage, PermissionMode, ProposedPlan, ToolCall } from "../../types.js";
 import type { Change } from "diff";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
@@ -64,6 +64,7 @@ interface AgentBridge {
   startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string }>;
   runTask(sessionId: string, task: string): Promise<void>;
   respondPermission(sessionId: string, callId: string, approved: boolean): Promise<void>;
+  respondPlan(sessionId: string, approved: boolean): Promise<void>;
   cancelSession(sessionId: string): Promise<void>;
   getCheckpoint(sessionId: string): Promise<string | null>;
   revertCheckpoint(sessionId: string): Promise<{ ok: boolean; error?: string }>;
@@ -85,7 +86,7 @@ interface AgentBridge {
   searchSessions(query: string): Promise<SessionIndexEntry[]>;
   loadSession(id: string): Promise<SessionRecord | null>;
   getLiveSession(id: string): Promise<LiveSessionSnapshot | null>;
-  updateSessionSettings(id: string, updates: { workspaceRoot?: string; mode?: PermissionMode }): Promise<boolean>;
+  updateSessionSettings(id: string, updates: { workspaceRoot?: string; mode?: PermissionMode; planFirst?: boolean }): Promise<boolean>;
   deleteSession(id: string): Promise<void>;
   onSessionsChanged(callback: () => void): () => void;
   onCloudSyncScopeWarning(callback: () => void): () => void;
@@ -164,6 +165,7 @@ const ANTHROPIC_MODELS: Record<string, { name: string; note: string }> = {
 const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 const CUSTOM_SERVER_VALUE = "custom-server";
 const modeSelect = byId<HTMLSelectElement>("mode");
+const planFirstCheckbox = byId<HTMLInputElement>("plan-first");
 const modeDescription = byId<HTMLSpanElement>("mode-description");
 const startSessionBtn = byId<HTMLButtonElement>("start-session");
 const startError = byId<HTMLDivElement>("start-error");
@@ -275,6 +277,7 @@ function setSetupControlsDisabled(disabled: boolean): void {
   modeSelect.disabled = disabled;
   baseUrlInput.disabled = disabled;
   externalModelInput.disabled = disabled;
+  planFirstCheckbox.disabled = disabled;
 }
 
 // One dropdown, one source of truth for "which model" — previously a
@@ -647,6 +650,47 @@ function renderDiff(diff: Change[]): HTMLElement {
   return container;
 }
 
+/**
+ * Renders a task's proposed first move (see planFirst) as a card: either
+ * the list of tool calls it wants to make (name + arguments, same format
+ * toolCard uses so it reads consistently with the rest of the log) or the
+ * plain text it would have answered with directly — followed by an
+ * Approve/Reject prompt reusing the exact same visual language as a
+ * per-edit permission.request prompt, since both are "review before it
+ * happens" moments.
+ */
+function renderPlanProposal(plan: ProposedPlan): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "plan-card";
+
+  const header = document.createElement("div");
+  header.className = "plan-card-header";
+  header.textContent = "Proposed plan";
+  card.appendChild(header);
+
+  if (plan.kind === "tool_calls") {
+    if (plan.content) {
+      const intro = document.createElement("div");
+      intro.className = "log-text";
+      intro.textContent = plan.content;
+      card.appendChild(intro);
+    }
+    for (const call of plan.toolCalls) {
+      const line = document.createElement("div");
+      line.className = "plan-call";
+      line.textContent = `${call.name}(${JSON.stringify(call.arguments)})`;
+      card.appendChild(line);
+    }
+  } else {
+    const text = document.createElement("div");
+    text.className = "log-text";
+    text.textContent = plan.content;
+    card.appendChild(text);
+  }
+
+  return card;
+}
+
 function renderEvent(event: AgentEvent): void {
   switch (event.type) {
     case "status":
@@ -709,6 +753,32 @@ function renderEvent(event: AgentEvent): void {
       revertCheckpointBtn.hidden = false;
       viewChangesBtn.hidden = false;
       break;
+    case "plan.proposed": {
+      emptyState.hidden = true;
+      const card = renderPlanProposal(event.plan);
+      const prompt = document.createElement("div");
+      prompt.className = "permission-prompt";
+      const approve = document.createElement("button");
+      approve.className = "approve-btn";
+      approve.textContent = "Approve";
+      const reject = document.createElement("button");
+      reject.className = "deny-btn";
+      reject.textContent = "Reject";
+      const respond = (approved: boolean) => {
+        approve.disabled = true;
+        reject.disabled = true;
+        prompt.classList.add("permission-resolved");
+        if (sessionId) void window.agent.respondPlan(sessionId, approved);
+      };
+      approve.addEventListener("click", () => respond(true));
+      reject.addEventListener("click", () => respond(false));
+      prompt.appendChild(approve);
+      prompt.appendChild(reject);
+      card.appendChild(prompt);
+      eventLog.appendChild(card);
+      eventLog.scrollTop = eventLog.scrollHeight;
+      break;
+    }
     case "text":
       logLine(event.text, "log-text");
       break;
@@ -777,7 +847,12 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
 
   // workspaceRoot omitted entirely when none was picked — startSession defaults
   // it to the home directory and hands back whichever path it actually used.
-  const config: SessionConfig = { ...(workspaceRoot ? { workspaceRoot } : {}), provider, mode: modeSelect.value as PermissionMode };
+  const config: SessionConfig = {
+    ...(workspaceRoot ? { workspaceRoot } : {}),
+    provider,
+    mode: modeSelect.value as PermissionMode,
+    planFirst: planFirstCheckbox.checked,
+  };
 
   startSessionBtn.disabled = true;
   startSessionBtn.textContent = "Starting…";
@@ -988,7 +1063,11 @@ async function applySessionEdits(): Promise<void> {
   if (providerConfigsEqual(newProvider, activeProviderConfig)) {
     startSessionBtn.disabled = true;
     startSessionBtn.textContent = "Applying…";
-    const ok = await window.agent.updateSessionSettings(idBeingEdited, { workspaceRoot: workspaceRoot ?? undefined, mode: newMode });
+    const ok = await window.agent.updateSessionSettings(idBeingEdited, {
+      workspaceRoot: workspaceRoot ?? undefined,
+      mode: newMode,
+      planFirst: planFirstCheckbox.checked,
+    });
     editingSession = false;
     if (!ok) {
       startError.textContent = "Couldn't apply changes — the session may have already ended.";
