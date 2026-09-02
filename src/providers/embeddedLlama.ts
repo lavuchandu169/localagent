@@ -3,6 +3,28 @@ import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, 
 import { EMBEDDED_MODELS, type EmbeddedModelId } from "../models.js";
 
 /**
+ * Builds a user turn's text — the task text plus, for each attachment,
+ * an honest note folded in as plain text. Images specifically: this app
+ * never loads a vision-projector model alongside the text GGUF, so a
+ * locally-running model genuinely cannot see an attached image — saying
+ * so directly (rather than silently dropping it, or pretending it was
+ * seen) is what lets the model itself tell the user it can't help with
+ * that part, instead of confusingly ignoring the request. Text
+ * attachments have no such limitation and fold in exactly like the
+ * other two providers.
+ */
+function buildUserText(m: ChatMessage): string {
+  let text = m.content;
+  for (const img of m.images ?? []) {
+    text += `\n\n[Attached image: ${img.name} — this local model can't see images.]`;
+  }
+  for (const att of m.textAttachments ?? []) {
+    text += `\n\n--- Attached file: ${att.name} ---\n${att.content}\n---`;
+  }
+  return text;
+}
+
+/**
  * Converts our provider-agnostic transcript into node-llama-cpp's
  * ChatHistoryItem[], folding each `tool` result message back onto the
  * ChatModelFunctionCall it answers (matched by tool_call_id) so the model
@@ -16,7 +38,7 @@ export function toLlamaHistory(messages: ChatMessage[]): ChatHistoryItem[] {
     if (m.role === "system") {
       history.push({ type: "system", text: m.content });
     } else if (m.role === "user") {
-      history.push({ type: "user", text: m.content });
+      history.push({ type: "user", text: buildUserText(m) });
     } else if (m.role === "assistant") {
       const response: Array<string | ChatModelFunctionCall> = [];
       if (m.content) response.push(m.content);

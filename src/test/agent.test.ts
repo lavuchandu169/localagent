@@ -219,6 +219,28 @@ console.log("\nEmbedded llama provider conversion:");
   });
   check("a truly malformed candidate still falls back to a final (prose) turn, not a wrong recovery", turn.type === "final");
 }
+{
+  const history = toLlamaHistory([
+    { role: "user", content: "what's this", images: [{ name: "photo.png", mediaType: "image/png", dataBase64: "AAAA" }] },
+  ]);
+  check(
+    "an attached image folds into the user turn's text as an honest can't-see-images note, not silently dropped",
+    history[0]?.type === "user" && (history[0] as any).text === "what's this\n\n[Attached image: photo.png — this local model can't see images.]"
+  );
+}
+{
+  const history = toLlamaHistory([
+    { role: "user", content: "summarize", textAttachments: [{ name: "notes.txt", content: "key point: X" }] },
+  ]);
+  check(
+    "a text attachment folds in exactly like the other two providers",
+    history[0]?.type === "user" && (history[0] as any).text === "summarize\n\n--- Attached file: notes.txt ---\nkey point: X\n---"
+  );
+}
+{
+  const history = toLlamaHistory([{ role: "user", content: "plain question" }]);
+  check("a message with no attachments is unaffected", history[0]?.type === "user" && (history[0] as any).text === "plain question");
+}
 
 console.log("\nAuto-read named files before the first turn:");
 await (async () => {
