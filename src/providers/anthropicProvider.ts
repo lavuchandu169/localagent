@@ -3,6 +3,37 @@ import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, 
 
 const DEFAULT_MODEL_ID = "claude-sonnet-5";
 
+/** The four image formats attachments.ts (Task 1) ever classifies as an image — the only ones Anthropic's base64 image source accepts. */
+type AnthropicImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+/**
+ * Builds a user message's `content` — a plain string when there are no
+ * attachments (unchanged from before this feature existed), or a
+ * ContentBlockParam[] when there are: one image block per attached
+ * image, then a single trailing text block combining the task text with
+ * every attached text file, formatted the same way every provider folds
+ * text attachments in (see openaiCompatible.ts and embeddedLlama.ts).
+ * Omits the text block entirely for an attachment-only message with no
+ * task text and no text attachments, rather than sending an empty one.
+ */
+function buildUserContent(m: ChatMessage): string | Anthropic.ContentBlockParam[] {
+  if (!m.images?.length && !m.textAttachments?.length) return m.content;
+
+  const blocks: Anthropic.ContentBlockParam[] = [];
+  for (const img of m.images ?? []) {
+    blocks.push({
+      type: "image",
+      source: { type: "base64", media_type: img.mediaType as AnthropicImageMediaType, data: img.dataBase64 },
+    });
+  }
+
+  const textParts = [m.content, ...(m.textAttachments ?? []).map((a) => `\n\n--- Attached file: ${a.name} ---\n${a.content}\n---`)];
+  const text = textParts.join("");
+  if (text) blocks.push({ type: "text", text });
+
+  return blocks;
+}
+
 /** Anthropic keeps the system prompt as a top-level request field, not a message with role "system". */
 export function toAnthropicMessages(messages: ChatMessage[]): { system?: string; messages: Anthropic.MessageParam[] } {
   let system: string | undefined;
@@ -12,7 +43,7 @@ export function toAnthropicMessages(messages: ChatMessage[]): { system?: string;
     if (m.role === "system") {
       system = system ? `${system}\n${m.content}` : m.content;
     } else if (m.role === "user") {
-      result.push({ role: "user", content: m.content });
+      result.push({ role: "user", content: buildUserContent(m) });
     } else if (m.role === "assistant") {
       if (!m.tool_calls || m.tool_calls.length === 0) {
         result.push({ role: "assistant", content: m.content });

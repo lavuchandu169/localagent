@@ -120,5 +120,63 @@ console.log("\nSelectable Anthropic model id (constructor never makes a network 
   check("model selection is independent of apiKey being set", models[0]?.id === "claude-haiku-4-5");
 }
 
+console.log("\nAttachments in toAnthropicMessages:");
+
+{
+  const messages: ChatMessage[] = [
+    {
+      role: "user",
+      content: "what's in this?",
+      images: [{ name: "screenshot.png", mediaType: "image/png", dataBase64: "ZmFrZWRhdGE=" }],
+    },
+  ];
+  const { messages: out } = toAnthropicMessages(messages);
+  const userMsg = out[0];
+  check("a message with an image becomes a content-block array, not a plain string", Array.isArray(userMsg?.content));
+  const blocks = userMsg?.content as any[];
+  check(
+    "the image becomes a base64 image content block",
+    JSON.stringify(blocks[0]) === JSON.stringify({ type: "image", source: { type: "base64", media_type: "image/png", data: "ZmFrZWRhdGE=" } })
+  );
+  check("the task text becomes a trailing text block", JSON.stringify(blocks[1]) === JSON.stringify({ type: "text", text: "what's in this?" }));
+}
+
+{
+  // Attachment-only message (empty task text) — no text block at all,
+  // not an empty one.
+  const messages: ChatMessage[] = [
+    { role: "user", content: "", images: [{ name: "a.png", mediaType: "image/png", dataBase64: "AAAA" }] },
+  ];
+  const { messages: out } = toAnthropicMessages(messages);
+  const blocks = out[0]?.content as any[];
+  check("an attachment-only message has exactly one block (the image, no empty text block)", blocks.length === 1 && blocks[0].type === "image");
+}
+
+{
+  const messages: ChatMessage[] = [
+    {
+      role: "user",
+      content: "summarize this",
+      textAttachments: [{ name: "notes.txt", content: "the key point is X" }],
+    },
+  ];
+  const { messages: out } = toAnthropicMessages(messages);
+  const blocks = out[0]?.content as any[];
+  check("a text attachment folds into the trailing text block, not a separate document block", blocks.length === 1 && blocks[0].type === "text");
+  check(
+    "the folded text contains both the task text and the attachment's labeled content",
+    blocks[0].text === "summarize this\n\n--- Attached file: notes.txt ---\nthe key point is X\n---"
+  );
+}
+
+{
+  // No attachments at all — content must stay a plain string exactly as
+  // it always has, not become a single-element array (a behavior change
+  // for the overwhelmingly common case would be a real regression).
+  const messages: ChatMessage[] = [{ role: "user", content: "plain question" }];
+  const { messages: out } = toAnthropicMessages(messages);
+  check("a message with no attachments still has plain string content", out[0]?.content === "plain question");
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
