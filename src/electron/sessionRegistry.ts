@@ -15,7 +15,7 @@ import { getChanges, type FileChangeWithDiff } from "../changesSince.js";
 export type ProviderConfig =
   | { kind: "openai-compatible"; baseUrl: string; model: string }
   | { kind: "embedded"; size: string }
-  | { kind: "anthropic"; apiKey?: string };
+  | { kind: "anthropic"; apiKey?: string; model?: string };
 
 export interface SessionConfig {
   /** Omit to chat without file access — defaults to the home directory. */
@@ -80,7 +80,7 @@ export function buildProvider(
     return new OpenAICompatibleProvider({ baseUrl: config.baseUrl, local: true });
   }
   if (config.kind === "anthropic") {
-    return new AnthropicProvider({ apiKey: config.apiKey });
+    return new AnthropicProvider({ apiKey: config.apiKey, model: config.model });
   }
   if (!isEmbeddedModelId(config.size)) {
     throw new Error(`Invalid embedded model size: ${config.size}`);
@@ -123,7 +123,7 @@ export async function startSession(
       config.provider.kind === "openai-compatible"
         ? config.provider.model
         : config.provider.kind === "anthropic"
-          ? "claude-sonnet-5"
+          ? (config.provider.model ?? "claude-sonnet-5")
           : config.provider.size,
     provider,
     tools: defaultToolRegistry(),

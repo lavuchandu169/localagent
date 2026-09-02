@@ -153,7 +153,15 @@ const anthropicFields = byId<HTMLDivElement>("anthropic-fields");
 const baseUrlInput = byId<HTMLInputElement>("base-url");
 const externalModelInput = byId<HTMLInputElement>("external-model");
 const modelSelect = byId<HTMLSelectElement>("model-select");
-const ANTHROPIC_MODEL_VALUE = "claude-sonnet-5";
+// Anthropic models offered in the Cloud group — curated here (not
+// user-typed like the custom-server option) since they all share the same
+// saved API key and just pick which model id gets sent per request.
+const ANTHROPIC_MODELS: Record<string, { name: string; note: string }> = {
+  "claude-sonnet-5": { name: "Claude Sonnet 5", note: "balanced quality and cost — default" },
+  "claude-opus-5": { name: "Claude Opus 5", note: "most capable, higher cost" },
+  "claude-haiku-4-5": { name: "Claude Haiku 4.5", note: "fastest, lowest cost" },
+};
+const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 const CUSTOM_SERVER_VALUE = "custom-server";
 const modeSelect = byId<HTMLSelectElement>("mode");
 const modeDescription = byId<HTMLSpanElement>("mode-description");
@@ -292,10 +300,16 @@ for (const category of Object.keys(EMBEDDED_CATEGORY_LABELS) as ModelCategory[])
 
 const cloudGroup = document.createElement("optgroup");
 cloudGroup.label = "Cloud";
-const anthropicOption = document.createElement("option");
-anthropicOption.value = ANTHROPIC_MODEL_VALUE;
-anthropicOption.textContent = "Claude Sonnet 5 (Anthropic API)";
-cloudGroup.appendChild(anthropicOption);
+// Note: none of these get `.selected = true` — the embedded default
+// option (set above) stays the page's initial selection, same as before
+// this group had more than one entry. DEFAULT_ANTHROPIC_MODEL only matters
+// once the Cloud group itself is chosen (see deriveProviderConfigFromForm).
+for (const [id, info] of Object.entries(ANTHROPIC_MODELS)) {
+  const option = document.createElement("option");
+  option.value = id;
+  option.textContent = `${info.name} (Anthropic API) — ${info.note}`;
+  cloudGroup.appendChild(option);
+}
 modelSelect.appendChild(cloudGroup);
 
 const customGroup = document.createElement("optgroup");
@@ -322,7 +336,7 @@ updateModeDescription();
 /** Shows/hides the two fields that only apply to one specific model-select value each — everything else needs neither. */
 function updateModelDependentFields() {
   externalFields.hidden = modelSelect.value !== CUSTOM_SERVER_VALUE;
-  anthropicFields.hidden = modelSelect.value !== ANTHROPIC_MODEL_VALUE;
+  anthropicFields.hidden = !(modelSelect.value in ANTHROPIC_MODELS);
 }
 modelSelect.addEventListener("change", updateModelDependentFields);
 updateModelDependentFields();
@@ -746,7 +760,7 @@ window.agent.onDownloadProgress((status) => {
 
 /** Reads the provider config the Model select (plus its dependent fields) currently describes — shared by beginSession and applySessionEdits, which needs it BEFORE deciding whether beginSession's tear-down-and-rebuild path is even safe to take. */
 function deriveProviderConfigFromForm(): ProviderConfig {
-  if (modelSelect.value === ANTHROPIC_MODEL_VALUE) return { kind: "anthropic" };
+  if (modelSelect.value in ANTHROPIC_MODELS) return { kind: "anthropic", model: modelSelect.value };
   if (modelSelect.value === CUSTOM_SERVER_VALUE) {
     return { kind: "openai-compatible", baseUrl: baseUrlInput.value.trim(), model: externalModelInput.value.trim() };
   }
@@ -801,7 +815,10 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
       provider.kind === "embedded"
         ? (provider.size in EMBEDDED_MODELS ? describeEmbeddedModel(provider.size as EmbeddedModelId) : provider.size)
         : provider.kind === "anthropic"
-          ? "Claude Sonnet 5 (Anthropic API)"
+          ? (() => {
+              const modelId = provider.model ?? DEFAULT_ANTHROPIC_MODEL;
+              return `${ANTHROPIC_MODELS[modelId]?.name ?? modelId} (Anthropic API)`;
+            })()
           : `${provider.model} (${provider.baseUrl})`;
     const gpuText = provider.kind === "embedded" && hardwareInfo?.gpu ? ` · ${hardwareInfo.gpu} GPU` : "";
     activeModelBadge.innerHTML = "";

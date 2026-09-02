@@ -1,4 +1,4 @@
-import { toAnthropicMessages, toAnthropicTools, fromAnthropicResponse } from "../providers/anthropicProvider.js";
+import { toAnthropicMessages, toAnthropicTools, fromAnthropicResponse, AnthropicProvider } from "../providers/anthropicProvider.js";
 import type { ChatMessage } from "../types.js";
 
 let failures = 0;
@@ -101,6 +101,23 @@ console.log("Anthropic provider conversion:");
     JSON.stringify(turn) ===
       JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "a.js" } }], content: "checking now" })
   );
+}
+
+console.log("\nSelectable Anthropic model id (constructor never makes a network call, so this is safe without a real key):");
+{
+  const provider = new AnthropicProvider();
+  const models = await provider.listModels();
+  check("with no model specified, defaults to claude-sonnet-5", models[0]?.id === "claude-sonnet-5");
+}
+{
+  const provider = new AnthropicProvider({ model: "claude-opus-5" });
+  const models = await provider.listModels();
+  check("a chosen model id flows through to listModels", models[0]?.id === "claude-opus-5");
+}
+{
+  const provider = new AnthropicProvider({ apiKey: "sk-test", model: "claude-haiku-4-5" });
+  const models = await provider.listModels();
+  check("model selection is independent of apiKey being set", models[0]?.id === "claude-haiku-4-5");
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

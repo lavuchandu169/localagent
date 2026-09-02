@@ -183,13 +183,21 @@ app.whenReady().then(() => {
   ipcMain.handle("agent:start-session", async (event, config: SessionConfig, resume?: ResumePayload) => {
     const controller = new AbortController();
     currentStartAbortController = controller;
-    // The renderer only ever sends { kind: "anthropic" } — it has no access
-    // to the saved key (agent:get-anthropic-settings never sends the real
-    // value back). Resolved here, the same place Google credentials are
-    // resolved, right before the config reaches startSession.
+    // The renderer only ever sends { kind: "anthropic", model } — it has no
+    // access to the saved key (agent:get-anthropic-settings never sends the
+    // real value back). Resolved here, the same place Google credentials
+    // are resolved, right before the config reaches startSession. `model`
+    // is carried through unchanged — only apiKey is ever added here.
     const resolvedConfig: SessionConfig =
       config.provider.kind === "anthropic"
-        ? { ...config, provider: { kind: "anthropic", apiKey: await resolveAnthropicApiKey(anthropicSettingsFilePath, storageCrypto) } }
+        ? {
+            ...config,
+            provider: {
+              kind: "anthropic",
+              model: config.provider.model,
+              apiKey: await resolveAnthropicApiKey(anthropicSettingsFilePath, storageCrypto),
+            },
+          }
         : config;
     try {
       return await startSession(registry, resolvedConfig, {

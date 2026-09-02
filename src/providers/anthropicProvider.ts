@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
 
-const MODEL_ID = "claude-sonnet-5";
+const DEFAULT_MODEL_ID = "claude-sonnet-5";
 
 /** Anthropic keeps the system prompt as a top-level request field, not a message with role "system". */
 export function toAnthropicMessages(messages: ChatMessage[]): { system?: string; messages: Anthropic.MessageParam[] } {
@@ -85,18 +85,20 @@ export function fromAnthropicResponse(response: Anthropic.Message): ChatResponse
 export class AnthropicProvider implements ModelProvider {
   id = "anthropic";
   private client: Anthropic;
+  private model: string;
 
-  constructor(opts?: { apiKey?: string }) {
+  constructor(opts?: { apiKey?: string; model?: string }) {
     this.client = new Anthropic({ apiKey: opts?.apiKey });
+    this.model = opts?.model || DEFAULT_MODEL_ID;
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    return [{ id: MODEL_ID, local: false }];
+    return [{ id: this.model, local: false }];
   }
 
   async healthCheck(): Promise<boolean> {
     try {
-      await this.client.models.retrieve(MODEL_ID);
+      await this.client.models.retrieve(this.model);
       return true;
     } catch {
       return false;
@@ -106,7 +108,7 @@ export class AnthropicProvider implements ModelProvider {
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const { system, messages } = toAnthropicMessages(request.messages);
     const response = await this.client.messages.create({
-      model: MODEL_ID,
+      model: this.model,
       max_tokens: request.maxTokens ?? 8192,
       system,
       messages,
