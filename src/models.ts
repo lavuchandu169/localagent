@@ -4,7 +4,7 @@
 // resolveModelFile(), cached in its default global models directory
 // (~/.node-llama-cpp/models) so repeat runs don't re-download.
 
-export type ModelCategory = "coding" | "chat";
+export type ModelCategory = "coding" | "chat" | "reasoning";
 
 export type EmbeddedModelId =
   | "qwen-coder-1.5b"
@@ -13,7 +13,10 @@ export type EmbeddedModelId =
   | "qwen-3b"
   | "llama-3.2-3b"
   | "phi-3.5-mini"
-  | "mistral-7b";
+  | "mistral-7b"
+  | "qwen-14b"
+  | "deepseek-r1-distill-qwen-14b"
+  | "qwen-32b";
 
 export interface EmbeddedModelInfo {
   uri: string;
@@ -74,6 +77,27 @@ export const EMBEDDED_MODELS: Record<EmbeddedModelId, EmbeddedModelInfo> = {
     quant: "Q4_K_M",
     category: "chat",
     sizeNote: "best quality, needs a capable machine",
+  },
+  "qwen-14b": {
+    uri: "hf:bartowski/Qwen2.5-14B-Instruct-GGUF:Q4_K_M",
+    name: "Qwen2.5 14B Instruct",
+    quant: "Q4_K_M",
+    category: "reasoning",
+    sizeNote: "~9GB download, strong general reasoning",
+  },
+  "deepseek-r1-distill-qwen-14b": {
+    uri: "hf:bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF:Q4_K_M",
+    name: "DeepSeek-R1-Distill-Qwen 14B",
+    quant: "Q4_K_M",
+    category: "reasoning",
+    sizeNote: "~9GB download, reasoning-distilled — best for research/analysis",
+  },
+  "qwen-32b": {
+    uri: "hf:bartowski/Qwen2.5-32B-Instruct-GGUF:Q4_K_M",
+    name: "Qwen2.5 32B Instruct",
+    quant: "Q4_K_M",
+    category: "reasoning",
+    sizeNote: "~20GB download, most capable local option — needs a powerful machine",
   },
 };
 

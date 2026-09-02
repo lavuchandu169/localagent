@@ -282,7 +282,7 @@ function setSetupControlsDisabled(disabled: boolean): void {
 // overrode this select's own visible value once expanded. Every choice
 // (embedded, Claude, or a custom server) now lives here as a single flat
 // list of options, grouped by kind.
-const EMBEDDED_CATEGORY_LABELS: Record<ModelCategory, string> = { coding: "Coding", chat: "Chat" };
+const EMBEDDED_CATEGORY_LABELS: Record<ModelCategory, string> = { coding: "Coding", chat: "Chat", reasoning: "Research & Reasoning" };
 for (const category of Object.keys(EMBEDDED_CATEGORY_LABELS) as ModelCategory[]) {
   const group = document.createElement("optgroup");
   group.label = EMBEDDED_CATEGORY_LABELS[category];
