@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.25 — 2026-09-03
+
+- Per-hunk diff approval: when the agent proposes an edit, each changed
+  section of the diff now has its own checkbox (checked by default) —
+  uncheck the ones you don't want before approving, and only the checked
+  changes get written. A plain "Approve" with everything checked still
+  behaves exactly as before.
+
 ## v0.1.0-beta.24 — 2026-09-03
 
 - A "what's new" popup now shows once after updating to a new version,
