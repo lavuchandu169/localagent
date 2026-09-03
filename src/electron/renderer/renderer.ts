@@ -982,13 +982,23 @@ function renderEvent(event: AgentEvent): void {
         approve.disabled = true;
         deny.disabled = true;
         prompt.classList.add("permission-resolved");
-        // Only meaningful for an edit_file approval — every hunk checkbox
-        // that's still checked at click time. Undefined for a deny (never
-        // read) and harmless-but-unused for a call with no diff at all
-        // (the querySelectorAll below just finds nothing).
-        const approvedHunkIds = approved
-          ? Array.from(card.querySelectorAll<HTMLInputElement>(".diff-hunk-toggle input:checked")).map((el) => Number(el.dataset.hunkId))
-          : undefined;
+        // Only meaningful for an edit_file approval. DIFF_LINE_CAP can mean
+        // renderDiff never rendered a checkbox at all for a hunk past the
+        // truncation point — that hunk must still count as approved on a
+        // plain Approve click, or a long diff would silently have its tail
+        // reverted to the old content even though every VISIBLE checkbox
+        // was checked. So: every real hunk id in the diff (not just the
+        // rendered ones) is approved unless it has a checkbox that's
+        // present and unchecked. Undefined for a deny (never read) and
+        // harmless-but-unused for a call with no diff at all (the two sets
+        // below are both empty, so the filter below is a no-op).
+        let approvedHunkIds: number[] | undefined;
+        if (approved) {
+          const allHunkIds = hasDiff ? groupDiffIntoSegments(event.diff!).flatMap((s) => (s.kind === "hunk" ? [s.id] : [])) : [];
+          const renderedIds = new Set(Array.from(card.querySelectorAll<HTMLInputElement>(".diff-hunk-toggle input")).map((el) => Number(el.dataset.hunkId)));
+          const checkedIds = new Set(Array.from(card.querySelectorAll<HTMLInputElement>(".diff-hunk-toggle input:checked")).map((el) => Number(el.dataset.hunkId)));
+          approvedHunkIds = allHunkIds.filter((id) => !renderedIds.has(id) || checkedIds.has(id));
+        }
         if (sessionId) void window.agent.respondPermission(sessionId, event.call.id, approved, approvedHunkIds);
       };
       approve.addEventListener("click", () => respond(true));
@@ -1272,7 +1282,7 @@ function renderChangesPanel(changes: FileChangeWithDiff[]): void {
     header.appendChild(counts);
     section.appendChild(header);
 
-    section.appendChild(renderDiff(file.diff));
+    section.appendChild(renderDiff(file.diff, true));
     changesPanelBody.appendChild(section);
   }
 }

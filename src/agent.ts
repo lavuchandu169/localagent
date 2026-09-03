@@ -29,7 +29,7 @@ export interface AgentSessionOptions {
   systemPrompt?: string;
   /** Seeds the conversation from a prior session's history instead of starting fresh with just the system prompt — used to resume a saved session. */
   initialMessages?: ChatMessage[];
-  /** Called when a tool call needs ASK approval. Return true to allow. */
+  /** Called when a tool call needs ASK approval. Return `{ approved: true }` to allow; add `approvedHunkIds` to apply only some of an edit_file diff's hunks. */
   onApprovalNeeded?: (call: ToolCall) => Promise<PermissionResponse>;
   /**
    * When true, every task's very first turn is held for approval before any
@@ -442,7 +442,22 @@ export class AgentSession {
             const allHunkIds = new Set(segments.filter((s) => s.kind === "hunk").map((s) => (s.kind === "hunk" ? s.id : -1)));
             const approvedSet = new Set(response.approvedHunkIds);
             const isPartial = [...allHunkIds].some((id) => !approvedSet.has(id));
-            if (isPartial && typeof call.arguments.path === "string") {
+            if (isPartial) {
+              // diff is only ever set (see computeEditDiffForCall) once
+              // call.arguments.path is already confirmed to be a string, so
+              // this branch is structurally unreachable today — it exists so
+              // that IF that invariant is ever violated, a partial selection
+              // fails CLOSED (denies the call) instead of silently falling
+              // through to executing the model's full, unapproved content.
+              if (typeof call.arguments.path !== "string") {
+                this.messages.push({
+                  role: "tool",
+                  tool_call_id: call.id,
+                  name: call.name,
+                  content: JSON.stringify({ ok: false, error: "Could not determine which content to write for a partial approval." }),
+                });
+                continue;
+              }
               const mergedContent = applyHunkSelection(segments, approvedSet);
               effectiveCall = { ...call, arguments: { ...call.arguments, content: mergedContent } };
               yield {
