@@ -129,6 +129,22 @@ app.whenReady().then(() => {
     }
   }
 
+  /**
+   * Resolves the window to attach a modal dialog to at call time, not at
+   * app-startup time — `dialog.showOpenDialog` needs a live BrowserWindow
+   * or none at all; passing a destroyed one either throws or attaches to
+   * the wrong window. Same hazard broadcastToAllWindows (above) exists to
+   * avoid: the window captured once when the app started isn't
+   * necessarily the window that's still open when a dialog is requested
+   * later (macOS: close-then-reopen via app.on("activate") creates an
+   * entirely new BrowserWindow no captured reference ever gets updated
+   * to).
+   */
+  function showOpenDialog(options: Electron.OpenDialogOptions): Promise<Electron.OpenDialogReturnValue> {
+    const parentWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    return parentWindow ? dialog.showOpenDialog(parentWindow, options) : dialog.showOpenDialog(options);
+  }
+
   // Checks GitHub Releases once per launch for a newer version and lets the
   // renderer show an in-app banner pointing at it. Deliberately notify-only,
   // not a full silent download-and-install: electron-updater's actual
@@ -241,7 +257,7 @@ app.whenReady().then(() => {
   );
 
   ipcMain.handle("agent:pick-attachments", async () => {
-    const result = await dialog.showOpenDialog(win, { properties: ["openFile", "multiSelections"] });
+    const result = await showOpenDialog({ properties: ["openFile", "multiSelections"] });
     if (result.canceled) return { attachments: [], errors: [] };
 
     const attachments: PickedAttachment[] = [];
@@ -309,7 +325,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle("agent:pick-workspace", async () => {
-    const result = await dialog.showOpenDialog(win, { properties: ["openDirectory"] });
+    const result = await showOpenDialog({ properties: ["openDirectory"] });
     if (result.canceled) return null;
     return result.filePaths[0] ?? null;
   });
