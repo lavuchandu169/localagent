@@ -280,8 +280,8 @@ app.whenReady().then(() => {
     return { attachments, errors, skipped };
   });
 
-  ipcMain.handle("agent:respond-permission", (_event, sessionId: string, callId: string, approved: boolean) =>
-    respondPermission(registry, sessionId, callId, approved)
+  ipcMain.handle("agent:respond-permission", (_event, sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]) =>
+    respondPermission(registry, sessionId, callId, approved, approvedHunkIds)
   );
 
   ipcMain.handle("agent:respond-plan", (_event, sessionId: string, approved: boolean) => respondPlan(registry, sessionId, approved));

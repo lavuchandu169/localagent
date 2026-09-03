@@ -8,7 +8,7 @@ import { AnthropicProvider } from "../providers/anthropicProvider.js";
 import { isEmbeddedModelId } from "../models.js";
 import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
-import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode } from "../types.js";
+import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode, PermissionResponse } from "../types.js";
 import { revertToCheckpoint } from "../checkpoints.js";
 import { getChanges, type FileChangeWithDiff } from "../changesSince.js";
 
@@ -51,7 +51,7 @@ export interface CloudSyncConfig {
 interface SessionEntry {
   session: AgentSession;
   provider: ModelProvider;
-  pendingApprovals: Map<string, (approved: boolean) => void>;
+  pendingApprovals: Map<string, (response: PermissionResponse) => void>;
   /** At most one pending plan approval per session (only turn 1 of a task is ever gated) — a mutable single-slot object rather than a Map, wired into AgentSession's onPlanApprovalNeeded before this entry exists (see startSession), same reason pendingApprovals is a pre-built Map rather than something attached after the fact. */
   pendingPlanApproval: { resolve: ((approved: boolean) => void) | null };
   events: AgentEvent[];
@@ -110,7 +110,7 @@ export async function startSession(
   }
 
   const sessionId = deps.resume?.sessionId ?? crypto.randomUUID();
-  const pendingApprovals = new Map<string, (approved: boolean) => void>();
+  const pendingApprovals = new Map<string, (response: PermissionResponse) => void>();
   const pendingPlanApproval: { resolve: ((approved: boolean) => void) | null } = { resolve: null };
   const workspaceRoot = config.workspaceRoot ?? os.homedir();
 
@@ -135,7 +135,7 @@ export async function startSession(
     permissionMode: config.mode,
     initialMessages: deps.resume?.initialMessages,
     onApprovalNeeded: (call) =>
-      new Promise<boolean>((resolve) => {
+      new Promise<PermissionResponse>((resolve) => {
         pendingApprovals.set(call.id, resolve);
       }),
     planFirst: config.planFirst,
@@ -370,14 +370,14 @@ export async function runTask(
   }
 }
 
-/** No-op on an unknown session/callId — the renderer may race a stale click against a session that already moved on. */
-export function respondPermission(registry: SessionRegistry, sessionId: string, callId: string, approved: boolean): void {
+/** No-op on an unknown session/callId — the renderer may race a stale click against a session that already moved on. approvedHunkIds is only ever meaningful for a real edit_file partial approval; every other caller simply omits it. */
+export function respondPermission(registry: SessionRegistry, sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]): void {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return;
   const resolve = entry.pendingApprovals.get(callId);
   if (!resolve) return;
   entry.pendingApprovals.delete(callId);
-  resolve(approved);
+  resolve({ approved, approvedHunkIds });
 }
 
 /** Same contract as respondPermission, for the single pending plan approval (see SessionEntry.pendingPlanApproval) — no callId, since at most one plan is ever pending per session. */
@@ -399,7 +399,7 @@ export function respondPlan(registry: SessionRegistry, sessionId: string, approv
  * generation), then disposes the provider's local resources.
  */
 async function finalizeEntry(entry: SessionEntry): Promise<void> {
-  for (const resolve of entry.pendingApprovals.values()) resolve(false);
+  for (const resolve of entry.pendingApprovals.values()) resolve({ approved: false });
   entry.pendingApprovals.clear();
   if (entry.pendingPlanApproval.resolve) {
     entry.pendingPlanApproval.resolve(false);

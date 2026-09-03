@@ -22,6 +22,7 @@ import {
 import { MockProvider } from "../providers/mockProvider.js";
 import { loadSessionRecord } from "../sessionStore.js";
 import { DriveScopeError } from "../cloudSync.js";
+import { groupDiffIntoSegments } from "../diffUtil.js";
 import type { AgentEvent, ChatResponse } from "../types.js";
 
 let failures = 0;
@@ -303,6 +304,48 @@ await (async () => {
     );
     check("starting a new session under the same just-cancelled id succeeds", restarted.sessionId === sessionId);
     check("the registry now holds exactly the new entry, not a stale one", registry.sessions.has(sessionId));
+  }
+
+  {
+    // A partial hunk approval reaches all the way through respondPermission
+    // into the running AgentSession and actually changes what gets written
+    // to disk — not just that the IPC call is accepted.
+    const oldContent = "function add(a, b) {\n  return a + b;\n}\nmodule.exports = { add };\n";
+    await fs.writeFile(path.join(workspaceRoot, "math.js"), oldContent, "utf-8");
+    const proposedContent = "function add(a, b) {\n  return a - b;\n}\nmodule.exports = { subtractNotAdd };\n";
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "math.js" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "math.js", content: proposedContent } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+
+    const events: AgentEvent[] = [];
+    const runPromise = runTask(registry, sessionId, "fix the bug", (e) => events.push(e));
+    // Give the loop a tick to reach the edit_file ASK prompt and start awaiting it.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const editEvent = events.find((e) => e.type === "permission.request" && e.call.name === "edit_file");
+    const diff = editEvent?.type === "permission.request" ? editEvent.diff : undefined;
+    const segments = diff ? groupDiffIntoSegments(diff) : [];
+    const firstHunk = segments.find((s) => s.kind === "hunk");
+    const approvedHunkIds = firstHunk?.kind === "hunk" ? [firstHunk.id] : [];
+
+    respondPermission(registry, sessionId, "e1", true, approvedHunkIds);
+    await runPromise;
+
+    const written = await fs.readFile(path.join(workspaceRoot, "math.js"), "utf-8");
+    check(
+      "a partial hunk approval sent through respondPermission actually writes the merged content, not the model's full proposed rewrite",
+      written === "function add(a, b) {\n  return a - b;\n}\nmodule.exports = { add };\n"
+    );
+
+    await fs.writeFile(path.join(workspaceRoot, "math.js"), oldContent, "utf-8");
   }
 
   console.log("\nEvent buffering and persistence:");
