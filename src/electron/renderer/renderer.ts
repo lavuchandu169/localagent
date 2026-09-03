@@ -4,6 +4,7 @@ import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
 import type { PickedAttachment } from "../attachments.js";
 import type { UpdateStatus } from "../updateManager.js";
+import { WHATS_NEW } from "../../whatsNew.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 
@@ -191,6 +192,10 @@ const reportIssueLink = byId<HTMLAnchorElement>("report-issue-link");
 const openErrorLogBtn = byId<HTMLButtonElement>("open-error-log");
 const onboardingOverlay = byId<HTMLDivElement>("onboarding-overlay");
 const onboardingDismiss = byId<HTMLButtonElement>("onboarding-dismiss");
+const whatsNewOverlay = byId<HTMLDivElement>("whats-new-overlay");
+const whatsNewTitle = byId<HTMLHeadingElement>("whats-new-title");
+const whatsNewList = byId<HTMLUListElement>("whats-new-list");
+const whatsNewDismiss = byId<HTMLButtonElement>("whats-new-dismiss");
 const aboutWorkspace = byId<HTMLSpanElement>("about-workspace");
 const aboutHardware = byId<HTMLSpanElement>("about-hardware");
 const settingsToggle = byId<HTMLButtonElement>("settings-toggle");
@@ -572,27 +577,36 @@ settingsToggle.addEventListener("click", async () => {
 
 settingsClose.addEventListener("click", closeSettingsPanel);
 
-// Escape closes whichever of these dismissible panels/the onboarding
-// modal is currently open — the standard keyboard expectation. Onboarding
-// takes priority since it's the only truly modal one (blocks the rest of
-// the page); it can't be open at the same time as the others anyway
-// (nothing else is interactive until it's dismissed).
+// Escape closes whichever of these dismissible panels/modals is currently
+// open — the standard keyboard expectation. Onboarding and what's-new take
+// priority since they're the only truly modal ones (block the rest of the
+// page); at most one of the two is ever open at once (see
+// showWhatsNewIfNeeded's own reasoning below), and neither can be open
+// alongside the other dismissible panels anyway (nothing else is
+// interactive until whichever modal is up gets dismissed).
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!onboardingOverlay.hidden) dismissOnboarding();
+  else if (!whatsNewOverlay.hidden) dismissWhatsNew();
   else if (!aboutPanel.hidden) closeAboutPanel();
   else if (!settingsPanel.hidden) closeSettingsPanel();
   else if (!changesPanel.hidden) closeChangesPanel();
 });
 
-// A focus trap for the onboarding modal specifically — it's the one truly
-// modal overlay in this app, so Tab must never move focus out to the page
-// behind it. Single focusable element today (Get started), so trapping is
-// just "always land back on it."
+// A focus trap for the onboarding/what's-new modals specifically — they're
+// the only truly modal overlays in this app, so Tab must never move focus
+// out to the page behind whichever one is open. Single focusable element
+// each (their own dismiss button), so trapping is just "always land back
+// on it."
 document.addEventListener("keydown", (e) => {
-  if (onboardingOverlay.hidden || e.key !== "Tab") return;
-  e.preventDefault();
-  onboardingDismiss.focus();
+  if (e.key !== "Tab") return;
+  if (!onboardingOverlay.hidden) {
+    e.preventDefault();
+    onboardingDismiss.focus();
+  } else if (!whatsNewOverlay.hidden) {
+    e.preventDefault();
+    whatsNewDismiss.focus();
+  }
 });
 
 const ONBOARDING_SEEN_KEY = "localagent:onboarding-seen";
@@ -622,6 +636,80 @@ function dismissOnboarding(): void {
 
 onboardingDismiss.addEventListener("click", dismissOnboarding);
 showOnboardingIfFirstRun();
+
+const WHATS_NEW_SEEN_KEY = "localagent:whats-new-seen-version";
+
+/** Turns a changelog bullet's `` `code span` `` markdown into a real <code> element, leaving everything else as plain text — built via DOM nodes rather than innerHTML since this text ultimately comes from a file in the repo, not a trusted-but-still-worth-being-careful-with input. */
+function renderWhatsNewBullet(text: string): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  const parts = text.split("`");
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]!;
+    if (i % 2 === 1) {
+      const code = document.createElement("code");
+      code.textContent = part;
+      fragment.appendChild(code);
+    } else if (part) {
+      fragment.appendChild(document.createTextNode(part));
+    }
+  }
+  return fragment;
+}
+
+/**
+ * Shows this build's changelog entry once per version, but only for
+ * someone who's already past onboarding — a brand-new install gets the
+ * onboarding modal's own "here's what this app does" and doesn't need a
+ * second, redundant welcome. That also means the very first time this
+ * feature ships, every existing user (onboarding already seen, no
+ * what's-new-seen entry yet at all) correctly sees this version's notes
+ * once, which is exactly the case the feature exists for.
+ */
+function showWhatsNewIfNeeded(): void {
+  let onboardingSeen = false;
+  let lastSeenVersion: string | null = null;
+  try {
+    onboardingSeen = localStorage.getItem(ONBOARDING_SEEN_KEY) === "1";
+    lastSeenVersion = localStorage.getItem(WHATS_NEW_SEEN_KEY);
+  } catch {
+    return; // no localStorage available — nothing to show or track this run
+  }
+
+  if (!onboardingSeen) {
+    // First-ever run: seed silently so this only ever fires for a real
+    // upgrade from here on, never as a second welcome on top of onboarding.
+    try {
+      localStorage.setItem(WHATS_NEW_SEEN_KEY, WHATS_NEW.version);
+    } catch {
+      // Best-effort — worst case this shows once more than intended later; not worth surfacing an error for.
+    }
+    return;
+  }
+
+  if (lastSeenVersion === WHATS_NEW.version) return;
+
+  whatsNewTitle.textContent = `What's new in v${WHATS_NEW.version}`;
+  whatsNewList.innerHTML = "";
+  for (const bullet of WHATS_NEW.bullets) {
+    const li = document.createElement("li");
+    li.appendChild(renderWhatsNewBullet(bullet));
+    whatsNewList.appendChild(li);
+  }
+  whatsNewOverlay.hidden = false;
+  whatsNewDismiss.focus();
+}
+
+function dismissWhatsNew(): void {
+  whatsNewOverlay.hidden = true;
+  try {
+    localStorage.setItem(WHATS_NEW_SEEN_KEY, WHATS_NEW.version);
+  } catch {
+    // Best-effort — if this fails, the modal just shows again next launch; not worth surfacing an error for.
+  }
+}
+
+whatsNewDismiss.addEventListener("click", dismissWhatsNew);
+showWhatsNewIfNeeded();
 
 settingsSaveBtn.addEventListener("click", () => {
   settingsError.textContent = "";
