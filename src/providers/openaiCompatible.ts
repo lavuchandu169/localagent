@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import { formatTextAttachment } from "../attachmentFormat.js";
 
 /**
  * Builds one message's `content` for the wire request — a plain string
@@ -14,7 +15,7 @@ import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, 
 function buildMessageContent(m: ChatMessage): string | Array<Record<string, unknown>> {
   if (!m.images?.length && !m.textAttachments?.length) return m.content;
 
-  const textParts = [m.content, ...(m.textAttachments ?? []).map((a) => `\n\n--- Attached file: ${a.name} ---\n${a.content}\n---`)];
+  const textParts = [m.content, ...(m.textAttachments ?? []).map(formatTextAttachment)];
   const text = textParts.join("");
 
   if (!m.images?.length) return text;

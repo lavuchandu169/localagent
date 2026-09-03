@@ -1,6 +1,7 @@
 import type { ChatHistoryItem, ChatModelFunctionCall, ChatModelFunctions } from "node-llama-cpp";
 import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
 import { EMBEDDED_MODELS, type EmbeddedModelId } from "../models.js";
+import { formatTextAttachment } from "../attachmentFormat.js";
 
 /**
  * Builds a user turn's text — the task text plus, for each attachment,
@@ -19,7 +20,7 @@ function buildUserText(m: ChatMessage): string {
     text += `\n\n[Attached image: ${img.name} — this local model can't see images.]`;
   }
   for (const att of m.textAttachments ?? []) {
-    text += `\n\n--- Attached file: ${att.name} ---\n${att.content}\n---`;
+    text += formatTextAttachment(att);
   }
   return text;
 }

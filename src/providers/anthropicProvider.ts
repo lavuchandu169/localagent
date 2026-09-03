@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import { formatTextAttachment } from "../attachmentFormat.js";
 
 const DEFAULT_MODEL_ID = "claude-sonnet-5";
 
@@ -27,7 +28,7 @@ function buildUserContent(m: ChatMessage): string | Anthropic.ContentBlockParam[
     });
   }
 
-  const textParts = [m.content, ...(m.textAttachments ?? []).map((a) => `\n\n--- Attached file: ${a.name} ---\n${a.content}\n---`)];
+  const textParts = [m.content, ...(m.textAttachments ?? []).map(formatTextAttachment)];
   const text = textParts.join("");
   if (text) blocks.push({ type: "text", text });
 
