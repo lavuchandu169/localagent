@@ -107,10 +107,18 @@ export function fromAnthropicResponse(response: Anthropic.Message): ChatResponse
     }
   }
 
+  // input_tokens/output_tokens are the inclusive, billing-authoritative
+  // totals per Anthropic's own docs — deliberately not the separate
+  // cache_creation_input_tokens/cache_read_input_tokens fields, since this
+  // app never sets cache_control and so never pays (or saves) anything on
+  // that axis; the plain input/output totals are the real cost every
+  // request here actually incurs.
+  const usage = { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
+
   if (toolCalls.length > 0) {
-    return { turn: { type: "tool_calls", toolCalls, content: text || undefined }, raw: response };
+    return { turn: { type: "tool_calls", toolCalls, content: text || undefined }, usage, raw: response };
   }
-  return { turn: { type: "final", content: text }, raw: response };
+  return { turn: { type: "final", content: text }, usage, raw: response };
 }
 
 /**

@@ -70,6 +70,8 @@ export type AssistantTurn =
 
 export interface ChatResponse {
   turn: AssistantTurn;
+  /** Real token counts for this one API call, when the provider's response actually reports them — only AnthropicProvider populates this today; the embedded and OpenAI-compatible providers leave it undefined. */
+  usage?: { inputTokens: number; outputTokens: number };
   raw?: unknown;
 }
 
@@ -109,5 +111,7 @@ export type AgentEvent =
   | { type: "permission.request"; call: ToolCall; decision: PermissionDecision; diff?: Change[] }
   | { type: "checkpoint.created"; checkpointHash: string }
   | { type: "plan.proposed"; plan: ProposedPlan }
+  /** One real API call's token cost, whenever the provider's response reports it — see ChatResponse.usage. Carries `model` since a single session's cost depends on which Claude model actually served each turn. */
+  | { type: "usage"; model: string; inputTokens: number; outputTokens: number }
   | { type: "done"; success: boolean; summary: string }
   | { type: "error"; message: string };

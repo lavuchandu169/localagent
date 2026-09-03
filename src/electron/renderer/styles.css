@@ -914,6 +914,17 @@ label .hint-text {
   color: var(--text-dim);
 }
 
+#usage-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+#status-bar #usage-badge {
+  color: var(--statusbar-text);
+}
+
 #active-model-badge .signal-dot {
   display: inline-block;
   width: 6px;

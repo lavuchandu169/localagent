@@ -83,9 +83,10 @@ console.log("Anthropic provider conversion:");
 }
 
 {
-  const response: any = { content: [{ type: "text", text: "all done" }] };
-  const { turn } = fromAnthropicResponse(response);
+  const response: any = { content: [{ type: "text", text: "all done" }], usage: { input_tokens: 120, output_tokens: 45 } };
+  const { turn, usage } = fromAnthropicResponse(response);
   check("fromAnthropicResponse returns a final turn for text-only content", JSON.stringify(turn) === JSON.stringify({ type: "final", content: "all done" }));
+  check("fromAnthropicResponse maps the real response's input_tokens/output_tokens into usage.inputTokens/outputTokens", JSON.stringify(usage) === JSON.stringify({ inputTokens: 120, outputTokens: 45 }));
 }
 
 {
@@ -94,13 +95,15 @@ console.log("Anthropic provider conversion:");
       { type: "text", text: "checking now" },
       { type: "tool_use", id: "c1", name: "read_file", input: { path: "a.js" } },
     ],
+    usage: { input_tokens: 300, output_tokens: 80 },
   };
-  const { turn } = fromAnthropicResponse(response);
+  const { turn, usage } = fromAnthropicResponse(response);
   check(
     "fromAnthropicResponse returns a tool_calls turn when a tool_use block is present",
     JSON.stringify(turn) ===
       JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "a.js" } }], content: "checking now" })
   );
+  check("fromAnthropicResponse also reports usage on a tool_calls turn, not just a final one", JSON.stringify(usage) === JSON.stringify({ inputTokens: 300, outputTokens: 80 }));
 }
 
 console.log("\nSelectable Anthropic model id (constructor never makes a network call, so this is safe without a real key):");

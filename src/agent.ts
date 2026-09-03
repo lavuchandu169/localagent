@@ -263,6 +263,15 @@ export class AgentSession {
         return;
       }
 
+      // Reported unconditionally whenever the provider's response carries
+      // real token counts (only AnthropicProvider does today) — the call
+      // already happened and already cost whatever it cost by this point,
+      // regardless of whether planFirst is about to gate what happens next
+      // or whether this turn is final or a tool_calls turn.
+      if (response.usage) {
+        yield { type: "usage", model: this.opts.model, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens };
+      }
+
       // Holds the task's very first turn for approval before any of it
       // runs — deliberately not a separate "plan-only, don't call tools
       // yet" turn: prompting a model to withhold tool calls proved

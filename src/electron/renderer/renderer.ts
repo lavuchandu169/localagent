@@ -4,6 +4,7 @@ import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
 import type { PickedAttachment } from "../attachments.js";
 import type { UpdateStatus } from "../updateManager.js";
+import { estimateCostUsd } from "../../anthropicPricing.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 
@@ -219,6 +220,7 @@ const downloadBarFill = byId<HTMLDivElement>("download-bar-fill");
 const downloadLabel = byId<HTMLSpanElement>("download-label");
 const cancelDownloadBtn = byId<HTMLButtonElement>("cancel-download");
 const activeModelBadge = byId<HTMLDivElement>("active-model-badge");
+const usageBadge = byId<HTMLSpanElement>("usage-badge");
 const editSettingsBtn = byId<HTMLButtonElement>("edit-settings");
 const revertCheckpointBtn = byId<HTMLButtonElement>("revert-checkpoint");
 const viewChangesBtn = byId<HTMLButtonElement>("view-changes");
@@ -276,6 +278,19 @@ let hardwareInfo: HardwareInfo | null = null;
 /** True while the setup controls are unlocked for editing an already-active session's workspace/model/mode — see editSettingsBtn/applySessionEdits. */
 let editingSession = false;
 const toolCards = new Map<string, HTMLElement>();
+
+/**
+ * Running total for the active session, rebuilt from scratch by clearEventLog
+ * (both on a fresh/switched session and right before a resumed session's
+ * history replays through renderEvent) — never mutated any other way, so a
+ * resumed session's badge always reflects that session's own real history,
+ * not whatever leaked over from the previous one.
+ */
+let sessionUsage = { inputTokens: 0, outputTokens: 0 };
+
+function formatTokenCount(tokens: number): string {
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}K` : String(tokens);
+}
 
 const MAX_ATTACHMENTS_PER_TASK = 5;
 
@@ -833,6 +848,19 @@ function renderEvent(event: AgentEvent): void {
       revertCheckpointBtn.hidden = false;
       viewChangesBtn.hidden = false;
       break;
+    case "usage": {
+      // Only ever fires for an Anthropic-backed session (the only provider
+      // that reports real token counts today — see ChatResponse.usage) —
+      // the badge simply never appears for embedded/custom-server sessions,
+      // no explicit provider-kind check needed here.
+      sessionUsage.inputTokens += event.inputTokens;
+      sessionUsage.outputTokens += event.outputTokens;
+      const cost = estimateCostUsd(event.model, sessionUsage.inputTokens, sessionUsage.outputTokens);
+      const tokenText = `${formatTokenCount(sessionUsage.inputTokens)} in / ${formatTokenCount(sessionUsage.outputTokens)} out`;
+      usageBadge.textContent = cost !== null ? `~$${cost.toFixed(3)} (${tokenText})` : tokenText;
+      usageBadge.hidden = false;
+      break;
+    }
     case "plan.proposed": {
       emptyState.hidden = true;
       const card = renderPlanProposal(event.plan);
@@ -1206,6 +1234,8 @@ function clearEventLog(): void {
   eventLog.innerHTML = "";
   emptyState.hidden = false;
   eventLog.appendChild(emptyState);
+  sessionUsage = { inputTokens: 0, outputTokens: 0 };
+  usageBadge.hidden = true;
 }
 
 function resetToSetup(): void {

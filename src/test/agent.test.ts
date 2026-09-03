@@ -1054,6 +1054,78 @@ await (async () => {
   }
 })();
 
+console.log("\nToken usage — reported per turn when the provider's response carries it:");
+await (async () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const workspaceRoot = path.resolve(__dirname, "..", "..", "fixture-repo");
+
+  {
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "done" }, usage: { inputTokens: 1200, outputTokens: 340 } }];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "claude-sonnet-5",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("a task")) events.push(event);
+    const usageEvent = events.find((e) => e.type === "usage");
+    check("a response carrying usage yields a usage event", usageEvent !== undefined);
+    check(
+      "the usage event carries the model id and the exact token counts the response reported",
+      JSON.stringify(usageEvent) === JSON.stringify({ type: "usage", model: "claude-sonnet-5", inputTokens: 1200, outputTokens: 340 })
+    );
+  }
+
+  {
+    // A provider that doesn't report usage (MockProvider's default script
+    // entries, the embedded/OpenAI-compatible providers in real use) must
+    // never yield a usage event — this event is opt-in, not synthesized.
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "done" } }];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("a task")) events.push(event);
+    check("a response with no usage field yields no usage event", events.every((e) => e.type !== "usage"));
+  }
+
+  {
+    // A multi-turn task (tool call, then a final answer) reports usage for
+    // EACH turn separately, not just the last one — every real API call
+    // costs tokens, whether or not its turn type gates on anything.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "math.js" } }] }, usage: { inputTokens: 500, outputTokens: 60 } },
+      { turn: { type: "final", content: "it adds two numbers" }, usage: { inputTokens: 700, outputTokens: 90 } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "claude-haiku-4-5",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("what does add() do")) events.push(event);
+    const usageEvents = events.filter((e) => e.type === "usage");
+    check("a two-turn task reports usage twice, once per turn", usageEvents.length === 2);
+    check(
+      "the two usage events carry each turn's own token counts, not a running total",
+      JSON.stringify(usageEvents) ===
+        JSON.stringify([
+          { type: "usage", model: "claude-haiku-4-5", inputTokens: 500, outputTokens: 60 },
+          { type: "usage", model: "claude-haiku-4-5", inputTokens: 700, outputTokens: 90 },
+        ])
+    );
+  }
+})();
+
 console.log("\nAgent loop (scripted debug-fix scenario):");
 {
   const __filename = fileURLToPath(import.meta.url);
