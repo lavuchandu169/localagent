@@ -1343,13 +1343,13 @@ sessionSearchInput.addEventListener("input", () => {
 void refreshSessionList("");
 
 runTaskBtn.addEventListener("click", async () => {
-  if (!sessionId || !taskInput.value.trim()) return;
+  if (!sessionId || (!taskInput.value.trim() && pendingAttachments.length === 0)) return;
   toolCards.clear();
   runTaskBtn.disabled = true;
   const task = taskInput.value;
   const sentAttachments = pendingAttachments;
 
-  logLine(task, "log-task");
+  if (task.trim()) logLine(task, "log-task");
   // A read-only copy of the same chips shown under the sent task bubble,
   // so the log reflects exactly what went out — same chip look as the
   // composer's removable row, just without the × (buildAttachmentChip

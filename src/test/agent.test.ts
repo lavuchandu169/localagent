@@ -1009,6 +1009,30 @@ await (async () => {
   }
 
   {
+    // Attachment-only messages (empty task text) must thread through
+    // run() unchanged too — the composer allows sending with just
+    // attachments and no typed text (see renderer.ts's runTaskBtn guard).
+    const script: ChatResponse[] = [{ turn: { type: "final", content: "ok" } }];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+
+    for await (const _event of session.run("", {
+      images: [{ name: "c.png", mediaType: "image/png", dataBase64: "xyz" }],
+    })) {
+      // draining the generator is enough — the assertion below reads the session's own history
+    }
+
+    const messages = session.getMessages();
+    const firstUserMessage = messages.find((m) => m.role === "user");
+    check("an attachment-only message (empty task text) still carries the images", firstUserMessage?.content === "" && firstUserMessage?.images?.[0]?.name === "c.png");
+  }
+
+  {
     // No attachments passed at all — the existing zero-argument call
     // shape from every other test in this file must still work exactly
     // as before (images/textAttachments simply absent, not undefined
