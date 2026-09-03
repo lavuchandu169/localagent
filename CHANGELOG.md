@@ -3,6 +3,15 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.24 — 2026-09-03
+
+- A "what's new" popup now shows once after updating to a new version,
+  right in the app — no more digging through the GitHub release page to
+  see what changed.
+- When you're using a Claude model, the status bar now shows a running
+  estimate of tokens used and cost so far this session, updated live as
+  the task runs.
+
 ## v0.1.0-beta.23 — 2026-09-03
 
 - Automatic updates: a new version now downloads itself in the background
