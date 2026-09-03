@@ -1464,6 +1464,8 @@ updateBannerRestartBtn.addEventListener("click", () => {
   void window.agent.installUpdate();
 });
 
+let lastRenderedUpdateState: string | null = null;
+
 window.agent.onUpdateStatus((status) => {
   if (status.state === "downloading") {
     updateBannerText.textContent = `Downloading update… (${status.percent}%)`;
@@ -1480,7 +1482,14 @@ window.agent.onUpdateStatus((status) => {
     updateBannerRestartBtn.hidden = true;
     updateBannerLink.hidden = false;
   }
-  updateBanner.hidden = false;
+  // Only force the banner back open on an actual state transition — a
+  // download-progress tick re-broadcasts "downloading" many times a
+  // second, and forcing hidden=false on every one of those made the
+  // dismiss button impossible to use for the duration of a download.
+  if (status.state !== lastRenderedUpdateState) {
+    updateBanner.hidden = false;
+  }
+  lastRenderedUpdateState = status.state;
 });
 
 window.agent.getAuthStatus().then(renderAuthState).catch(() => {});

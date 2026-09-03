@@ -72,6 +72,12 @@ export function wireAutoUpdater(deps: UpdateManagerDeps): UpdateManager {
     // blocking error, and here specifically it degrades to the exact
     // banner this feature is layered on top of.
     console.warn("[autoUpdater] update failed:", err);
+    // A failed install attempt (e.g. Squirrel.Mac rejecting an unsigned app)
+    // must not leave the app permanently unable to quit, nor permanently
+    // disable the periodic re-check — reset both flags unconditionally.
+    updateReadyToInstall = false;
+    installingForUpdate = false;
+    if (!currentlyKnownUpdateVersion) return;
     broadcast({ state: "fallback", version: currentlyKnownUpdateVersion });
   });
 

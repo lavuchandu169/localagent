@@ -29,6 +29,19 @@ matters for two separate reasons:
    elevation gate — nothing in this design can suppress it, and nothing
    should try to.
 
+There's a third dimension beyond OS-level UX gates: without code signing,
+there is no cryptographic binding between a downloaded update and this
+project's publisher identity. electron-updater verifies a downloaded
+artifact's sha512 against the metadata file it fetched over TLS from
+GitHub — a reasonable integrity check — but nothing verifies *who*
+produced that artifact. Anyone able to publish a release to this repo (a
+compromised `GITHUB_TOKEN`, a compromised maintainer account, or a
+malicious workflow edit) can push to every installed client with zero
+user consent step, once this feature ships. That's inherent to auto-update
+in general, not a defect in this design — but it's a real reason "sign
+later" matters beyond smoothing out Gatekeeper/SmartScreen prompts, and is
+worth weighing when prioritizing that follow-up.
+
 Real code signing (an Apple Developer ID + notarization; a Windows
 code-signing certificate) is the only real fix for both, and needs
 accounts/purchases only the project owner can make. This spec builds the

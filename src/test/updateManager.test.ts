@@ -86,7 +86,7 @@ console.log("wireAutoUpdater — state machine:");
 
   let prevented = false;
   if (beforeQuitHandlerRef.current) beforeQuitHandlerRef.current({ preventDefault: () => (prevented = true) });
-  check("before-quit does NOT prevent default once installUpdate() already started installing", (prevented as boolean) === false);
+  check("before-quit does NOT prevent default once installUpdate() already started installing", !prevented);
 }
 
 console.log("\nwireAutoUpdater — natural quit before Restart Now is clicked:");
@@ -108,7 +108,7 @@ console.log("\nwireAutoUpdater — natural quit before Restart Now is clicked:")
   let prevented1 = false;
   const event1: { preventDefault: () => void } = { preventDefault: () => { prevented1 = true; } };
   if (beforeQuitHandlerRef.current) beforeQuitHandlerRef.current(event1);
-  check("the first before-quit (a real user quit) is prevented so quitAndInstall can run first", (prevented1 as boolean) === true);
+  check("the first before-quit (a real user quit) is prevented so quitAndInstall can run first", prevented1);
   check("quitAndInstall is called exactly once from that first before-quit", fakeUpdater.quitAndInstallCallCount() === 1);
 
   // electron-updater's real quitAndInstall() closes all windows and then
@@ -117,7 +117,7 @@ console.log("\nwireAutoUpdater — natural quit before Restart Now is clicked:")
   let prevented2 = false;
   const event2: { preventDefault: () => void } = { preventDefault: () => { prevented2 = true; } };
   if (beforeQuitHandlerRef.current) beforeQuitHandlerRef.current(event2);
-  check("the second (re-entrant) before-quit is allowed through, not prevented again", (prevented2 as boolean) === false);
+  check("the second (re-entrant) before-quit is allowed through, not prevented again", !prevented2);
   check("quitAndInstall is still only called once after the re-entrant before-quit", fakeUpdater.quitAndInstallCallCount() === 1);
 }
 
@@ -137,6 +137,68 @@ console.log("\nwireAutoUpdater — errors fall back, never get stuck:");
   fakeUpdater.emit("error", new Error("network blip"));
   const last = statuses[statuses.length - 1];
   check("an error after update-available falls back with that same version", JSON.stringify(last) === JSON.stringify({ state: "fallback", version: "2.0.0" }));
+}
+
+{
+  const fakeUpdater = createFakeAutoUpdater();
+  const statuses: UpdateStatus[] = [];
+
+  wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: (s) => statuses.push(s),
+    onBeforeQuit: () => {},
+    setIntervalFn: () => 0,
+  });
+
+  fakeUpdater.emit("error", new Error("offline"));
+  check("an error with no prior update-available broadcasts nothing (matches today's silent behavior)", statuses.length === 0);
+}
+
+{
+  // The realistic Mac scenario: update-downloaded fires (ready state, flags set),
+  // then the actual apply attempt fails. The app must not get stuck refusing to quit.
+  const fakeUpdater = createFakeAutoUpdater();
+  const beforeQuitHandlerRef: { current: ((event: { preventDefault: () => void }) => void) | null } = { current: null };
+
+  wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: () => {},
+    onBeforeQuit: (h) => {
+      beforeQuitHandlerRef.current = h;
+    },
+    setIntervalFn: () => 0,
+  });
+
+  fakeUpdater.emit("update-downloaded", { version: "1.0.0" });
+  fakeUpdater.emit("error", new Error("squirrel rejected unsigned app"));
+
+  let prevented = false;
+  if (beforeQuitHandlerRef.current) beforeQuitHandlerRef.current({ preventDefault: () => (prevented = true) });
+  check("after update-downloaded then error, the next before-quit is NOT prevented (the app can actually quit)", !prevented);
+}
+
+{
+  // The same scenario must also re-enable the periodic re-check, not leave it
+  // permanently disabled because updateReadyToInstall was never cleared.
+  const fakeUpdater = createFakeAutoUpdater();
+  let scheduledCallback: (() => void) | null = null;
+
+  wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: () => {},
+    onBeforeQuit: () => {},
+    setIntervalFn: (cb) => {
+      scheduledCallback = cb;
+      return 0;
+    },
+  });
+
+  fakeUpdater.emit("update-downloaded", { version: "1.0.0" });
+  fakeUpdater.emit("error", new Error("squirrel rejected unsigned app"));
+
+  const before = fakeUpdater.checkForUpdatesCallCount();
+  if (scheduledCallback) (scheduledCallback as () => void)();
+  check("after update-downloaded then error, the periodic re-check resumes (was not left permanently disabled)", fakeUpdater.checkForUpdatesCallCount() === before + 1);
 }
 
 console.log("\nwireAutoUpdater — periodic re-check:");
