@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.26 — 2026-09-03
+
+- When an update downloads but can't finish installing automatically
+  (e.g. on an unsigned Mac build, where Squirrel.Mac rejects the in-place
+  apply step), the update banner now offers "Open downloaded update" —
+  opening the file that already downloaded, instead of sending you back
+  to the release page to download the same bytes again.
+
 ## v0.1.0-beta.25 — 2026-09-03
 
 - Per-hunk diff approval: when the agent proposes an edit, each changed
