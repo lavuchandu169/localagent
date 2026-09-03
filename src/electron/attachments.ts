@@ -1,14 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export interface PickedAttachment {
-  name: string;
-  kind: "image" | "text";
-  mediaType?: string;
-  dataBase64?: string;
-  content?: string;
-  truncated?: boolean;
-}
+export type PickedAttachment =
+  | { name: string; kind: "image"; mediaType: string; dataBase64: string }
+  | { name: string; kind: "text"; content: string; truncated?: boolean };
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_TEXT_BYTES = 200 * 1024; // 200KB

@@ -31,7 +31,7 @@ console.log("readAttachment:");
   const filePath = await withTempFile("photo.png", pngBytes);
   const result = await readAttachment(filePath);
   check("a PNG is classified as an image", result.kind === "image" && result.mediaType === "image/png");
-  check("the image content is base64-encoded losslessly", Buffer.from(result.dataBase64!, "base64").equals(pngBytes));
+  check("the image content is base64-encoded losslessly", result.kind === "image" && Buffer.from(result.dataBase64, "base64").equals(pngBytes));
   check("the name is just the basename", result.name === "photo.png");
 }
 
@@ -74,8 +74,8 @@ console.log("readAttachment:");
   const filePath = await withTempFile("notes.txt", "line one\nline two\nline three\n");
   const result = await readAttachment(filePath);
   check("a plain text file is classified as text", result.kind === "text");
-  check("its content is read exactly", result.content === "line one\nline two\nline three\n");
-  check("a small text file is not marked truncated", !result.truncated);
+  check("its content is read exactly", result.kind === "text" && result.content === "line one\nline two\nline three\n");
+  check("a small text file is not marked truncated", result.kind === "text" && !result.truncated);
 }
 
 {
@@ -83,8 +83,8 @@ console.log("readAttachment:");
   const filePath = await withTempFile("big.log", oversizedText);
   const result = await readAttachment(filePath);
   check("a text file over the 200KB cap is truncated, not rejected", result.kind === "text" && result.truncated === true);
-  check("the truncated content ends with the truncation marker", result.content!.endsWith("\n…truncated…\n"));
-  check("the truncated content is at or under the cap plus the marker's own length", result.content!.length <= 200 * 1024 + "\n…truncated…\n".length);
+  check("the truncated content ends with the truncation marker", result.kind === "text" && result.content.endsWith("\n…truncated…\n"));
+  check("the truncated content is at or under the cap plus the marker's own length", result.kind === "text" && result.content.length <= 200 * 1024 + "\n…truncated…\n".length);
 }
 
 {
@@ -181,7 +181,7 @@ console.log("readAttachment:");
   const filePath = await withTempFile("huge.log", bigText);
   const result = await readAttachment(filePath);
   check("a large legitimate text file is still accepted, not pre-rejected", result.kind === "text" && result.truncated === true);
-  check("its truncated content still ends with the truncation marker", result.content!.endsWith("\n…truncated…\n"));
+  check("its truncated content still ends with the truncation marker", result.kind === "text" && result.content.endsWith("\n…truncated…\n"));
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

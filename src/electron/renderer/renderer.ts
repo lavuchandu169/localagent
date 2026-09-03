@@ -294,7 +294,7 @@ function buildAttachmentChip(attachment: PickedAttachment, onRemove?: () => void
   const label = document.createElement("span");
   label.textContent = attachment.name;
   chip.appendChild(label);
-  if (attachment.truncated) {
+  if (attachment.kind === "text" && attachment.truncated) {
     const badge = document.createElement("span");
     badge.className = "attachment-chip-truncated";
     badge.textContent = "truncated";
@@ -1369,8 +1369,8 @@ runTaskBtn.addEventListener("click", async () => {
   const textAttachments = sentAttachments.filter((a) => a.kind === "text");
   const attachments = sentAttachments.length > 0
     ? {
-        images: images.map((img) => ({ name: img.name, mediaType: img.mediaType!, dataBase64: img.dataBase64! })),
-        textAttachments: textAttachments.map((t) => ({ name: t.name, content: t.content! })),
+        images: images.map((img) => ({ name: img.name, mediaType: img.mediaType, dataBase64: img.dataBase64 })),
+        textAttachments: textAttachments.map((t) => ({ name: t.name, content: t.content })),
       }
     : undefined;
 
