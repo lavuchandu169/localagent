@@ -3,6 +3,18 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.22 — 2026-09-03
+
+- File attachments: attach text and image files from anywhere on disk to
+  a task via the new paperclip button (up to 5 per task). Claude sees
+  images directly; the custom-server option sends them in the standard
+  OpenAI vision format; local embedded models honestly say they can't
+  see an attached image rather than silently ignoring it. Text files
+  fold into the task text; large ones (over 200KB) are truncated rather
+  than rejected, images over 5MB are rejected with a clear message.
+  Attachments stay local — only the task text and model replies sync to
+  Drive, never the attachment content itself.
+
 ## v0.1.0-beta.21 — 2026-09-02
 
 - New "Plan first" option (off by default): hold a task's very first
