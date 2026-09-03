@@ -86,6 +86,12 @@ export interface ModelProvider {
 
 export type PermissionMode = "PLAN" | "DEFAULT" | "ACCEPT_EDITS" | "AUTO_SAFE";
 
+export interface PermissionResponse {
+  approved: boolean;
+  /** Only meaningful for an edit_file call with a diff — the DiffSegment hunk ids (see diffUtil.ts) to actually apply. Omitted, or covering every hunk id in the diff, behaves exactly like approving the whole call unmodified. Ignored when approved is false. */
+  approvedHunkIds?: number[];
+}
+
 export type PermissionDecision = "ALLOW" | "ASK" | "DENY";
 
 export type AgentState =

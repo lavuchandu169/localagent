@@ -8,13 +8,14 @@ import type {
   ChatMessage,
   ModelProvider,
   PermissionMode,
+  PermissionResponse,
   ProposedPlan,
   ToolCall,
 } from "./types.js";
 import { ToolRegistry } from "./toolRegistry.js";
 import { PermissionEngine } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
-import { computeFileDiff } from "./diffUtil.js";
+import { computeFileDiff, groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { createCheckpoint } from "./checkpoints.js";
 
 export interface AgentSessionOptions {
@@ -28,7 +29,7 @@ export interface AgentSessionOptions {
   /** Seeds the conversation from a prior session's history instead of starting fresh with just the system prompt — used to resume a saved session. */
   initialMessages?: ChatMessage[];
   /** Called when a tool call needs ASK approval. Return true to allow. */
-  onApprovalNeeded?: (call: ToolCall) => Promise<boolean>;
+  onApprovalNeeded?: (call: ToolCall) => Promise<PermissionResponse>;
   /**
    * When true, every task's very first turn is held for approval before any
    * of it runs — see run()'s interception right after the first provider
@@ -417,9 +418,10 @@ export class AgentSession {
           continue;
         }
 
+        let effectiveCall = call;
         if (decision === "ASK") {
-          const approved = this.opts.onApprovalNeeded ? await this.opts.onApprovalNeeded(call) : false;
-          if (!approved) {
+          const response = this.opts.onApprovalNeeded ? await this.opts.onApprovalNeeded(call) : { approved: false };
+          if (!response.approved) {
             this.messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -428,11 +430,31 @@ export class AgentSession {
             });
             continue;
           }
+          // A genuinely PARTIAL hunk selection rewrites the arguments actually
+          // handed to tool.execute below — the model's own turn history (the
+          // assistant message with its original tool_calls, already pushed
+          // above the per-call loop) is never touched. A full approval (no
+          // approvedHunkIds, or one covering every hunk) leaves effectiveCall
+          // exactly equal to call — byte-for-byte today's existing behavior.
+          if (call.name === "edit_file" && diff && response.approvedHunkIds) {
+            const segments = groupDiffIntoSegments(diff);
+            const allHunkIds = new Set(segments.filter((s) => s.kind === "hunk").map((s) => (s.kind === "hunk" ? s.id : -1)));
+            const approvedSet = new Set(response.approvedHunkIds);
+            const isPartial = [...allHunkIds].some((id) => !approvedSet.has(id));
+            if (isPartial && typeof call.arguments.path === "string") {
+              const mergedContent = applyHunkSelection(segments, approvedSet);
+              effectiveCall = { ...call, arguments: { ...call.arguments, content: mergedContent } };
+              yield {
+                type: "status",
+                message: `Applying ${approvedSet.size} of ${allHunkIds.size} proposed changes to ${call.arguments.path} — the rest were left as-is.`,
+              };
+            }
+          }
         }
 
         this.state = "EXECUTING_TOOL";
         yield { type: "tool.start", call };
-        const result = await tool.execute(call.arguments, {
+        const result = await tool.execute(effectiveCall.arguments, {
           workspaceRoot: this.opts.workspaceRoot,
           log: (msg) => {
             /* forwarded via tool.result event below */

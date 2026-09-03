@@ -51,7 +51,7 @@ async function main() {
     provider,
     tools: defaultToolRegistry(),
     permissionMode: "ACCEPT_EDITS", // auto-allow safe edits so the scripted demo runs unattended
-    onApprovalNeeded: async () => true,
+    onApprovalNeeded: async () => ({ approved: true }),
   });
 
   console.log(`\n[demo] workspace=${workspaceRoot} mode=ACCEPT_EDITS provider=mock\n`);

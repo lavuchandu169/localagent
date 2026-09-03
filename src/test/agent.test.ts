@@ -10,7 +10,8 @@ import { AgentSession, DEFAULT_SYSTEM_PROMPT } from "../agent.js";
 import { defaultToolRegistry, ToolRegistry } from "../toolRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { toLlamaHistory, toLlamaFunctions, fromLlamaResult } from "../providers/embeddedLlama.js";
-import type { AgentEvent, ChatResponse, Tool, ToolCall } from "../types.js";
+import type { AgentEvent, ChatResponse, PermissionResponse, Tool, ToolCall } from "../types.js";
+import { computeFileDiff, groupDiffIntoSegments } from "../diffUtil.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -432,7 +433,7 @@ await (async () => {
       provider: new MockProvider(script),
       tools: defaultToolRegistry(),
       permissionMode: "ACCEPT_EDITS",
-      onApprovalNeeded: async () => false,
+      onApprovalNeeded: async () => ({ approved: false }),
     });
 
     let decision: string | undefined;
@@ -547,6 +548,112 @@ await (async () => {
   }
 })();
 
+console.log("\nPartial hunk approval only rewrites the edit_file call's content, never the model's own turn history:");
+await (async () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const workspaceRoot = path.resolve(__dirname, "..", "..", "fixture-repo");
+  // math.js's real content: "function add(a, b) {\n  return a + b;\n}\nmodule.exports = { add };\n"
+
+  {
+    // Full approval (approvedHunkIds covers every hunk) writes the model's
+    // original content completely unmodified, and emits no extra status line.
+    const newContent = "function add(a, b) {\n  return a + b + 1;\n}\nmodule.exports = { add };\n";
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "math.js" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "math.js", content: newContent } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "DEFAULT",
+      onApprovalNeeded: async (call): Promise<PermissionResponse> => {
+        if (call.name !== "edit_file") return { approved: true };
+        return { approved: true }; // no approvedHunkIds — the common "approve everything" case
+      },
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("fix the bug")) events.push(event);
+    check("a full approval writes the exact content the model proposed", (await fs.readFile(path.join(workspaceRoot, "math.js"), "utf-8")) === newContent);
+    check("a full approval emits no partial-application status line", !events.some((e) => e.type === "status" && e.message.includes("Applying")));
+
+    // Restore the fixture file for the next block/other test files.
+    await fs.writeFile(path.join(workspaceRoot, "math.js"), "function add(a, b) {\n  return a + b;\n}\nmodule.exports = { add };\n", "utf-8");
+  }
+
+  {
+    // Partial approval (only some hunks) writes the correctly-merged
+    // content, not the model's original full rewrite, and does emit the
+    // status line naming how many of how many hunks were applied.
+    const proposedContent = "function add(a, b) {\n  return a - b;\n}\nmodule.exports = { subtractNotAdd };\n";
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "math.js" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "math.js", content: proposedContent } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "DEFAULT",
+      onApprovalNeeded: async (call): Promise<PermissionResponse> => {
+        if (call.name !== "edit_file" || typeof call.arguments.path !== "string" || typeof call.arguments.content !== "string") {
+          return { approved: true };
+        }
+        // Approve only the FIRST hunk (the body-logic change), reject the
+        // second (the exports-name change) — simulates a user unchecking
+        // one box in the real UI.
+        const oldContent = "function add(a, b) {\n  return a + b;\n}\nmodule.exports = { add };\n";
+        const diff = computeFileDiff(oldContent, call.arguments.content);
+        const segments = groupDiffIntoSegments(diff);
+        const firstHunk = segments.find((s) => s.kind === "hunk");
+        return { approved: true, approvedHunkIds: firstHunk?.kind === "hunk" ? [firstHunk.id] : [] };
+      },
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("fix the bug")) events.push(event);
+    const written = await fs.readFile(path.join(workspaceRoot, "math.js"), "utf-8");
+    check(
+      "a partial approval writes the merged content — the approved hunk applied, the rejected hunk left as it was",
+      written === "function add(a, b) {\n  return a - b;\n}\nmodule.exports = { add };\n"
+    );
+    check("a partial approval emits a status line naming how many of how many hunks were applied", events.some((e) => e.type === "status" && e.message.includes("Applying 1 of 2")));
+
+    // Restore the fixture file.
+    await fs.writeFile(path.join(workspaceRoot, "math.js"), "function add(a, b) {\n  return a + b;\n}\nmodule.exports = { add };\n", "utf-8");
+  }
+
+  {
+    // A deny response is completely unaffected — no hunk-selection logic
+    // runs at all, the file is untouched.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "math.js", content: "anything" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const before = await fs.readFile(path.join(workspaceRoot, "math.js"), "utf-8");
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "DEFAULT",
+      onApprovalNeeded: async (): Promise<PermissionResponse> => ({ approved: false }),
+    });
+
+    for await (const _event of session.run("fix the bug")) {
+      // drain
+    }
+    const after = await fs.readFile(path.join(workspaceRoot, "math.js"), "utf-8");
+    check("a deny response leaves the file completely untouched", after === before);
+  }
+})();
+
 console.log("\nCheckpoints — one per task, only in a real git workspace:");
 await (async () => {
   const execFileAsync = promisify(execFile);
@@ -640,7 +747,7 @@ await (async () => {
       // in ACCEPT_EDITS (the read-before-write override tested earlier in
       // this file) — approve it so this block can focus purely on the
       // checkpoint behavior, not re-test that override.
-      onApprovalNeeded: async () => true,
+      onApprovalNeeded: async () => ({ approved: true }),
     });
 
     const events: AgentEvent[] = [];
@@ -1144,7 +1251,7 @@ console.log("\nAgent loop (scripted debug-fix scenario):");
     provider,
     tools: defaultToolRegistry(),
     permissionMode: "PLAN",
-    onApprovalNeeded: async () => false,
+    onApprovalNeeded: async () => ({ approved: false }),
   });
 
   let sawReadOk = false;

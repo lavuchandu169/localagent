@@ -103,7 +103,7 @@ async function main() {
     permissionMode: mode,
     onApprovalNeeded: async (call: ToolCall) => {
       const answer = await rl.question(`\nApprove ${call.name}(${JSON.stringify(call.arguments)})? [y/N] `);
-      return answer.trim().toLowerCase() === "y";
+      return { approved: answer.trim().toLowerCase() === "y" };
     },
   });
 
