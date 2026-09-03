@@ -290,8 +290,20 @@ const toolCards = new Map<string, HTMLElement>();
  * history replays through renderEvent) — never mutated any other way, so a
  * resumed session's badge always reflects that session's own real history,
  * not whatever leaked over from the previous one.
+ *
+ * `knownCostUsd` accumulates INCREMENTALLY, one usage event at a time, each
+ * priced at that event's OWN `model` — never recomputed from the lifetime
+ * token totals against a single rate. That distinction matters because a
+ * session can switch Anthropic models partway through (Edit settings…),
+ * and each usage event already carries the model that was actually active
+ * for that specific turn; re-pricing the whole history at whichever model
+ * happens to be active now would silently mis-price every token spent
+ * under a previous model. `hasUnknownPricedUsage` degrades the badge to
+ * token-counts-only (no dollar figure) the moment any turn's model isn't
+ * in the pricing table — a partial dollar total that silently excludes
+ * some real spend would be worse than no dollar total at all.
  */
-let sessionUsage = { inputTokens: 0, outputTokens: 0 };
+let sessionUsage = { inputTokens: 0, outputTokens: 0, knownCostUsd: 0, hasUnknownPricedUsage: false };
 
 function formatTokenCount(tokens: number): string {
   return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}K` : String(tokens);
@@ -948,9 +960,20 @@ function renderEvent(event: AgentEvent): void {
       // no explicit provider-kind check needed here.
       sessionUsage.inputTokens += event.inputTokens;
       sessionUsage.outputTokens += event.outputTokens;
-      const cost = estimateCostUsd(event.model, sessionUsage.inputTokens, sessionUsage.outputTokens);
+      // Priced THIS event alone, at THIS event's own model, then added onto
+      // the running dollar total — never recomputed from the lifetime token
+      // totals against a single rate. A session that switches Anthropic
+      // models partway through (Edit settings…) still prices every turn
+      // correctly this way, since each usage event already carries the
+      // model that was actually active for it.
+      const eventCost = estimateCostUsd(event.model, event.inputTokens, event.outputTokens);
+      if (eventCost === null) {
+        sessionUsage.hasUnknownPricedUsage = true;
+      } else {
+        sessionUsage.knownCostUsd += eventCost;
+      }
       const tokenText = `${formatTokenCount(sessionUsage.inputTokens)} in / ${formatTokenCount(sessionUsage.outputTokens)} out`;
-      usageBadge.textContent = cost !== null ? `~$${cost.toFixed(3)} (${tokenText})` : tokenText;
+      usageBadge.textContent = sessionUsage.hasUnknownPricedUsage ? tokenText : `~$${sessionUsage.knownCostUsd.toFixed(3)} (${tokenText})`;
       usageBadge.hidden = false;
       break;
     }
@@ -1327,7 +1350,7 @@ function clearEventLog(): void {
   eventLog.innerHTML = "";
   emptyState.hidden = false;
   eventLog.appendChild(emptyState);
-  sessionUsage = { inputTokens: 0, outputTokens: 0 };
+  sessionUsage = { inputTokens: 0, outputTokens: 0, knownCostUsd: 0, hasUnknownPricedUsage: false };
   usageBadge.hidden = true;
 }
 
