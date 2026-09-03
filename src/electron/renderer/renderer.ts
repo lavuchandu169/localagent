@@ -3,6 +3,7 @@ import type { Change } from "diff";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
 import type { PickedAttachment } from "../attachments.js";
+import type { UpdateStatus } from "../updateManager.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 
@@ -92,7 +93,8 @@ interface AgentBridge {
   deleteSession(id: string): Promise<void>;
   onSessionsChanged(callback: () => void): () => void;
   onCloudSyncScopeWarning(callback: () => void): () => void;
-  onUpdateAvailable(callback: (info: { version: string }) => void): () => void;
+  onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
+  installUpdate(): Promise<void>;
   getGoogleSettings(): Promise<{ clientId: string; hasSecret: boolean; envOverride: boolean }>;
   saveGoogleSettings(settings: { clientId: string; clientSecret?: string }): Promise<void>;
   getAnthropicSettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
@@ -180,6 +182,7 @@ const emptyState = byId<HTMLDivElement>("empty-state");
 const updateBanner = byId<HTMLDivElement>("update-banner");
 const updateBannerText = byId<HTMLSpanElement>("update-banner-text");
 const updateBannerLink = byId<HTMLAnchorElement>("update-banner-link");
+const updateBannerRestartBtn = byId<HTMLButtonElement>("update-banner-restart");
 const updateBannerDismiss = byId<HTMLButtonElement>("update-banner-dismiss");
 const aboutToggle = byId<HTMLButtonElement>("about-toggle");
 const aboutPanel = byId<HTMLDivElement>("about-panel");
@@ -1450,12 +1453,33 @@ window.agent.onCloudSyncScopeWarning(() => {
 });
 
 updateBannerDismiss.addEventListener("click", () => {
+  // Hides the banner only — a background download in progress keeps
+  // downloading, and an already-downloaded update still applies itself on
+  // the next natural quit either way. Dismiss is a view-layer action; the
+  // state that matters lives in the main process, not the DOM.
   updateBanner.hidden = true;
 });
 
-window.agent.onUpdateAvailable((info) => {
-  updateBannerText.textContent = `A new version (v${info.version}) is available.`;
-  updateBannerLink.href = `https://github.com/lavuchandu169/localagent/releases/tag/v${info.version}`;
+updateBannerRestartBtn.addEventListener("click", () => {
+  void window.agent.installUpdate();
+});
+
+window.agent.onUpdateStatus((status) => {
+  if (status.state === "downloading") {
+    updateBannerText.textContent = `Downloading update… (${status.percent}%)`;
+    updateBannerRestartBtn.hidden = true;
+    updateBannerLink.hidden = true;
+  } else if (status.state === "ready") {
+    updateBannerText.textContent = `Update v${status.version} ready.`;
+    updateBannerRestartBtn.hidden = false;
+    updateBannerLink.hidden = true;
+  } else {
+    // fallback — identical to this banner's only behavior before this feature existed
+    updateBannerText.textContent = `A new version (v${status.version}) is available.`;
+    updateBannerLink.href = `https://github.com/lavuchandu169/localagent/releases/tag/v${status.version}`;
+    updateBannerRestartBtn.hidden = true;
+    updateBannerLink.hidden = false;
+  }
   updateBanner.hidden = false;
 });
 
