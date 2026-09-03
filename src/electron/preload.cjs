@@ -16,7 +16,7 @@ contextBridge.exposeInMainWorld("agent", {
   revertCheckpoint: (sessionId) => ipcRenderer.invoke("agent:revert-checkpoint", sessionId),
   getChanges: (sessionId) => ipcRenderer.invoke("agent:get-changes", sessionId),
   pickWorkspace: () => ipcRenderer.invoke("agent:pick-workspace"),
-  pickAttachments: () => ipcRenderer.invoke("agent:pick-attachments"),
+  pickAttachments: (limit) => ipcRenderer.invoke("agent:pick-attachments", limit),
   listCachedModels: () => ipcRenderer.invoke("agent:list-cached-models"),
   deleteCachedModel: (id) => ipcRenderer.invoke("agent:delete-cached-model", id),
   cancelDownload: () => ipcRenderer.invoke("agent:cancel-download"),

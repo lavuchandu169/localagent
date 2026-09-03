@@ -64,7 +64,7 @@ interface LiveSessionSnapshot {
 interface AgentBridge {
   startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string }>;
   runTask(sessionId: string, task: string, attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }): Promise<void>;
-  pickAttachments(): Promise<{ attachments: PickedAttachment[]; errors: { name: string; error: string }[] }>;
+  pickAttachments(limit?: number): Promise<{ attachments: PickedAttachment[]; errors: { name: string; error: string }[]; skipped: number }>;
   respondPermission(sessionId: string, callId: string, approved: boolean): Promise<void>;
   respondPlan(sessionId: string, approved: boolean): Promise<void>;
   cancelSession(sessionId: string): Promise<void>;
@@ -333,15 +333,16 @@ attachFileBtn.addEventListener("click", () => {
       logLine(`[attachments] Already at the ${MAX_ATTACHMENTS_PER_TASK}-attachment limit for this task — remove one before adding another.`, "log-error");
       return;
     }
-    const { attachments, errors } = await window.agent.pickAttachments();
+    const { attachments, errors, skipped } = await window.agent.pickAttachments(remaining);
     for (const err of errors) {
       logLine(`[attachments] Couldn't attach ${err.name}: ${err.error}`, "log-error");
     }
-    const accepted = attachments.slice(0, remaining);
-    if (attachments.length > accepted.length) {
-      logLine(`[attachments] Only added ${accepted.length} of ${attachments.length} picked files — the ${MAX_ATTACHMENTS_PER_TASK}-attachment limit was reached.`, "log-error");
+    if (skipped > 0) {
+      // Informational, not an error — the picked files are fine, the
+      // 5-attachment cap is just already-documented product behavior.
+      logLine(`[attachments] Only added ${attachments.length} of ${attachments.length + skipped} picked files — the ${MAX_ATTACHMENTS_PER_TASK}-attachment limit was reached.`, "log-status");
     }
-    pendingAttachments = [...pendingAttachments, ...accepted];
+    pendingAttachments = [...pendingAttachments, ...attachments];
     renderAttachmentChips();
   });
 });

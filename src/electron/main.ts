@@ -256,20 +256,31 @@ app.whenReady().then(() => {
       )
   );
 
-  ipcMain.handle("agent:pick-attachments", async () => {
+  ipcMain.handle("agent:pick-attachments", async (_event, limit?: number) => {
     const result = await showOpenDialog({ properties: ["openFile", "multiSelections"] });
-    if (result.canceled) return { attachments: [], errors: [] };
+    if (result.canceled) return { attachments: [], errors: [], skipped: 0 };
 
+    const maxToRead = typeof limit === "number" ? limit : result.filePaths.length;
     const attachments: PickedAttachment[] = [];
     const errors: { name: string; error: string }[] = [];
+    let skipped = 0;
     for (const filePath of result.filePaths) {
+      // Once enough files have been successfully read to hit the caller's
+      // cap, every remaining picked file is skipped without ever being
+      // stat'd or read — a large multi-file pick past the composer's
+      // 5-attachment limit no longer pays the read cost for files that
+      // would just be discarded on the renderer side anyway.
+      if (attachments.length >= maxToRead) {
+        skipped++;
+        continue;
+      }
       try {
         attachments.push(await readAttachment(filePath));
       } catch (err) {
         errors.push({ name: path.basename(filePath), error: err instanceof Error ? err.message : String(err) });
       }
     }
-    return { attachments, errors };
+    return { attachments, errors, skipped };
   });
 
   ipcMain.handle("agent:respond-permission", (_event, sessionId: string, callId: string, approved: boolean) =>
