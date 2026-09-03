@@ -117,7 +117,7 @@ export async function readAttachment(filePath: string): Promise<PickedAttachment
   }
 
   if (buf.length > MAX_TEXT_BYTES) {
-    const truncatedText = Buffer.from(buf.subarray(0, MAX_TEXT_BYTES)).toString("utf-8");
+    const truncatedText = buf.subarray(0, MAX_TEXT_BYTES).toString("utf-8");
     return { name, kind: "text", content: `${truncatedText}${TRUNCATION_MARKER}`, truncated: true };
   }
 
