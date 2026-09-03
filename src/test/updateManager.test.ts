@@ -50,9 +50,20 @@ function createFakeAutoUpdater() {
   return fake;
 }
 
+/** A hand-rolled fake of the injected openPath dependency (Electron's shell.openPath shape: resolves to "" on success, an error string on failure) — records every path it was called with. */
+function createFakeOpenPath() {
+  const calls: string[] = [];
+  const openPath = async (path: string) => {
+    calls.push(path);
+    return "";
+  };
+  return { openPath, calls };
+}
+
 console.log("wireAutoUpdater — state machine:");
 {
   const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
   const statuses: UpdateStatus[] = [];
   const beforeQuitHandlerRef: { current: ((event: { preventDefault: () => void }) => void) | null } = { current: null };
 
@@ -62,6 +73,7 @@ console.log("wireAutoUpdater — state machine:");
     onBeforeQuit: (h) => {
       beforeQuitHandlerRef.current = h;
     },
+    openPath,
     setIntervalFn: () => 0,
   });
 
@@ -75,7 +87,7 @@ console.log("wireAutoUpdater — state machine:");
   fakeUpdater.emit("download-progress", { percent: 55.4 });
   check("download-progress broadcasts a downloading status with the rounded percent", JSON.stringify(statuses[1]) === JSON.stringify({ state: "downloading", percent: 55 }));
 
-  fakeUpdater.emit("update-downloaded", { version: "1.2.3" });
+  fakeUpdater.emit("update-downloaded", { version: "1.2.3", downloadedFile: "/tmp/cache/localagent-1.2.3-mac.zip" });
   check("update-downloaded broadcasts a ready status with the version", JSON.stringify(statuses[2]) === JSON.stringify({ state: "ready", version: "1.2.3" }));
 
   manager.installUpdate();
@@ -92,6 +104,7 @@ console.log("wireAutoUpdater — state machine:");
 console.log("\nwireAutoUpdater — natural quit before Restart Now is clicked:");
 {
   const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
   const beforeQuitHandlerRef: { current: ((event: { preventDefault: () => void }) => void) | null } = { current: null };
 
   wireAutoUpdater({
@@ -100,6 +113,7 @@ console.log("\nwireAutoUpdater — natural quit before Restart Now is clicked:")
     onBeforeQuit: (h) => {
       beforeQuitHandlerRef.current = h;
     },
+    openPath,
     setIntervalFn: () => 0,
   });
 
@@ -124,29 +138,36 @@ console.log("\nwireAutoUpdater — natural quit before Restart Now is clicked:")
 console.log("\nwireAutoUpdater — errors fall back, never get stuck:");
 {
   const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
   const statuses: UpdateStatus[] = [];
 
   wireAutoUpdater({
     autoUpdater: fakeUpdater,
     broadcast: (s) => statuses.push(s),
     onBeforeQuit: () => {},
+    openPath,
     setIntervalFn: () => 0,
   });
 
   fakeUpdater.emit("update-available", { version: "2.0.0" });
   fakeUpdater.emit("error", new Error("network blip"));
   const last = statuses[statuses.length - 1];
-  check("an error after update-available falls back with that same version", JSON.stringify(last) === JSON.stringify({ state: "fallback", version: "2.0.0" }));
+  check(
+    "an error after update-available (no download ever completed) falls back with that version and canOpenDownloadedFile: false",
+    JSON.stringify(last) === JSON.stringify({ state: "fallback", version: "2.0.0", canOpenDownloadedFile: false })
+  );
 }
 
 {
   const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
   const statuses: UpdateStatus[] = [];
 
   wireAutoUpdater({
     autoUpdater: fakeUpdater,
     broadcast: (s) => statuses.push(s),
     onBeforeQuit: () => {},
+    openPath,
     setIntervalFn: () => 0,
   });
 
@@ -158,6 +179,7 @@ console.log("\nwireAutoUpdater — errors fall back, never get stuck:");
   // The realistic Mac scenario: update-downloaded fires (ready state, flags set),
   // then the actual apply attempt fails. The app must not get stuck refusing to quit.
   const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
   const beforeQuitHandlerRef: { current: ((event: { preventDefault: () => void }) => void) | null } = { current: null };
 
   wireAutoUpdater({
@@ -166,6 +188,7 @@ console.log("\nwireAutoUpdater — errors fall back, never get stuck:");
     onBeforeQuit: (h) => {
       beforeQuitHandlerRef.current = h;
     },
+    openPath,
     setIntervalFn: () => 0,
   });
 
@@ -181,12 +204,14 @@ console.log("\nwireAutoUpdater — errors fall back, never get stuck:");
   // The same scenario must also re-enable the periodic re-check, not leave it
   // permanently disabled because updateReadyToInstall was never cleared.
   const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
   let scheduledCallback: (() => void) | null = null;
 
   wireAutoUpdater({
     autoUpdater: fakeUpdater,
     broadcast: () => {},
     onBeforeQuit: () => {},
+    openPath,
     setIntervalFn: (cb) => {
       scheduledCallback = cb;
       return 0;
@@ -201,9 +226,93 @@ console.log("\nwireAutoUpdater — errors fall back, never get stuck:");
   check("after update-downloaded then error, the periodic re-check resumes (was not left permanently disabled)", fakeUpdater.checkForUpdatesCallCount() === before + 1);
 }
 
+console.log("\nwireAutoUpdater — opening the downloaded file when the in-place apply failed:");
+{
+  // The exact scenario this feature exists for: a real download completed
+  // (update-downloaded carries a real downloadedFile path), then the
+  // in-place apply step failed (e.g. Squirrel.Mac rejecting an unsigned
+  // Mac build) — the fallback status must say a file CAN be opened, and
+  // openDownloadedFile() must actually open that exact path.
+  const fakeUpdater = createFakeAutoUpdater();
+  const { openPath, calls } = createFakeOpenPath();
+  const statuses: UpdateStatus[] = [];
+
+  const manager = wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: (s) => statuses.push(s),
+    onBeforeQuit: () => {},
+    openPath,
+    setIntervalFn: () => 0,
+  });
+
+  fakeUpdater.emit("update-downloaded", { version: "1.0.0", downloadedFile: "/tmp/cache/localagent-1.0.0-mac.zip" });
+  fakeUpdater.emit("error", new Error("squirrel rejected unsigned app"));
+
+  const last = statuses[statuses.length - 1];
+  check(
+    "the fallback status says a downloaded file CAN be opened",
+    JSON.stringify(last) === JSON.stringify({ state: "fallback", version: "1.0.0", canOpenDownloadedFile: true })
+  );
+
+  manager.openDownloadedFile();
+  check("openDownloadedFile() opens the exact real downloaded file path", JSON.stringify(calls) === JSON.stringify(["/tmp/cache/localagent-1.0.0-mac.zip"]));
+}
+
+{
+  // No download ever completed (e.g. the check itself failed) — nothing to
+  // open, and calling openDownloadedFile() must be a harmless no-op.
+  const fakeUpdater = createFakeAutoUpdater();
+  const { openPath, calls } = createFakeOpenPath();
+
+  const manager = wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: () => {},
+    onBeforeQuit: () => {},
+    openPath,
+    setIntervalFn: () => 0,
+  });
+
+  manager.openDownloadedFile();
+  check("openDownloadedFile() is a no-op when nothing has ever been downloaded", calls.length === 0);
+}
+
+{
+  // A stale downloaded-file path from an earlier, since-superseded update
+  // attempt must not leak into a NEWER version's fallback state — a fresh
+  // update-available resets it, same as it resets currentlyKnownUpdateVersion.
+  const fakeUpdater = createFakeAutoUpdater();
+  const { openPath, calls } = createFakeOpenPath();
+  const statuses: UpdateStatus[] = [];
+
+  const manager = wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: (s) => statuses.push(s),
+    onBeforeQuit: () => {},
+    openPath,
+    setIntervalFn: () => 0,
+  });
+
+  fakeUpdater.emit("update-downloaded", { version: "1.0.0", downloadedFile: "/tmp/cache/localagent-1.0.0-mac.zip" });
+  fakeUpdater.emit("error", new Error("squirrel rejected unsigned app"));
+  // A newer version is found and starts downloading — the stale 1.0.0 file
+  // must no longer be treated as openable for whatever happens to 2.0.0.
+  fakeUpdater.emit("update-available", { version: "2.0.0" });
+  fakeUpdater.emit("error", new Error("network blip mid-download"));
+
+  const last = statuses[statuses.length - 1];
+  check(
+    "a fresh update-available resets canOpenDownloadedFile until a NEW download actually completes",
+    JSON.stringify(last) === JSON.stringify({ state: "fallback", version: "2.0.0", canOpenDownloadedFile: false })
+  );
+
+  manager.openDownloadedFile();
+  check("openDownloadedFile() stays a no-op after the stale path was reset", calls.length === 0);
+}
+
 console.log("\nwireAutoUpdater — periodic re-check:");
 {
   const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
   let scheduledCallback: (() => void) | null = null;
   let scheduledMs: number | null = null;
 
@@ -211,6 +320,7 @@ console.log("\nwireAutoUpdater — periodic re-check:");
     autoUpdater: fakeUpdater,
     broadcast: () => {},
     onBeforeQuit: () => {},
+    openPath,
     checkIntervalMs: 999,
     setIntervalFn: (cb, ms) => {
       scheduledCallback = cb;

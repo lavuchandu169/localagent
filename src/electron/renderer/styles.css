@@ -820,7 +820,8 @@ input:disabled {
   text-decoration: underline;
 }
 
-#update-banner-restart {
+#update-banner-restart,
+#update-banner-open-file {
   background: var(--accent);
   color: var(--bg);
   border: none;
@@ -832,11 +833,13 @@ input:disabled {
   font-family: var(--font-sans);
 }
 
-#update-banner-restart:hover {
+#update-banner-restart:hover,
+#update-banner-open-file:hover {
   opacity: 0.9;
 }
 
-#update-banner-restart[hidden] {
+#update-banner-restart[hidden],
+#update-banner-open-file[hidden] {
   display: none;
 }
 

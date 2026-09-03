@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld("agent", {
     return () => ipcRenderer.removeListener("agent:update-status", listener);
   },
   installUpdate: () => ipcRenderer.invoke("agent:install-update"),
+  openUpdateFile: () => ipcRenderer.invoke("agent:open-update-file"),
   getGoogleSettings: () => ipcRenderer.invoke("agent:get-google-settings"),
   saveGoogleSettings: (settings) => ipcRenderer.invoke("agent:save-google-settings", settings),
   getAnthropicSettings: () => ipcRenderer.invoke("agent:get-anthropic-settings"),

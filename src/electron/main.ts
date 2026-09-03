@@ -162,11 +162,16 @@ app.whenReady().then(() => {
       autoUpdater,
       broadcast: (status) => broadcastToAllWindows("agent:update-status", status),
       onBeforeQuit: (handler) => app.on("before-quit", handler),
+      openPath: (path) => shell.openPath(path),
     });
   }
 
   ipcMain.handle("agent:install-update", () => {
     updateManager?.installUpdate();
+  });
+
+  ipcMain.handle("agent:open-update-file", () => {
+    updateManager?.openDownloadedFile();
   });
 
   let scopeWarningSent = false;

@@ -98,6 +98,7 @@ interface AgentBridge {
   onCloudSyncScopeWarning(callback: () => void): () => void;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   installUpdate(): Promise<void>;
+  openUpdateFile(): Promise<void>;
   getGoogleSettings(): Promise<{ clientId: string; hasSecret: boolean; envOverride: boolean }>;
   saveGoogleSettings(settings: { clientId: string; clientSecret?: string }): Promise<void>;
   getAnthropicSettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
@@ -185,6 +186,7 @@ const emptyState = byId<HTMLDivElement>("empty-state");
 const updateBanner = byId<HTMLDivElement>("update-banner");
 const updateBannerText = byId<HTMLSpanElement>("update-banner-text");
 const updateBannerLink = byId<HTMLAnchorElement>("update-banner-link");
+const updateBannerOpenFileBtn = byId<HTMLButtonElement>("update-banner-open-file");
 const updateBannerRestartBtn = byId<HTMLButtonElement>("update-banner-restart");
 const updateBannerDismiss = byId<HTMLButtonElement>("update-banner-dismiss");
 const aboutToggle = byId<HTMLButtonElement>("about-toggle");
@@ -1670,22 +1672,38 @@ updateBannerRestartBtn.addEventListener("click", () => {
   void window.agent.installUpdate();
 });
 
+updateBannerOpenFileBtn.addEventListener("click", () => {
+  void window.agent.openUpdateFile();
+});
+
 let lastRenderedUpdateState: string | null = null;
 
 window.agent.onUpdateStatus((status) => {
   if (status.state === "downloading") {
     updateBannerText.textContent = `Downloading update… (${status.percent}%)`;
     updateBannerRestartBtn.hidden = true;
+    updateBannerOpenFileBtn.hidden = true;
     updateBannerLink.hidden = true;
   } else if (status.state === "ready") {
     updateBannerText.textContent = `Update v${status.version} ready.`;
     updateBannerRestartBtn.hidden = false;
+    updateBannerOpenFileBtn.hidden = true;
+    updateBannerLink.hidden = true;
+  } else if (status.canOpenDownloadedFile) {
+    // fallback, but the real download did complete — e.g. Squirrel.Mac
+    // rejecting an unsigned Mac build's in-place apply step. Offer the
+    // downloaded file directly instead of sending the user back to GitHub
+    // to download the same bytes again.
+    updateBannerText.textContent = `Update v${status.version} downloaded, but couldn't finish installing automatically on this build.`;
+    updateBannerRestartBtn.hidden = true;
+    updateBannerOpenFileBtn.hidden = false;
     updateBannerLink.hidden = true;
   } else {
-    // fallback — identical to this banner's only behavior before this feature existed
+    // fallback with nothing downloaded — identical to this banner's only behavior before this feature existed
     updateBannerText.textContent = `A new version (v${status.version}) is available.`;
     updateBannerLink.href = `https://github.com/lavuchandu169/localagent/releases/tag/v${status.version}`;
     updateBannerRestartBtn.hidden = true;
+    updateBannerOpenFileBtn.hidden = true;
     updateBannerLink.hidden = false;
   }
   // Only force the banner back open on an actual state transition — a
