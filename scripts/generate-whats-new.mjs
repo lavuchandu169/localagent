@@ -18,7 +18,7 @@
 // SOURCE file that tsc then needs to see when it runs.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const changelogPath = path.join(__dirname, "..", "CHANGELOG.md");
@@ -97,7 +97,20 @@ export function extractLatestEntry(changelogText) {
 // from generate-whats-new.test.mjs. Without this guard, importing the
 // function for testing would also silently re-run the real generation
 // step as a side effect of the import itself.
-if (import.meta.url === `file://${process.argv[1]}`) {
+//
+// pathToFileURL(process.argv[1]).href, not a raw `file://${process.argv[1]}`
+// string — confirmed live to matter, not just theoretical: on Windows,
+// process.argv[1] is a backslash path with a drive letter (e.g.
+// "D:\a\localagent\localagent\scripts\generate-whats-new.mjs"), which a
+// plain template-string concatenation never turns into a real file: URL
+// (forward slashes, percent-encoding, triple-slash drive syntax) — so the
+// naive comparison against import.meta.url was always false on Windows,
+// this guard never ran even on direct invocation, src/whatsNew.ts was
+// never written, and the next build step (tsc) failed with "Cannot find
+// module '../../whatsNew.js'". pathToFileURL performs that same
+// platform-correct conversion Node itself uses, so the comparison is
+// exact on every OS.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [changelogText, packageJsonText] = await Promise.all([fs.readFile(changelogPath, "utf-8"), fs.readFile(packageJsonPath, "utf-8")]);
   const entry = extractLatestEntry(changelogText);
 
