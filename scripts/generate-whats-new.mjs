@@ -46,7 +46,16 @@ const HEADING_RE = /^## v(\S+)\s+—\s+(.+)$/;
  * this generator should paper over.
  */
 export function extractLatestEntry(changelogText) {
-  const lines = changelogText.split("\n");
+  // Normalize CRLF to LF before splitting — confirmed live to matter, not
+  // theoretical: a Windows git checkout of this repo converts CHANGELOG.md's
+  // committed LF line endings to CRLF, and HEADING_RE's trailing `$` can
+  // never match a line ending in a stray `\r` (`.` excludes line-terminator
+  // characters, `\r` among them, so `(.+)$` has no way to consume it) —
+  // every heading line silently failed to match, "No heading found" even
+  // though the file plainly has one. Doing this once, up front, makes the
+  // rest of this function's line-based parsing correct on any platform's
+  // checkout, not just this generator's own direct callers.
+  const lines = changelogText.replace(/\r\n/g, "\n").split("\n");
   const headingIndex = lines.findIndex((line) => HEADING_RE.test(line));
   if (headingIndex === -1) {
     throw new Error("No '## vX.Y.Z — DATE' heading found in CHANGELOG.md");

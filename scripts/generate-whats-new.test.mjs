@@ -91,5 +91,32 @@ Some text with no bullets at all.
   expectThrows("a changelog with no '## vX.Y.Z — DATE' heading throws", () => extractLatestEntry(changelog), "No '## vX.Y.Z");
 }
 
+{
+  // A Windows git checkout converts this repo's committed LF line endings
+  // to CRLF — confirmed live (a real release build failure), not a
+  // theoretical concern. The exact same content as the first test above,
+  // but with every line ending as "\r\n" instead of "\n".
+  const changelog = [
+    "# Changelog",
+    "",
+    "## v1.2.3 — 2026-01-01",
+    "",
+    "- First bullet, on one line.",
+    "- Second bullet wraps across",
+    "  two source lines that should",
+    "  join into one string.",
+    "",
+    "## v1.2.2 — 2025-12-31",
+    "",
+    "- An older entry that must never be reached.",
+    "",
+  ].join("\r\n");
+  const result = extractLatestEntry(changelog);
+  check("CRLF line endings: the heading still matches and extracts the right version", result.version === "1.2.3");
+  check("CRLF line endings: the right date is extracted, with no trailing \\r left in it", result.date === "2026-01-01");
+  check("CRLF line endings: a single-line bullet is captured with no trailing \\r", result.bullets[0] === "First bullet, on one line.");
+  check("CRLF line endings: a multi-line bullet's wrapped continuation still joins correctly, with no embedded \\r characters", result.bullets[1] === "Second bullet wraps across two source lines that should join into one string.");
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

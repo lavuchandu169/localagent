@@ -1,0 +1,8 @@
+# Force LF line endings for text files regardless of the checking-out
+# platform's git config (e.g. Windows runners/machines that default to
+# autocrlf=true) — confirmed live to matter: a CRLF-converted CHANGELOG.md
+# broke a Windows release build whose line-based parsing assumed LF.
+# Binary assets are marked explicitly so git never tries to diff/convert them.
+* text=auto eol=lf
+
+*.png binary
