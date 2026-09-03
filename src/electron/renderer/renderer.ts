@@ -1,5 +1,6 @@
 import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, PermissionMode, ProposedPlan, ToolCall } from "../../types.js";
 import type { Change } from "diff";
+import { groupDiffIntoSegments } from "../../diffUtil.js";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
 import type { PickedAttachment } from "../attachments.js";
@@ -68,7 +69,7 @@ interface AgentBridge {
   startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string }>;
   runTask(sessionId: string, task: string, attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }): Promise<void>;
   pickAttachments(limit?: number): Promise<{ attachments: PickedAttachment[]; errors: { name: string; error: string }[]; skipped: number }>;
-  respondPermission(sessionId: string, callId: string, approved: boolean): Promise<void>;
+  respondPermission(sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]): Promise<void>;
   respondPlan(sessionId: string, approved: boolean): Promise<void>;
   cancelSession(sessionId: string): Promise<void>;
   getCheckpoint(sessionId: string): Promise<string | null>;
@@ -824,27 +825,69 @@ function toolCard(call: ToolCall): HTMLElement {
 
 const DIFF_LINE_CAP = 300;
 
-/** Renders a Change[] (from the `diff` package, computed in agent.ts before the tool ever runs) as colored +/- lines, capped so a whole-file rewrite of a large file can't flood the event log. */
-function renderDiff(diff: Change[]): HTMLElement {
+/** Splits a segment's value into its individual lines the same way the old flat renderer did — split("\n") on a trailing-newline string leaves one empty trailing entry, popped off. */
+function linesOf(value: string): string[] {
+  const lines = value.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/**
+ * Renders a diff as context lines interleaved with per-hunk blocks, each
+ * hunk carrying its own checkbox (checked by default, matching today's
+ * implicit "approve everything") so an Approve click can read back exactly
+ * which hunks are still checked. `readOnly` is used for a diff shown
+ * alongside a decision that isn't ASK (already-decided ALLOW/DENY, or the
+ * read-only copy under a sent task) — no checkboxes there, since there's
+ * no prompt to attach a selection to.
+ */
+function renderDiff(diff: Change[], readOnly = false): HTMLElement {
   const container = document.createElement("div");
   container.className = "diff-view";
+  const segments = groupDiffIntoSegments(diff);
   let linesShown = 0;
-  outer: for (const chunk of diff) {
-    const lines = chunk.value.split("\n");
-    if (lines[lines.length - 1] === "") lines.pop(); // split("\n") on a trailing-newline string leaves one empty entry
-    for (const line of lines) {
-      if (linesShown >= DIFF_LINE_CAP) {
-        const truncated = document.createElement("div");
-        truncated.className = "diff-line diff-truncated";
-        truncated.textContent = "… diff truncated …";
-        container.appendChild(truncated);
-        break outer;
+
+  outer: for (const segment of segments) {
+    let hunkWrapper: HTMLElement | null = null;
+    if (segment.kind === "hunk" && !readOnly) {
+      hunkWrapper = document.createElement("div");
+      hunkWrapper.className = "diff-hunk";
+      const toggle = document.createElement("label");
+      toggle.className = "diff-hunk-toggle";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = true;
+      checkbox.dataset.hunkId = String(segment.id);
+      toggle.appendChild(checkbox);
+      toggle.appendChild(document.createTextNode("Apply this change"));
+      hunkWrapper.appendChild(toggle);
+      container.appendChild(hunkWrapper);
+    }
+    const target = hunkWrapper ?? container;
+
+    const parts: { value: string; added?: boolean; removed?: boolean }[] =
+      segment.kind === "context"
+        ? [{ value: segment.value }]
+        : [
+            ...(segment.removedValue !== undefined ? [{ value: segment.removedValue, removed: true }] : []),
+            ...(segment.addedValue !== undefined ? [{ value: segment.addedValue, added: true }] : []),
+          ];
+
+    for (const part of parts) {
+      for (const line of linesOf(part.value)) {
+        if (linesShown >= DIFF_LINE_CAP) {
+          const truncated = document.createElement("div");
+          truncated.className = "diff-line diff-truncated";
+          truncated.textContent = "… diff truncated …";
+          container.appendChild(truncated);
+          break outer;
+        }
+        const lineEl = document.createElement("div");
+        lineEl.className = `diff-line ${part.added ? "diff-added" : part.removed ? "diff-removed" : "diff-context"}`;
+        lineEl.textContent = `${part.added ? "+" : part.removed ? "-" : " "} ${line}`;
+        target.appendChild(lineEl);
+        linesShown++;
       }
-      const lineEl = document.createElement("div");
-      lineEl.className = `diff-line ${chunk.added ? "diff-added" : chunk.removed ? "diff-removed" : "diff-context"}`;
-      lineEl.textContent = `${chunk.added ? "+" : chunk.removed ? "-" : " "} ${line}`;
-      container.appendChild(lineEl);
-      linesShown++;
     }
   }
   return container;
@@ -916,7 +959,7 @@ function renderEvent(event: AgentEvent): void {
         break;
       }
       const card = toolCards.get(event.call.id) ?? toolCard(event.call);
-      if (hasDiff) card.appendChild(renderDiff(event.diff!));
+      if (hasDiff) card.appendChild(renderDiff(event.diff!, event.decision !== "ASK"));
       if (event.decision !== "ASK") {
         // Not asking (ALLOW/DENY), but still had a diff worth showing — no
         // approve/deny buttons needed, just the diff plus the same status
@@ -939,7 +982,14 @@ function renderEvent(event: AgentEvent): void {
         approve.disabled = true;
         deny.disabled = true;
         prompt.classList.add("permission-resolved");
-        if (sessionId) void window.agent.respondPermission(sessionId, event.call.id, approved);
+        // Only meaningful for an edit_file approval — every hunk checkbox
+        // that's still checked at click time. Undefined for a deny (never
+        // read) and harmless-but-unused for a call with no diff at all
+        // (the querySelectorAll below just finds nothing).
+        const approvedHunkIds = approved
+          ? Array.from(card.querySelectorAll<HTMLInputElement>(".diff-hunk-toggle input:checked")).map((el) => Number(el.dataset.hunkId))
+          : undefined;
+        if (sessionId) void window.agent.respondPermission(sessionId, event.call.id, approved, approvedHunkIds);
       };
       approve.addEventListener("click", () => respond(true));
       deny.addEventListener("click", () => respond(false));

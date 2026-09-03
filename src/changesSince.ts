@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { computeFileDiff } from "./diffUtil.js";
+import { computeFileDiff } from "./diffCompute.js";
 import type { Change } from "diff";
 
 const execFileAsync = promisify(execFile);

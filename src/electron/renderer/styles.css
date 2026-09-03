@@ -1357,6 +1357,29 @@ label .hint-text {
   padding: 4px 8px;
 }
 
+.diff-hunk {
+  border-top: 1px solid var(--border);
+}
+
+.diff-hunk:first-child {
+  border-top: none;
+}
+
+.diff-hunk-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.diff-hunk-toggle input {
+  cursor: pointer;
+}
+
 /* The plan-first card: a task's proposed first move, held for approval
    before any of it runs. Same left-border-accent language as a session's
    status bar/warn elements — "this needs your attention" — rather than

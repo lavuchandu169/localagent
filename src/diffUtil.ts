@@ -1,17 +1,9 @@
-import { diffLines, type Change } from "diff";
-
-/**
- * Computes a line-level diff for the edit_file permission-request UI —
- * reused directly as the `diff` npm package's own Change[] shape
- * ({value, added, removed, count}) rather than inventing a new one, since
- * it's already JSON-serializable and exactly what a diff-rendering UI needs.
- *
- * `oldContent` is `null` for a file that doesn't exist yet — diffed against
- * an empty string, so the whole thing renders as added.
- */
-export function computeFileDiff(oldContent: string | null, newContent: string): Change[] {
-  return diffLines(oldContent ?? "", newContent);
-}
+// Type-only — erased at compile time, so importing anything from this file
+// never triggers a runtime resolution of the "diff" npm package. See
+// diffCompute.ts's computeFileDiff for why that distinction matters: this
+// file is imported directly by the renderer's unbundled module script,
+// which has no Node module resolution and cannot load a real "diff" import.
+import type { Change } from "diff";
 
 export type DiffSegment =
   | { kind: "context"; value: string }

@@ -15,7 +15,8 @@ import type {
 import { ToolRegistry } from "./toolRegistry.js";
 import { PermissionEngine } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
-import { computeFileDiff, groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
+import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
+import { computeFileDiff } from "./diffCompute.js";
 import { createCheckpoint } from "./checkpoints.js";
 
 export interface AgentSessionOptions {

@@ -1,4 +1,5 @@
-import { computeFileDiff, groupDiffIntoSegments, applyHunkSelection } from "../diffUtil.js";
+import { groupDiffIntoSegments, applyHunkSelection } from "../diffUtil.js";
+import { computeFileDiff } from "../diffCompute.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {

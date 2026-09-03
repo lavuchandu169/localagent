@@ -11,7 +11,8 @@ import { defaultToolRegistry, ToolRegistry } from "../toolRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { toLlamaHistory, toLlamaFunctions, fromLlamaResult } from "../providers/embeddedLlama.js";
 import type { AgentEvent, ChatResponse, PermissionResponse, Tool, ToolCall } from "../types.js";
-import { computeFileDiff, groupDiffIntoSegments } from "../diffUtil.js";
+import { groupDiffIntoSegments } from "../diffUtil.js";
+import { computeFileDiff } from "../diffCompute.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
