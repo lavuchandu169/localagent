@@ -746,7 +746,6 @@ In `src/test/sessionRegistry.test.ts`, find the first test block (the one checki
       { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
       { providerFactory: () => provider, extraTools: [extraTool] }
     );
-    const { runTask } = await import("../electron/sessionRegistry.js");
     const sessionId = [...registry.sessions.keys()][0];
     await runTask(registry, sessionId, "anything", () => {});
     const toolNames = provider.receivedRequests[0]?.tools?.map((t) => t.name) ?? [];
