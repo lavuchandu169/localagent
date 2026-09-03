@@ -3,6 +3,17 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.23 — 2026-09-03
+
+- Automatic updates: a new version now downloads itself in the background
+  with no click required, then offers a one-click "Restart Now" to apply
+  it — or it applies itself the next time the app quits normally. Every
+  failure (offline, a blocked install, anything else) falls back to the
+  same manual "here's the release page" banner as before, so this never
+  behaves worse than today even before this app is code-signed. Mac
+  releases now also publish a `.zip` alongside the `.dmg`, which the
+  updater needs to actually apply an update.
+
 ## v0.1.0-beta.22 — 2026-09-03
 
 - File attachments: attach text and image files from anywhere on disk to
