@@ -6,6 +6,12 @@ const DEFAULT_MODEL_ID = "claude-sonnet-5";
 
 /** The four image formats attachments.ts (Task 1) ever classifies as an image — the only ones Anthropic's base64 image source accepts. */
 type AnthropicImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+const ANTHROPIC_IMAGE_MEDIA_TYPES: ReadonlySet<string> = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+/** Runtime-checks a value attachments.ts's own type only promises at compile time — `img.mediaType` can also arrive from a synced-down or hand-edited session record, which the type system can't guarantee is one of the four Anthropic actually accepts. */
+function isAnthropicImageMediaType(mediaType: string): mediaType is AnthropicImageMediaType {
+  return ANTHROPIC_IMAGE_MEDIA_TYPES.has(mediaType);
+}
 
 /**
  * Builds a user message's `content` — a plain string when there are no
@@ -22,9 +28,13 @@ function buildUserContent(m: ChatMessage): string | Anthropic.ContentBlockParam[
 
   const blocks: Anthropic.ContentBlockParam[] = [];
   for (const img of m.images ?? []) {
+    // A corrupted/foreign session record could carry a mediaType Anthropic
+    // doesn't accept — skip that one image rather than send a request
+    // Anthropic will reject outright, or silently lie via a compile-time-only cast.
+    if (!isAnthropicImageMediaType(img.mediaType)) continue;
     blocks.push({
       type: "image",
-      source: { type: "base64", media_type: img.mediaType as AnthropicImageMediaType, data: img.dataBase64 },
+      source: { type: "base64", media_type: img.mediaType, data: img.dataBase64 },
     });
   }
 

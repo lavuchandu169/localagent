@@ -153,6 +153,27 @@ console.log("\nAttachments in toAnthropicMessages:");
 }
 
 {
+  // A mediaType that isn't one of the four Anthropic accepts (e.g. from a
+  // corrupted or hand-edited session record) must be skipped, not sent
+  // through to the API as an invalid media_type.
+  const messages: ChatMessage[] = [
+    {
+      role: "user",
+      content: "look at these",
+      images: [
+        { name: "bad.bmp", mediaType: "image/bmp", dataBase64: "AAAA" },
+        { name: "good.png", mediaType: "image/png", dataBase64: "BBBB" },
+      ],
+    },
+  ];
+  const { messages: out } = toAnthropicMessages(messages);
+  const blocks = out[0]?.content as any[];
+  check("an unsupported mediaType image is skipped, not sent", blocks.length === 2);
+  check("the valid image is still included", blocks[0].source.media_type === "image/png");
+  check("the trailing text block is still present", blocks[1].type === "text");
+}
+
+{
   const messages: ChatMessage[] = [
     {
       role: "user",
