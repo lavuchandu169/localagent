@@ -27,6 +27,7 @@ import { loadEnvFile } from "./loadEnvFile.js";
 import { isSecureStorageAvailable, electronStorageCrypto } from "./secureStorage.js";
 import { appendErrorLog } from "./errorLog.js";
 import { readAttachment, type PickedAttachment } from "./attachments.js";
+import { wireAutoUpdater, type UpdateManager } from "./updateManager.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -145,32 +146,28 @@ app.whenReady().then(() => {
     return parentWindow ? dialog.showOpenDialog(parentWindow, options) : dialog.showOpenDialog(options);
   }
 
-  // Checks GitHub Releases once per launch for a newer version and lets the
-  // renderer show an in-app banner pointing at it. Deliberately notify-only,
-  // not a full silent download-and-install: electron-updater's actual
-  // update-apply step (Squirrel.Mac) generally requires a signed app on
-  // macOS, and this app isn't signed yet — attempting a real auto-install
-  // now would likely fail silently on Mac specifically, which is worse
-  // than no auto-updater at all. autoDownload stays false for that reason;
-  // revisit once code signing lands. Only runs in a packaged app — electron
-  // -builder only generates the app-update.yml this needs for a real
-  // build, so a from-source `npm run electron` has nothing to check
-  // against and would just log a harmless error every launch otherwise.
+  // Auto-downloads a newer release in the background and offers a one-click
+  // restart to apply it, on top of today's still-unsigned builds — see
+  // docs/superpowers/specs/2026-09-03-auto-update-design.md for why that's
+  // a real constraint and not just a note: every failure path here degrades
+  // to the exact "here's a manual GitHub link" banner this replaces, so an
+  // unsigned Mac build in the worst case behaves exactly like it does
+  // today, never worse. Only runs in a packaged app — electron-builder only
+  // generates the app-update.yml this needs for a real build, so a
+  // from-source `npm run electron` has nothing to check against and would
+  // just log a harmless error every launch otherwise.
+  let updateManager: UpdateManager | null = null;
   if (app.isPackaged) {
-    autoUpdater.allowPrerelease = true; // every release here is tagged "prerelease" on GitHub — without this, updater finds nothing
-    autoUpdater.autoDownload = false;
-    autoUpdater.on("update-available", (info) => {
-      broadcastToAllWindows("agent:update-available", { version: info.version });
-    });
-    autoUpdater.on("error", (err) => {
-      // Best-effort, same failure posture as cloud sync's own handling — a
-      // failed update check is logged, never surfaced as an error to the user.
-      console.warn("[autoUpdater] update check failed:", err);
-    });
-    autoUpdater.checkForUpdates().catch((err) => {
-      console.warn("[autoUpdater] checkForUpdates() threw:", err);
+    updateManager = wireAutoUpdater({
+      autoUpdater,
+      broadcast: (status) => broadcastToAllWindows("agent:update-status", status),
+      onBeforeQuit: (handler) => app.on("before-quit", handler),
     });
   }
+
+  ipcMain.handle("agent:install-update", () => {
+    updateManager?.installUpdate();
+  });
 
   let scopeWarningSent = false;
   function notifyScopeWarning(): void {
