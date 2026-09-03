@@ -51,6 +51,10 @@ export async function connectMcpServer(
     onStatusChange(status);
     return { config, status, client, tools: listed.tools };
   } catch (err) {
+    // connect() may have already spawned the child process and completed
+    // the handshake before a later step (e.g. listTools()) failed — close
+    // here so that partially-established connection doesn't leak.
+    await client.close().catch(() => {});
     const status: McpServerStatus = { state: "failed", error: err instanceof Error ? err.message : String(err) };
     onStatusChange(status);
     return { config, status, client: undefined, tools: [] };
@@ -59,5 +63,11 @@ export async function connectMcpServer(
 
 export async function disconnectMcpServer(connection: McpConnection): Promise<void> {
   if (!connection.client) return;
+  // An intentional close still fires the SDK's onclose callback (it can't
+  // distinguish "asked to shut down" from "crashed"), so clear our
+  // crash-reporting handlers first — otherwise a deliberate disconnect
+  // would spuriously broadcast a "failed" status.
+  connection.client.onclose = undefined;
+  connection.client.onerror = undefined;
   await connection.client.close().catch(() => {});
 }

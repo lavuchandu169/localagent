@@ -68,6 +68,61 @@ await (async () => {
     await connection.client!.close();
     check("closing the connection mid-session fires onStatusChange again with failed", statuses.length > statusesBeforeClose && statuses[statuses.length - 1]!.state === "failed");
   }
+
+  {
+    // The SDK's onclose fires on ANY close, intentional or not — it can't
+    // tell "we asked it to shut down" apart from "it crashed". So an
+    // intentional disconnectMcpServer() must not broadcast a spurious
+    // "failed" status the way the mid-session-crash block above does.
+    const statuses: McpServerStatus[] = [];
+    const clientTransport = await startTestServer();
+    const connection = await connectMcpServer(makeConfig(), (s) => statuses.push(s), { createTransport: () => clientTransport });
+    const statusesBeforeDisconnect = statuses.length;
+    await disconnectMcpServer(connection);
+    check(
+      "disconnectMcpServer does not fire onStatusChange again (no spurious failed status on an intentional disconnect)",
+      statuses.length === statusesBeforeDisconnect
+    );
+  }
+
+  {
+    // A handshake can succeed (spawn + initialize both OK, child process
+    // now running) while a later step — here, listTools() — still fails.
+    // Simulated by wrapping the real linked transport so it throws only on
+    // the outgoing "tools/list" request, after the real handshake already
+    // completed through it normally.
+    const statuses: McpServerStatus[] = [];
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = new McpServer({ name: "test-server", version: "1.0.0" });
+    server.registerTool("ping", { description: "Replies with pong" }, async () => ({ content: [{ type: "text" as const, text: "pong" }] }));
+    await server.connect(serverTransport);
+
+    let transportClosed = false;
+    const wrapper: Transport = {
+      async start() {
+        clientTransport.onmessage = (message, extra) => wrapper.onmessage?.(message, extra);
+        clientTransport.onclose = () => wrapper.onclose?.();
+        clientTransport.onerror = (err) => wrapper.onerror?.(err);
+        await clientTransport.start();
+      },
+      async send(message, options) {
+        const isToolsListRequest = typeof message === "object" && message !== null && "method" in message && (message as { method?: unknown }).method === "tools/list";
+        if (isToolsListRequest) {
+          throw new Error("tools/list failed: simulated post-handshake failure");
+        }
+        await clientTransport.send(message, options);
+      },
+      async close() {
+        transportClosed = true;
+        await clientTransport.close();
+      },
+    };
+
+    const connection = await connectMcpServer(makeConfig({ name: "listtools-fails-post-handshake" }), (s) => statuses.push(s), { createTransport: () => wrapper });
+    check("a listTools() failure after a successful handshake still resolves failed, never throws", connection.status.state === "failed");
+    check("client is undefined when listTools fails post-handshake", connection.client === undefined);
+    check("the transport was closed so the connected client/child process doesn't leak", transportClosed);
+  }
 })();
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
