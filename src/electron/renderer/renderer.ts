@@ -706,6 +706,11 @@ function dismissWhatsNew(): void {
   } catch {
     // Best-effort — if this fails, the modal just shows again next launch; not worth surfacing an error for.
   }
+  // Unlike onboarding (which always lands on a fresh setup form and so
+  // always has a sensible next field to focus), this modal can appear
+  // either before or after a session has started — the composer isn't
+  // always the right next stop. Only claim focus when it's actually usable.
+  if (!taskInput.disabled) taskInput.focus();
 }
 
 whatsNewDismiss.addEventListener("click", dismissWhatsNew);
