@@ -6,3 +6,4 @@ release/
 .claude/
 .superpowers/
 src/electron/embeddedCredentials.ts
+src/whatsNew.ts
