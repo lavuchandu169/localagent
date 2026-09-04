@@ -592,6 +592,8 @@ function requireActiveTab(): TabState {
 
 `pendingAttachments` and `sessionUsage`'s declarations (Steps 5-6 below) move onto the tab too — remove their two standalone `let` declarations at their current locations (`let pendingAttachments: PickedAttachment[] = [];` and `let sessionUsage = { ... };`) as part of this task; every reference to them becomes a reference to `requireActiveTab().pendingAttachments` / a locally-recomputed value (see Step 6).
 
+**Also in this step — required, not optional:** Task 2 already deleted `#tab-bar`/`#tab-item`/`#tab-dot`/`#tab-label` from `index.html`. `byId()` throws immediately if its id isn't found, so the two existing lookups `const tabBar = byId<HTMLDivElement>("tab-bar");` and `const tabLabel = byId<HTMLSpanElement>("tab-label");` would crash the renderer on load the moment this file is loaded, before this task's own live-verification (Step 7) could run. Delete both lookup lines now, plus every line that uses them: `tabBar.hidden = false;` and `tabLabel.textContent = resume?.title ?? "New session";` in `beginSession`, and `tabBar.hidden = true;`/`tabLabel.textContent = "";` in `resetToSetup`. (Task 4 builds the real tab strip that replaces what these lines used to do — this step only removes the now-dangling references so the app can run at all in the meantime.)
+
 - [ ] **Step 2: Replace every bare `sessionId` read/write**
 
 Every one of these is a mechanical, minimal-diff replacement — the surrounding logic is unchanged.
@@ -1000,15 +1002,13 @@ Extend the Task 3 import line:
 import { createTabRegistry, openNewTab, closeTab, focusTab, findTabForSession, tabDotState, activeTab, MAX_OPEN_TABS, type TabRegistry, type TabState } from "./tabState.js";
 ```
 
-Add the new `byId` lookups next to the existing `tabBar`/`tabLabel` declarations (which Task 2 already removed from `index.html` — remove these two stale lookups):
+Add the new `byId` lookups (Task 3 already removed the old, now-dangling `tabBar`/`tabLabel` lookups and their usages, since Task 2's markup change made them crash the app on load — nothing further to remove here):
 
 ```typescript
 const tabStripList = byId<HTMLDivElement>("tab-strip-list");
 const tabStripNew = byId<HTMLButtonElement>("tab-strip-new");
 const tabStripCapMessage = byId<HTMLDivElement>("tab-strip-cap-message");
 ```
-
-(Delete the now-unused `const tabBar = byId<HTMLDivElement>("tab-bar");` and `const tabLabel = byId<HTMLSpanElement>("tab-label");` lines, and remove the `tabBar.hidden = false;`/`tabLabel.textContent = ...` lines in `beginSession` and the `tabBar.hidden = true;`/`tabLabel.textContent = "";` lines in `resetToSetup` — the tab strip Step 3 below renders unconditionally now.)
 
 - [ ] **Step 2: `syncFormFromTab` and `clearAndReplayEventLog` — the "replay render"**
 
@@ -1374,7 +1374,7 @@ window.agent.onEvent((incomingSessionId, event) => {
 
 - [ ] **Step 2: Title updates for a backgrounded tab too**
 
-`beginSession` currently sets the tab's title once, at start (`tabLabel.textContent = ...`, already removed in Task 4). A session's real title is only known once its first task completes and it's actually saved — today that arrives via the `agent:sessions-changed` broadcast, handled by `window.agent.onSessionsChanged(() => { void refreshSessionList(...); })`, which only touches the sidebar, not tab titles. Extend it to also refresh tab titles: replace
+`beginSession` used to set the tab's title once, at start (`tabLabel.textContent = ...`, removed in Task 3 since Task 2's markup change made it dangling). A session's real title is only known once its first task completes and it's actually saved — today that arrives via the `agent:sessions-changed` broadcast, handled by `window.agent.onSessionsChanged(() => { void refreshSessionList(...); })`, which only touches the sidebar, not tab titles. Extend it to also refresh tab titles: replace
 
 ```typescript
 window.agent.onSessionsChanged(() => {
