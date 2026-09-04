@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.27 — 2026-09-04
+
+- MCP client support: connect the agent to local MCP servers (e.g. a
+  GitHub or Postgres MCP server) from a new "MCP Servers" panel. Every
+  tool an MCP server offers shows up alongside the built-in tools, and
+  every call to one always asks for your approval first, in every mode
+  — the same as running a shell command.
+
 ## v0.1.0-beta.26 — 2026-09-03
 
 - When an update downloads but can't finish installing automatically
