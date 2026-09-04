@@ -584,6 +584,7 @@ function showMcpServersListView() {
   mcpServerFormError.textContent = "";
 }
 
+/** Builds one server row via createElement/.textContent, never innerHTML — server.name/command/args and a failed connection's status.error are all untrusted (user-typed, or emitted by a third-party MCP server process), so they must never be parsed as HTML. Same pattern as refreshDownloadedModelsList's list items elsewhere in this file. */
 function renderMcpServerRow(server: McpServerView): HTMLDivElement {
   const row = document.createElement("div");
   row.className = "mcp-server-row";
@@ -594,18 +595,34 @@ function renderMcpServerRow(server: McpServerView): HTMLDivElement {
       : server.status.state === "connecting"
         ? "Connecting…"
         : server.status.error;
-  row.innerHTML = `
-    <span class="mcp-server-status-dot">${dot}</span>
-    <span class="mcp-server-name">${server.name}</span>
-    <span class="mcp-server-detail">${server.command} ${server.args.join(" ")}</span>
-    <span class="mcp-server-detail">${detail}</span>
-  `;
+
+  const dotSpan = document.createElement("span");
+  dotSpan.className = "mcp-server-status-dot";
+  dotSpan.textContent = dot;
+
+  const nameSpan = document.createElement("span");
+  nameSpan.className = "mcp-server-name";
+  nameSpan.textContent = server.name;
+
+  const commandSpan = document.createElement("span");
+  commandSpan.className = "mcp-server-detail";
+  commandSpan.textContent = [server.command, ...server.args].join(" ");
+
+  const detailSpan = document.createElement("span");
+  detailSpan.className = "mcp-server-detail";
+  detailSpan.textContent = detail;
+
   const removeBtn = document.createElement("button");
   removeBtn.type = "button";
   removeBtn.textContent = "Remove";
   removeBtn.addEventListener("click", () => {
     void window.agent.removeMcpServer(server.id).then(refreshMcpServersList);
   });
+
+  row.appendChild(dotSpan);
+  row.appendChild(nameSpan);
+  row.appendChild(commandSpan);
+  row.appendChild(detailSpan);
   row.appendChild(removeBtn);
   return row;
 }
