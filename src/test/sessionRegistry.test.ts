@@ -693,6 +693,7 @@ await (async () => {
     const snapshot = getLiveSessionSnapshot(registry, sessionId);
     check("getLiveSessionSnapshot still finds it — reads the live entry, not disk", snapshot !== null);
     check("its messages start with just the seeded system prompt, matching a freshly-started session", snapshot?.messages.length === 1 && snapshot.messages[0]?.role === "system");
+    check("its workspaceRoot matches what the session was actually started with", snapshot?.workspaceRoot === workspaceRoot);
   }
 
   {
@@ -729,6 +730,10 @@ await (async () => {
     check("updateLiveSessionSettings returns true for a live session", updated);
     const notFound = updateLiveSessionSettings(registry, "nope-not-real", { mode: "PLAN" });
     check("updateLiveSessionSettings returns false for an unknown session id", !notFound);
+    check(
+      "getLiveSessionSnapshot's workspaceRoot reflects the mid-session edit, not the original — a tab reattaching to this live session (see resumeSession in renderer.ts) has no other source for it",
+      getLiveSessionSnapshot(registry, sessionId)?.workspaceRoot === "/some/other/path"
+    );
   }
 
   {

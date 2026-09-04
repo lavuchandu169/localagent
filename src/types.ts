@@ -120,4 +120,6 @@ export type AgentEvent =
   /** One real API call's token cost, whenever the provider's response reports it — see ChatResponse.usage. Carries `model` since a single session's cost depends on which Claude model actually served each turn. */
   | { type: "usage"; model: string; inputTokens: number; outputTokens: number }
   | { type: "done"; success: boolean; summary: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** Renderer-only, never emitted by the agent itself: pushed into a tab's own event history the moment a task is sent, purely so replaying that history (switching away from a tab mid-task and back) reproduces the user's own sent message, not just the agent's side of it. Never persisted to disk — sessionRegistry's own event stream has no equivalent and doesn't need one. */
+  | { type: "task.sent"; task: string };

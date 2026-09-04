@@ -4,7 +4,22 @@ import { groupDiffIntoSegments } from "../../diffUtil.js";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
 import type { PickedAttachment } from "../attachments.js";
-import { createTabRegistry, openNewTab, closeTab, focusTab, findTabForSession, tabDotState, activeTab, routeEvent, MAX_OPEN_TABS, type TabRegistry, type TabState } from "./tabState.js";
+import {
+  createTabRegistry,
+  openNewTab,
+  closeTab,
+  focusTab,
+  findTabForSession,
+  tabDotState,
+  activeTab,
+  routeEvent,
+  resetTabToUnconfigured,
+  defaultTabConfig,
+  lastEventStillRunning,
+  MAX_OPEN_TABS,
+  type TabRegistry,
+  type TabState,
+} from "./tabState.js";
 import type { UpdateStatus } from "../updateManager.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
@@ -64,6 +79,7 @@ interface LiveSessionSnapshot {
   title: string;
   createdAt: number;
   ownerEmail: string | null;
+  workspaceRoot: string;
 }
 
 type McpServerStatus = { state: "connecting" } | { state: "connected"; toolCount: number } | { state: "failed"; error: string };
@@ -497,7 +513,10 @@ for (const mode of Object.keys(MODE_LABELS) as PermissionMode[]) {
 function updateModeDescription() {
   modeDescription.textContent = MODE_LABELS[modeSelect.value as PermissionMode].description;
 }
-modeSelect.addEventListener("change", updateModeDescription);
+modeSelect.addEventListener("change", () => {
+  updateModeDescription();
+  captureFormIntoTab();
+});
 updateModeDescription();
 
 /** Shows/hides the two fields that only apply to one specific model-select value each — everything else needs neither. */
@@ -505,8 +524,21 @@ function updateModelDependentFields() {
   externalFields.hidden = modelSelect.value !== CUSTOM_SERVER_VALUE;
   anthropicFields.hidden = !(modelSelect.value in ANTHROPIC_MODELS);
 }
-modelSelect.addEventListener("change", updateModelDependentFields);
+modelSelect.addEventListener("change", () => {
+  updateModelDependentFields();
+  captureFormIntoTab();
+});
 updateModelDependentFields();
+
+// The other three controls syncFormFromTab restores. Without these, the
+// active tab's stored provider/mode/planFirst silently drift away from what
+// the form actually shows the moment the user touches any of them — which is
+// what made switching tabs reset a configured tab back to the embedded
+// defaults, and made "Apply changes" on a running session compare a reset
+// form against the real running provider and destructively restart it.
+planFirstCheckbox.addEventListener("change", () => captureFormIntoTab());
+baseUrlInput.addEventListener("input", () => captureFormIntoTab());
+externalModelInput.addEventListener("input", () => captureFormIntoTab());
 
 /**
  * Rebuilds every EMBEDDED model option's label from scratch (base name +
@@ -1262,6 +1294,15 @@ function renderEvent(event: AgentEvent): void {
     case "text":
       logLine(event.text, "log-text");
       break;
+    case "task.sent":
+      // Renderer-only synthetic event — see its own doc comment in
+      // types.ts. In practice only ever reached via replay
+      // (clearAndReplayEventLog): the live path already writes this exact
+      // line itself at send time (runTaskBtn's handler), so this case
+      // exists purely so switching away from a tab mid-task and back
+      // reproduces the same line.
+      logLine(event.task, "log-task");
+      break;
     case "error":
       logLine(`✗ ${event.message}`, "log-error");
       break;
@@ -1293,6 +1334,8 @@ function formatBytes(bytes: number): string {
 let progressLastTime = 0;
 let progressLastBytes = 0;
 let downloadInProgress = false;
+/** Which tab's beginSession call claimed the in-flight model download (null when nothing is downloading). Only that call may clear `downloadInProgress`/the progress row when it finishes — see beginSession's finally. */
+let downloadOwnerTabId: string | null = null;
 
 window.agent.onDownloadProgress((status) => {
   downloadInProgress = true;
@@ -1327,102 +1370,193 @@ function deriveProviderConfigFromForm(): ProviderConfig {
   return { kind: "embedded", size: modelSelect.value };
 }
 
-async function beginSession(resume?: ResumePayload): Promise<void> {
+/**
+ * The exact inverse of syncFormFromTab: copies the setup form's current
+ * selection into the ACTIVE tab, so `provider`/`mode`/`planFirst` never drift
+ * away from what the form actually shows. Wired to every control those three
+ * fields are restored from (model select, the two custom-server subfields,
+ * mode select, plan-first checkbox) — miss one and switching away from that
+ * tab and back silently reverts the user's choice, since syncFormFromTab
+ * repaints the form from these fields alone.
+ */
+function captureFormIntoTab(): void {
   const tab = requireActiveTab();
-  startError.textContent = "";
+  tab.provider = deriveProviderConfigFromForm();
+  tab.mode = modeSelect.value as PermissionMode;
+  tab.planFirst = planFirstCheckbox.checked;
+}
 
-  const provider = deriveProviderConfigFromForm();
+/**
+ * The provider config each session id was actually started with, remembered
+ * for as long as this renderer lives. A LiveSessionSnapshot carries the
+ * conversation (messages/events/title) but NOT the provider it's running on,
+ * so reopening a still-live session whose tab was closed (see resumeSession)
+ * has no other way to show the right model badge — or to give applySessionEdits
+ * a truthful `activeProvider` to compare an edited form against. Every live
+ * session was necessarily started by beginSession in this same renderer, so
+ * this always has an entry for one; the only miss is a renderer reload with
+ * the main process still holding the session, which falls back to leaving the
+ * tab's provider fields at their defaults and activeProvider null (the safe
+ * direction: applySessionEdits refuses to touch a session with no known
+ * provider rather than guessing and restarting it under the wrong one).
+ */
+const startedSessionConfigs = new Map<string, { provider: ProviderConfig; mode: PermissionMode; planFirst: boolean }>();
+
+/** True only while `tab` is the one the shared DOM is currently painting. Every DOM write in beginSession that happens AFTER an await has to ask this first: the user is free to switch tabs while an embedded model spends 30s loading, and painting "Session started"/an unlocked composer/a collapsed setup form into whatever tab they switched to is exactly the leak this guards. The tab's OWN fields (sessionId, activeProvider, …) are still updated unconditionally, so switching back to it later renders the right state through the normal syncFormFromTab/clearAndReplayEventLog path. */
+function isActiveTab(tab: TabState): boolean {
+  return tab.tabId === tabRegistry.activeTabId;
+}
+
+/** Paints the status-bar model badge for a provider — shared by beginSession's success path and clearAndReplayEventLog's tab-switch repaint so the two can't drift. */
+function renderActiveModelBadge(provider: ProviderConfig): void {
+  const modelText =
+    provider.kind === "embedded"
+      ? (provider.size in EMBEDDED_MODELS ? describeEmbeddedModel(provider.size as EmbeddedModelId) : provider.size)
+      : provider.kind === "anthropic"
+        ? (() => {
+            const modelId = provider.model ?? DEFAULT_ANTHROPIC_MODEL;
+            return `${ANTHROPIC_MODELS[modelId]?.name ?? modelId} (Anthropic API)`;
+          })()
+        : `${provider.model} (${provider.baseUrl})`;
+  const gpuText = provider.kind === "embedded" && hardwareInfo?.gpu ? ` · ${hardwareInfo.gpu} GPU` : "";
+  activeModelBadge.innerHTML = "";
+  const dot = document.createElement("span");
+  dot.className = "signal-dot";
+  activeModelBadge.appendChild(dot);
+  activeModelBadge.appendChild(document.createTextNode(`${modelText}${gpuText}`));
+  activeModelBadge.hidden = false;
+}
+
+/**
+ * Starts (or resumes) a session for ONE specific tab, passed in explicitly
+ * rather than re-derived from `requireActiveTab()` inside. That parameter is
+ * load-bearing: applySessionEdits awaits getLiveSession and cancelSession
+ * before calling this, and a tab switch during those awaits used to hand the
+ * edited session's identity to whichever tab happened to be active by then.
+ */
+async function beginSession(tab: TabState, resume?: ResumePayload): Promise<void> {
+  // The form only describes the ACTIVE tab, so it's only read when that's the
+  // tab being started; a background start (applySessionEdits after a switch)
+  // uses the config already captured onto the tab itself.
+  if (isActiveTab(tab)) {
+    captureFormIntoTab();
+    startError.textContent = "";
+  }
+
+  const provider = tab.provider;
 
   // workspaceRoot omitted entirely when none was picked — startSession defaults
   // it to the home directory and hands back whichever path it actually used.
   const config: SessionConfig = {
     ...(tab.workspaceRoot ? { workspaceRoot: tab.workspaceRoot } : {}),
     provider,
-    mode: modeSelect.value as PermissionMode,
-    planFirst: planFirstCheckbox.checked,
+    mode: tab.mode,
+    planFirst: tab.planFirst,
   };
 
-  startSessionBtn.disabled = true;
-  startSessionBtn.textContent = "Starting…";
-  if (downloadInProgress && provider.kind === "embedded") {
+  if (isActiveTab(tab)) {
+    startSessionBtn.disabled = true;
+    startSessionBtn.textContent = "Starting…";
+  }
+
+  // Whether THIS call is the one that owns whatever model download ends up in
+  // flight. Only the owner may clear the shared download flag/progress row in
+  // the finally below — a second tab starting an Anthropic session while the
+  // first is still downloading an embedded model used to clear both, hiding a
+  // live progress bar and dropping the concurrency guard mid-download.
+  let ownsDownload = false;
+  if (provider.kind === "embedded") {
     const cached = await window.agent.listCachedModels();
     if (!cached[provider.size]) {
-      startError.textContent = "Another tab is already downloading a model — wait for it to finish before starting a session that needs a download.";
-      startSessionBtn.disabled = false;
-      startSessionBtn.textContent = "Start session";
-      return;
+      if (downloadInProgress) {
+        if (isActiveTab(tab)) {
+          startError.textContent = "Another tab is already downloading a model — wait for it to finish before starting a session that needs a download.";
+          startSessionBtn.disabled = false;
+          startSessionBtn.textContent = "Start session";
+        }
+        return;
+      }
+      // Claimed here rather than waiting for the first onDownloadProgress
+      // tick, so a second tab racing into this same check can't slip past the
+      // guard in the window before the download actually starts reporting.
+      ownsDownload = true;
+      downloadInProgress = true;
+      downloadOwnerTabId = tab.tabId;
     }
   }
   try {
     const result = await window.agent.startSession(config, resume);
     tab.sessionId = result.sessionId;
+    tab.running = false;
     if (!tab.workspaceRoot) {
       tab.workspaceRoot = result.workspaceRoot;
-      setWorkspaceText(`${result.workspaceRoot} (default — no folder chosen)`);
-      aboutWorkspace.textContent = result.workspaceRoot;
+      if (isActiveTab(tab)) {
+        setWorkspaceText(`${result.workspaceRoot} (default — no folder chosen)`);
+        aboutWorkspace.textContent = result.workspaceRoot;
+      }
     }
-    taskInput.disabled = false;
-    attachFileBtn.disabled = false;
-    runTaskBtn.disabled = false;
-    logLine(
-      resume ? `Resumed session (${provider.kind}, mode=${config.mode})` : `Session started (${provider.kind}, mode=${config.mode})`,
-      "log-status"
-    );
-    // All setup controls lock here, not just Start — see setSetupControlsDisabled.
-    setSetupControlsDisabled(true);
     tab.editingSession = false;
-    editSettingsBtn.textContent = "Edit settings…";
-    editSettingsBtn.hidden = false;
-    revertCheckpointBtn.hidden = true; // a fresh/resumed/edited session has no checkpoint of its own yet — see the checkpoint.created event handler
-    viewChangesBtn.hidden = true;
     tab.activeProvider = provider;
-    // Chat-first once a session is running: the setup form collapses out of
-    // the way (Edit settings… brings it back) and a tab appears for the
-    // now-open session — see resetToSetup and editSettingsBtn's handler for
-    // the reverse.
-    setupSection.hidden = true;
-
-    const modelText =
-      provider.kind === "embedded"
-        ? (provider.size in EMBEDDED_MODELS ? describeEmbeddedModel(provider.size as EmbeddedModelId) : provider.size)
-        : provider.kind === "anthropic"
-          ? (() => {
-              const modelId = provider.model ?? DEFAULT_ANTHROPIC_MODEL;
-              return `${ANTHROPIC_MODELS[modelId]?.name ?? modelId} (Anthropic API)`;
-            })()
-          : `${provider.model} (${provider.baseUrl})`;
-    const gpuText = provider.kind === "embedded" && hardwareInfo?.gpu ? ` · ${hardwareInfo.gpu} GPU` : "";
-    activeModelBadge.innerHTML = "";
-    const dot = document.createElement("span");
-    dot.className = "signal-dot";
-    activeModelBadge.appendChild(dot);
-    activeModelBadge.appendChild(document.createTextNode(`${modelText}${gpuText}`));
-    activeModelBadge.hidden = false;
+    startedSessionConfigs.set(result.sessionId, { provider, mode: tab.mode, planFirst: tab.planFirst });
+    if (isActiveTab(tab)) {
+      taskInput.disabled = false;
+      attachFileBtn.disabled = false;
+      runTaskBtn.disabled = false;
+      logLine(
+        resume ? `Resumed session (${provider.kind}, mode=${config.mode})` : `Session started (${provider.kind}, mode=${config.mode})`,
+        "log-status"
+      );
+      // All setup controls lock here, not just Start — see setSetupControlsDisabled.
+      setSetupControlsDisabled(true);
+      editSettingsBtn.textContent = "Edit settings…";
+      editSettingsBtn.hidden = false;
+      revertCheckpointBtn.hidden = true; // a fresh/resumed/edited session has no checkpoint of its own yet — see the checkpoint.created event handler
+      viewChangesBtn.hidden = true;
+      // Chat-first once a session is running: the setup form collapses out of
+      // the way, and Edit settings… brings it back (see editSettingsBtn's
+      // handler for the reverse, and resetToSetup for the full teardown).
+      setupSection.hidden = true;
+      renderActiveModelBadge(provider);
+    }
+    // Cheap and correct for a backgrounded tab too — the strip is always
+    // redrawn wholesale from tabRegistry, so this just flips this tab's dot
+    // off "unconfigured" now that it genuinely has a session.
+    renderTabStrip();
     await refreshSessionList(sessionSearchInput.value.trim());
   } catch (err: any) {
-    // A cancelled download surfaces here as a rejected startSession() call —
-    // main.ts's agent:start-session handler already turns that specific
-    // case into the plain "Download cancelled." message before it ever
-    // reaches the renderer, so this can just show whatever it received.
-    startError.textContent = err?.message ?? String(err);
-    startSessionBtn.disabled = false;
-    startSessionBtn.textContent = "Start session";
     // A failed edit-apply already cancelled the live session before getting
     // here (see applySessionEdits) — there's nothing left to edit, so this
     // falls back to a normal "start fresh" state rather than staying in
     // edit mode pointed at a session that no longer exists.
     tab.editingSession = false;
-    editSettingsBtn.hidden = true;
+    if (isActiveTab(tab)) {
+      // A cancelled download surfaces here as a rejected startSession() call —
+      // main.ts's agent:start-session handler already turns that specific
+      // case into the plain "Download cancelled." message before it ever
+      // reaches the renderer, so this can just show whatever it received.
+      startError.textContent = err?.message ?? String(err);
+      startSessionBtn.disabled = false;
+      startSessionBtn.textContent = "Start session";
+      editSettingsBtn.hidden = true;
+    }
+    renderTabStrip();
   } finally {
-    downloadProgressRow.hidden = true;
-    progressLastTime = 0;
-    downloadInProgress = false;
+    // `downloadOwnerTabId === null` covers stray progress nobody claimed
+    // (nothing else would ever hide the row in that case); an owned download
+    // is only ever cleared by its own owner.
+    if (ownsDownload || downloadOwnerTabId === null) {
+      downloadProgressRow.hidden = true;
+      progressLastTime = 0;
+      downloadInProgress = false;
+      downloadOwnerTabId = null;
+    }
   }
 }
 
 startSessionBtn.addEventListener("click", () => {
-  if (activeTab(tabRegistry)?.editingSession) void applySessionEdits();
-  else void beginSession();
+  const tab = requireActiveTab();
+  if (tab.editingSession) void applySessionEdits();
+  else void beginSession(tab);
 });
 
 cancelDownloadBtn.addEventListener("click", () => {
@@ -1556,8 +1690,13 @@ async function applySessionEdits(): Promise<void> {
   const tab = activeTab(tabRegistry);
   if (!tab?.sessionId || !tab.activeProvider) return;
   const idBeingEdited = tab.sessionId;
-  const newProvider = deriveProviderConfigFromForm();
-  const newMode = modeSelect.value as PermissionMode;
+  // Read the form ONCE here, while this tab is still definitely the active
+  // one, and store it on the tab — everything below (including beginSession,
+  // which runs after two awaits) works from the tab, never from a form that
+  // may by then be showing some other tab's settings.
+  captureFormIntoTab();
+  const newProvider = tab.provider;
+  const newMode = tab.mode;
   startError.textContent = "";
 
   if (providerConfigsEqual(newProvider, tab.activeProvider)) {
@@ -1566,36 +1705,46 @@ async function applySessionEdits(): Promise<void> {
     const ok = await window.agent.updateSessionSettings(idBeingEdited, {
       workspaceRoot: tab.workspaceRoot ?? undefined,
       mode: newMode,
-      planFirst: planFirstCheckbox.checked,
+      planFirst: tab.planFirst,
     });
+    startedSessionConfigs.set(idBeingEdited, { provider: newProvider, mode: newMode, planFirst: tab.planFirst });
     tab.editingSession = false;
+    // Same rule as beginSession: nothing past an await paints the shared DOM
+    // unless this tab is still the one it's showing.
     if (!ok) {
-      startError.textContent = "Couldn't apply changes — the session may have already ended.";
-      startSessionBtn.disabled = false;
-      startSessionBtn.textContent = "Edit settings…";
+      if (isActiveTab(tab)) {
+        startError.textContent = "Couldn't apply changes — the session may have already ended.";
+        startSessionBtn.disabled = false;
+        startSessionBtn.textContent = "Edit settings…";
+      }
       return;
     }
-    logLine(`Settings updated (mode=${newMode})`, "log-status");
-    setSetupControlsDisabled(true);
-    startSessionBtn.disabled = true;
-    startSessionBtn.textContent = "Starting…"; // matches beginSession's own (pre-existing, unchanged) post-success label
-    editSettingsBtn.textContent = "Edit settings…";
-    setupSection.hidden = true;
+    if (isActiveTab(tab)) {
+      logLine(`Settings updated (mode=${newMode})`, "log-status");
+      setSetupControlsDisabled(true);
+      startSessionBtn.disabled = true;
+      startSessionBtn.textContent = "Starting…"; // matches beginSession's own (pre-existing, unchanged) post-success label
+      editSettingsBtn.textContent = "Edit settings…";
+      setupSection.hidden = true;
+    }
     return;
   }
 
   try {
     const snapshot = await window.agent.getLiveSession(idBeingEdited);
     if (!snapshot) {
-      startError.textContent = "Couldn't read the current session to apply changes.";
+      if (isActiveTab(tab)) startError.textContent = "Couldn't read the current session to apply changes.";
       return;
     }
     await window.agent.cancelSession(idBeingEdited);
     tab.sessionId = null;
-    taskInput.disabled = true;
-    attachFileBtn.disabled = true;
-    runTaskBtn.disabled = true;
-    await beginSession({
+    tab.running = false;
+    if (isActiveTab(tab)) {
+      taskInput.disabled = true;
+      attachFileBtn.disabled = true;
+      runTaskBtn.disabled = true;
+    }
+    await beginSession(tab, {
       sessionId: idBeingEdited,
       initialMessages: snapshot.messages,
       priorEvents: snapshot.events,
@@ -1635,14 +1784,22 @@ function syncFormFromTab(tab: TabState): void {
   setWorkspaceText(tab.workspaceRoot ? tab.workspaceRoot : "No workspace selected — optional, you can just chat");
   aboutWorkspace.textContent = tab.workspaceRoot ?? "(none selected)";
 
-  if (tab.provider.kind === "embedded") {
-    modelSelect.value = tab.provider.size;
-  } else if (tab.provider.kind === "anthropic") {
-    modelSelect.value = tab.provider.model ?? DEFAULT_ANTHROPIC_MODEL;
+  // Defense in depth for a tab that already has a running session: show what
+  // that session is ACTUALLY running on, not merely whatever the form last
+  // captured — so even if some future path forgets to call captureFormIntoTab,
+  // "Apply changes" on a running session can never compare a stale form
+  // against the real provider and destructively restart it under the wrong
+  // one. The exception is a tab mid-edit (Edit settings… open, not yet
+  // applied): there the in-progress selection IS the thing to restore.
+  const formProvider = tab.activeProvider && !tab.editingSession ? tab.activeProvider : tab.provider;
+  if (formProvider.kind === "embedded") {
+    modelSelect.value = formProvider.size;
+  } else if (formProvider.kind === "anthropic") {
+    modelSelect.value = formProvider.model ?? DEFAULT_ANTHROPIC_MODEL;
   } else {
     modelSelect.value = CUSTOM_SERVER_VALUE;
-    baseUrlInput.value = tab.provider.baseUrl;
-    externalModelInput.value = tab.provider.model;
+    baseUrlInput.value = formProvider.baseUrl;
+    externalModelInput.value = formProvider.model;
   }
   updateModelDependentFields();
 
@@ -1657,6 +1814,14 @@ function syncFormFromTab(tab: TabState): void {
 /** Clears the shared event log and re-renders a tab's entire stored `events` history through it — the same reconstruction resumeSession already does when loading a session from disk, just from memory instead. Also restores every other piece of UI state that Step 6's replay-driven renderEvent cases set as a side effect (revert/changes button visibility via checkpoint.created, the usage badge via "usage" events) by virtue of actually replaying those events. Session-lifecycle chrome that ISN'T derivable from events alone (setSetupControlsDisabled, editSettingsBtn's label/visibility, the model badge) is set here directly from the tab's own fields. */
 function clearAndReplayEventLog(tab: TabState): void {
   clearEventLog();
+  // Reset the checkpoint-derived chrome BEFORE replaying: these are only ever
+  // turned on by a checkpoint.created event, so leaving them as the previous
+  // tab left them showed a Revert/View-changes button (and, worse, another
+  // tab's open file-diff panel) over a tab that has no checkpoint at all. The
+  // replay below re-shows them if and only if THIS tab earned them.
+  revertCheckpointBtn.hidden = true;
+  viewChangesBtn.hidden = true;
+  changesPanel.hidden = true;
   for (const event of tab.events) renderEvent(event);
 
   const hasSession = tab.sessionId !== null;
@@ -1668,29 +1833,16 @@ function clearAndReplayEventLog(tab: TabState): void {
   startSessionBtn.textContent = tab.editingSession ? "Apply changes" : hasSession ? "Starting…" : "Start session";
   taskInput.disabled = !hasSession;
   attachFileBtn.disabled = !hasSession;
-  runTaskBtn.disabled = !hasSession;
+  // Having a session is NOT the same as being free to send one: a backgrounded
+  // tab whose task is still in flight has a sessionId but must not offer Run,
+  // or switching back to it fires a second concurrent runTask at an already
+  // running session. The replayed `done` event above may well have re-enabled
+  // the button (renderEvent's done case does), which is exactly why this
+  // authoritative assignment comes after the replay.
+  runTaskBtn.disabled = !hasSession || tab.running;
 
-  if (hasSession && tab.activeProvider) {
-    const provider = tab.activeProvider;
-    const modelText =
-      provider.kind === "embedded"
-        ? (provider.size in EMBEDDED_MODELS ? describeEmbeddedModel(provider.size as EmbeddedModelId) : provider.size)
-        : provider.kind === "anthropic"
-          ? (() => {
-              const modelId = provider.model ?? DEFAULT_ANTHROPIC_MODEL;
-              return `${ANTHROPIC_MODELS[modelId]?.name ?? modelId} (Anthropic API)`;
-            })()
-          : `${provider.model} (${provider.baseUrl})`;
-    const gpuText = provider.kind === "embedded" && hardwareInfo?.gpu ? ` · ${hardwareInfo.gpu} GPU` : "";
-    activeModelBadge.innerHTML = "";
-    const dot = document.createElement("span");
-    dot.className = "signal-dot";
-    activeModelBadge.appendChild(dot);
-    activeModelBadge.appendChild(document.createTextNode(`${modelText}${gpuText}`));
-    activeModelBadge.hidden = false;
-  } else {
-    activeModelBadge.hidden = true;
-  }
+  if (hasSession && tab.activeProvider) renderActiveModelBadge(tab.activeProvider);
+  else activeModelBadge.hidden = true;
 }
 
 /** Rebuilds the whole tab strip from tabRegistry — called after any open/close/focus/title/dot-state change. Built via createElement/textContent, never innerHTML: a tab's title comes from a resumed session's saved title, which — like every other user/session-derived string in this file (see renderMcpServerRow's own doc comment) — must never be parsed as HTML. */
@@ -1720,6 +1872,10 @@ function renderTabStrip(): void {
       e.stopPropagation();
       closeTab(tabRegistry, tabId);
       renderTabStrip();
+      // Closing a tab always frees a slot, so any "cap reached" message from
+      // a moment ago no longer applies — pairs with the same reset on a
+      // successful tabStripNew open.
+      tabStripCapMessage.hidden = true;
       const stillActive = activeTab(tabRegistry);
       if (stillActive) {
         syncFormFromTab(stillActive);
@@ -1735,6 +1891,11 @@ function renderTabStrip(): void {
         syncFormFromTab(fresh);
         clearAndReplayEventLog(fresh);
       }
+      // The closed/now-focused tab's session may have changed which sidebar
+      // entries count as "open in a tab" (.open-in-tab) or "active"
+      // (.active) — repaint those markers now rather than leaving them
+      // stale until some unrelated refresh happens to fire.
+      void refreshSessionList(sessionSearchInput.value.trim());
     });
     item.appendChild(close);
 
@@ -1753,6 +1914,9 @@ function switchToTab(tabId: string): void {
   if (!tab) return;
   syncFormFromTab(tab);
   clearAndReplayEventLog(tab);
+  // The sidebar's "active"/"open-in-tab" markers are keyed off which tab is
+  // focused and which sessions are open — both just changed.
+  void refreshSessionList(sessionSearchInput.value.trim());
 }
 
 tabStripNew.addEventListener("click", () => {
@@ -1770,26 +1934,30 @@ tabStripNew.addEventListener("click", () => {
 function resetToSetup(): void {
   const tab = requireActiveTab();
   if (tab.sessionId) void window.agent.cancelSession(tab.sessionId);
-  tab.sessionId = null;
-  tab.workspaceRoot = null;
-  tab.activeProvider = null;
+  // Wipes sessionId/workspaceRoot/activeProvider AND events/draftTask/
+  // pendingAttachments/provider/mode/planFirst/editingSession/running back to
+  // a brand-new tab's defaults — leaving any of those set meant switching
+  // away from this tab and back replayed the just-deleted session's whole
+  // old history (and repopulated its old draft) instead of showing a clean
+  // setup form. `title` is deliberately untouched — the caller (the sidebar
+  // delete handler) owns that.
+  resetTabToUnconfigured(tab);
   clearEventLog();
-  taskInput.value = "";
   taskInput.disabled = true;
   attachFileBtn.disabled = true;
   runTaskBtn.disabled = true;
-  tab.pendingAttachments = [];
-  renderAttachmentChips();
   activeModelBadge.hidden = true;
-  tab.editingSession = false;
   editSettingsBtn.hidden = true;
   editSettingsBtn.textContent = "Edit settings…";
   revertCheckpointBtn.hidden = true;
   viewChangesBtn.hidden = true;
   changesPanel.hidden = true;
   startError.textContent = "";
-  setWorkspaceText("No workspace selected — optional, you can just chat");
-  aboutWorkspace.textContent = "(none selected)";
+  // Repaints the workspace text, model/mode/plan-first selects, draft task
+  // (now empty), and attachment chips (now empty) from the tab's freshly
+  // reset fields — the same restoration a tab switch does, just triggered by
+  // this tab's own session having been deleted instead.
+  syncFormFromTab(tab);
   setSetupControlsDisabled(false);
   startSessionBtn.disabled = false;
   startSessionBtn.textContent = "Start session";
@@ -1818,15 +1986,30 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
       return;
     }
 
-    const record = await window.agent.loadSession(id);
-    if (!record) {
+    // Try the still-live in-memory session FIRST, before ever touching disk.
+    // A session whose tab was closed (or that's live from before this
+    // renderer's own tab bookkeeping existed) keeps running server-side —
+    // reopening it must reattach to that same live session, never restart
+    // it. Restarting would run it through startSession's "an entry already
+    // exists under this id" cleanup path, which resolves every pending
+    // approval as denied and disposes the provider (see finalizeEntry) —
+    // then rebuilds from whatever loadSession's disk snapshot has, which is
+    // only ever written when a task completes, so anything since is lost.
+    const liveSnapshot = await window.agent.getLiveSession(id);
+
+    // Only hit disk (and only report "corrupted" for a bad file) once we
+    // know there's no live session to reattach to instead.
+    const record = liveSnapshot ? null : await window.agent.loadSession(id);
+    if (!liveSnapshot && !record) {
       startError.textContent = "Couldn't load this session — the saved file looks corrupted.";
       return;
     }
 
     // Reuses the current tab if it's still unconfigured (never started a
     // session) — matches today's "+" button's own default-fresh-tab
-    // starting point — otherwise opens a new one, respecting the cap.
+    // starting point — otherwise opens a new one, respecting the cap. Not
+    // claimed any earlier than this: a corrupted/missing record above must
+    // leave no stray empty tab behind.
     const current = activeTab(tabRegistry);
     const tab = current && current.sessionId === null ? current : openNewTab(tabRegistry);
     if (!tab) {
@@ -1835,23 +2018,56 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
     }
     tabStripCapMessage.hidden = true;
 
-    tab.events = [...record.events];
-    tab.title = record.title;
+    if (liveSnapshot) {
+      // Already running — just point this tab at it and repaint. No
+      // startSession call at all, on purpose: see the comment above.
+      tab.sessionId = id;
+      tab.events = [...liveSnapshot.events];
+      tab.title = liveSnapshot.title;
+      tab.workspaceRoot = liveSnapshot.workspaceRoot;
+      tab.running = lastEventStillRunning(tab.events);
+      // LiveSessionSnapshot has no provider/mode/planFirst of its own — only
+      // this renderer's own memory of what each session id was started with
+      // does (see startedSessionConfigs' doc comment). The one case that
+      // memory can't cover is a live session this renderer never itself
+      // started (a reload with the main process still holding it) — the
+      // safe fallback there is defaultTabConfig() plus a null
+      // activeProvider, so applySessionEdits refuses to touch the provider
+      // of a session it doesn't actually know the provider of, rather than
+      // guessing wrong and destructively restarting it.
+      const remembered = startedSessionConfigs.get(id);
+      const fallback = defaultTabConfig();
+      tab.provider = remembered?.provider ?? fallback.provider;
+      tab.mode = remembered?.mode ?? fallback.mode;
+      tab.planFirst = remembered?.planFirst ?? fallback.planFirst;
+      tab.activeProvider = remembered?.provider ?? null;
+      renderTabStrip();
+      focusTab(tabRegistry, tab.tabId);
+      renderTabStrip();
+      syncFormFromTab(tab);
+      clearAndReplayEventLog(tab);
+      await refreshSessionList(sessionSearchInput.value.trim());
+      return;
+    }
+
+    const diskRecord = record!;
+    tab.events = [...diskRecord.events];
+    tab.title = diskRecord.title;
     renderTabStrip();
     focusTab(tabRegistry, tab.tabId);
     renderTabStrip();
     syncFormFromTab(tab);
     clearAndReplayEventLog(tab);
 
-    await beginSession({
-      sessionId: record.id,
-      initialMessages: record.messages,
-      priorEvents: record.events,
-      title: record.title,
-      createdAt: record.createdAt,
-      ownerEmail: record.ownerEmail,
+    await beginSession(tab, {
+      sessionId: diskRecord.id,
+      initialMessages: diskRecord.messages,
+      priorEvents: diskRecord.events,
+      title: diskRecord.title,
+      createdAt: diskRecord.createdAt,
+      ownerEmail: diskRecord.ownerEmail,
     });
-    tab.title = record.title;
+    tab.title = diskRecord.title;
     renderTabStrip();
   } finally {
     if (triggerEl) {
@@ -1924,10 +2140,19 @@ runTaskBtn.addEventListener("click", async () => {
   if (!tab?.sessionId || (!taskInput.value.trim() && tab.pendingAttachments.length === 0)) return;
   toolCards.clear();
   runTaskBtn.disabled = true;
+  tab.running = true;
   const task = taskInput.value;
   const sentAttachments = tab.pendingAttachments;
 
-  if (task.trim()) logLine(task, "log-task");
+  if (task.trim()) {
+    logLine(task, "log-task");
+    // Stored as a replayable event, not just written straight to the shared
+    // DOM, so switching away from this tab mid-task and back reconstructs
+    // the user's own sent message too — not just the agent's side of the
+    // conversation (see AgentEvent's task.sent case, renderer-only, never
+    // emitted by the agent itself).
+    tab.events.push({ type: "task.sent", task });
+  }
   // A read-only copy of the same chips shown under the sent task bubble,
   // so the log reflects exactly what went out — same chip look as the
   // composer's removable row, just without the × (buildAttachmentChip

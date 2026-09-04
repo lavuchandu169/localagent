@@ -372,8 +372,9 @@ summary:focus-visible {
   display: none;
 }
 
-/* One open "tab" for the active session, shown once beginSession succeeds
-   and hidden again by resetToSetup — see renderer.ts. */
+/* The tab strip itself is always visible — every open tab (configured or
+   still on its setup form) gets an entry; see renderTabStrip in
+   renderer.ts. */
 #tab-strip {
   flex-shrink: 0;
   display: flex;

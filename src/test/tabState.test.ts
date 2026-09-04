@@ -8,6 +8,8 @@ import {
   routeEvent,
   tabDotState,
   activeTab,
+  resetTabToUnconfigured,
+  lastEventStillRunning,
   type TabState,
 } from "../electron/renderer/tabState.js";
 import type { AgentEvent } from "../types.js";
@@ -106,6 +108,46 @@ console.log("\nrouteEvent:");
   check("an event for a session with no open tab is a harmless no-op", tabA.events.length === 1 && tabB.events.length === 0);
 }
 
+console.log("\nlastEventStillRunning:");
+{
+  check("no events at all -> not running (never sent a task)", lastEventStillRunning([]) === false);
+  check(
+    "last event is a mid-task status -> running",
+    lastEventStillRunning([{ type: "status", message: "..." }]) === true
+  );
+  check(
+    "last event is a terminal done -> not running",
+    lastEventStillRunning([{ type: "status", message: "..." }, { type: "done", success: true, summary: "ok" }]) === false
+  );
+  check(
+    "a later status after a done -> running again (a fresh task started)",
+    lastEventStillRunning([{ type: "done", success: true, summary: "ok" }, { type: "status", message: "starting again" }]) === true
+  );
+}
+
+console.log("\nrouteEvent keeps tab.running in lock-step with the tab's own event stream:");
+{
+  const registry = createTabRegistry();
+  const tab = openNewTab(registry)!;
+  tab.sessionId = "session-x";
+  check("a freshly-opened tab starts out not running", tab.running === false);
+
+  // Mirrors what the renderer does at task-send time, itself untestable here
+  // since it's a DOM click handler — routeEvent picking the flag back up
+  // correctly from here on is the part this module owns. (Read back through
+  // a fresh lookup rather than the narrowed local below, so TS doesn't
+  // statically pin `running` to the literal `true` this line assigns.)
+  tab.running = true;
+  routeEvent(registry, "session-x", { type: "status", message: "working" });
+  check("a mid-task event leaves running true", findTabForSession(registry, "session-x")!.running);
+
+  routeEvent(registry, "session-x", { type: "done", success: true, summary: "ok" });
+  check("the terminal done event flips running back to false", !findTabForSession(registry, "session-x")!.running);
+
+  routeEvent(registry, "session-x", { type: "status", message: "a fresh task, started again" });
+  check("a later event after done flips running back to true", findTabForSession(registry, "session-x")!.running);
+}
+
 console.log("\ntabDotState:");
 function makeTab(overrides: Partial<TabState> = {}): TabState {
   return {
@@ -121,6 +163,7 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     planFirst: false,
     activeProvider: null,
     editingSession: false,
+    running: false,
     ...overrides,
   };
 }
@@ -176,6 +219,39 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
       })
     ) === "running"
   );
+}
+
+console.log("\nresetTabToUnconfigured:");
+{
+  const tab = makeTab({
+    sessionId: "session-x",
+    title: "Some old session",
+    events: [{ type: "status", message: "leftover from the deleted session" }],
+    draftTask: "an unsent draft",
+    pendingAttachments: [{ kind: "text", name: "a.txt", content: "hi" } as any],
+    workspaceRoot: "/some/workspace",
+    provider: { kind: "anthropic", model: "claude-opus-4" } as any,
+    mode: "AUTO_SAFE",
+    planFirst: true,
+    activeProvider: { kind: "anthropic", model: "claude-opus-4" } as any,
+    editingSession: true,
+    running: true,
+  });
+
+  resetTabToUnconfigured(tab);
+
+  check("sessionId is cleared", tab.sessionId === null);
+  check("workspaceRoot is cleared", tab.workspaceRoot === null);
+  check("activeProvider is cleared", tab.activeProvider === null);
+  check("events (the deleted session's history) are cleared, not replayed later", tab.events.length === 0);
+  check("draftTask (the deleted session's composer draft) is cleared", tab.draftTask === "");
+  check("pendingAttachments are cleared", tab.pendingAttachments.length === 0);
+  check("provider resets to the same embedded default a brand-new tab starts from", tab.provider.kind === "embedded");
+  check("mode resets to DEFAULT", tab.mode === "DEFAULT");
+  check("planFirst resets to false", tab.planFirst === false);
+  check("editingSession resets to false", tab.editingSession === false);
+  check("running resets to false", tab.running === false);
+  check("title is deliberately left alone — the caller owns it", tab.title === "Some old session");
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

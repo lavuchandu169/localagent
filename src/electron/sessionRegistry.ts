@@ -200,6 +200,8 @@ export interface LiveSessionSnapshot {
   title: string;
   createdAt: number;
   ownerEmail: string | null;
+  /** The workspace this session is actually running against right now — read live off the session (reflects a mid-session setWorkspaceRoot via Edit settings…), not merely whatever it started with. A tab reattaching to a still-live session (see resumeSession in renderer.ts) has no other way to show the right workspace text. */
+  workspaceRoot: string;
 }
 
 /**
@@ -220,6 +222,7 @@ export function getLiveSessionSnapshot(registry: SessionRegistry, sessionId: str
     title: entry.title ?? "(untitled)",
     createdAt: entry.createdAt,
     ownerEmail: entry.ownerEmail,
+    workspaceRoot: entry.session.getWorkspaceRoot(),
   };
 }
 
