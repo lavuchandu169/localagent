@@ -65,6 +65,9 @@ interface LiveSessionSnapshot {
   ownerEmail: string | null;
 }
 
+type McpServerStatus = { state: "connecting" } | { state: "connected"; toolCount: number } | { state: "failed"; error: string };
+type McpServerView = { id: string; name: string; command: string; args: string[]; status: McpServerStatus };
+
 interface AgentBridge {
   startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string }>;
   runTask(sessionId: string, task: string, attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }): Promise<void>;
@@ -99,6 +102,10 @@ interface AgentBridge {
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   installUpdate(): Promise<void>;
   openUpdateFile(): Promise<void>;
+  listMcpServers(): Promise<{ id: string; name: string; command: string; args: string[]; status: McpServerStatus }[]>;
+  addMcpServer(input: { name: string; command: string; args: string[]; env: Record<string, string> }): Promise<{ id: string; name: string; command: string; args: string[]; status: McpServerStatus }>;
+  removeMcpServer(id: string): Promise<void>;
+  onMcpServerStatusChanged(callback: (payload: { id: string; status: McpServerStatus }) => void): () => void;
   getGoogleSettings(): Promise<{ clientId: string; hasSecret: boolean; envOverride: boolean }>;
   saveGoogleSettings(settings: { clientId: string; clientSecret?: string }): Promise<void>;
   getAnthropicSettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
@@ -192,6 +199,21 @@ const updateBannerDismiss = byId<HTMLButtonElement>("update-banner-dismiss");
 const aboutToggle = byId<HTMLButtonElement>("about-toggle");
 const aboutPanel = byId<HTMLDivElement>("about-panel");
 const aboutClose = byId<HTMLButtonElement>("about-close");
+const mcpServersToggle = byId<HTMLButtonElement>("mcp-servers-toggle");
+const mcpServersPanel = byId<HTMLDivElement>("mcp-servers-panel");
+const mcpServersListView = byId<HTMLDivElement>("mcp-servers-list-view");
+const mcpServersList = byId<HTMLDivElement>("mcp-servers-list");
+const mcpServersEmpty = byId<HTMLDivElement>("mcp-servers-empty");
+const mcpServersAddToggle = byId<HTMLButtonElement>("mcp-servers-add-toggle");
+const mcpServersFormView = byId<HTMLDivElement>("mcp-servers-form-view");
+const mcpServersFormBack = byId<HTMLButtonElement>("mcp-servers-form-back");
+const mcpServerNameInput = byId<HTMLInputElement>("mcp-server-name");
+const mcpServerCommandInput = byId<HTMLInputElement>("mcp-server-command");
+const mcpServerArgsInput = byId<HTMLInputElement>("mcp-server-args");
+const mcpServerEnvInput = byId<HTMLTextAreaElement>("mcp-server-env");
+const mcpServerFormError = byId<HTMLDivElement>("mcp-server-form-error");
+const mcpServerFormSave = byId<HTMLButtonElement>("mcp-server-form-save");
+const mcpServersClose = byId<HTMLButtonElement>("mcp-servers-close");
 const reportIssueLink = byId<HTMLAnchorElement>("report-issue-link");
 const openErrorLogBtn = byId<HTMLButtonElement>("open-error-log");
 const onboardingOverlay = byId<HTMLDivElement>("onboarding-overlay");
@@ -550,6 +572,114 @@ aboutToggle.addEventListener("click", () => {
 });
 aboutClose.addEventListener("click", closeAboutPanel);
 
+function closeMcpServersPanel() {
+  mcpServersPanel.hidden = true;
+  mcpServersToggle.setAttribute("aria-expanded", "false");
+  mcpServersToggle.focus();
+}
+
+function showMcpServersListView() {
+  mcpServersFormView.hidden = true;
+  mcpServersListView.hidden = false;
+  mcpServerFormError.textContent = "";
+}
+
+function renderMcpServerRow(server: McpServerView): HTMLDivElement {
+  const row = document.createElement("div");
+  row.className = "mcp-server-row";
+  const dot = server.status.state === "connected" ? "🟢" : server.status.state === "connecting" ? "🟡" : "🔴";
+  const detail =
+    server.status.state === "connected"
+      ? `${server.status.toolCount} tool${server.status.toolCount === 1 ? "" : "s"} available`
+      : server.status.state === "connecting"
+        ? "Connecting…"
+        : server.status.error;
+  row.innerHTML = `
+    <span class="mcp-server-status-dot">${dot}</span>
+    <span class="mcp-server-name">${server.name}</span>
+    <span class="mcp-server-detail">${server.command} ${server.args.join(" ")}</span>
+    <span class="mcp-server-detail">${detail}</span>
+  `;
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.textContent = "Remove";
+  removeBtn.addEventListener("click", () => {
+    void window.agent.removeMcpServer(server.id).then(refreshMcpServersList);
+  });
+  row.appendChild(removeBtn);
+  return row;
+}
+
+async function refreshMcpServersList() {
+  const servers = await window.agent.listMcpServers();
+  mcpServersList.innerHTML = "";
+  mcpServersEmpty.hidden = servers.length > 0;
+  for (const server of servers) mcpServersList.appendChild(renderMcpServerRow(server));
+}
+
+mcpServersToggle.addEventListener("click", () => {
+  const opening = mcpServersPanel.hidden;
+  mcpServersPanel.hidden = !opening;
+  mcpServersToggle.setAttribute("aria-expanded", String(opening));
+  if (opening) {
+    showMcpServersListView();
+    void refreshMcpServersList();
+  }
+});
+
+mcpServersClose.addEventListener("click", closeMcpServersPanel);
+
+mcpServersAddToggle.addEventListener("click", () => {
+  mcpServerNameInput.value = "";
+  mcpServerCommandInput.value = "";
+  mcpServerArgsInput.value = "";
+  mcpServerEnvInput.value = "";
+  mcpServerFormError.textContent = "";
+  mcpServersListView.hidden = true;
+  mcpServersFormView.hidden = false;
+  mcpServerNameInput.focus();
+});
+
+mcpServersFormBack.addEventListener("click", showMcpServersListView);
+
+/** One KEY=value per line; blank lines and lines with no '=' are ignored. */
+function parseEnvVarsText(text: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+  }
+  return env;
+}
+
+mcpServerFormSave.addEventListener("click", () => {
+  mcpServerFormError.textContent = "";
+  const name = mcpServerNameInput.value.trim();
+  const command = mcpServerCommandInput.value.trim();
+  if (!name || !command) {
+    mcpServerFormError.textContent = "Name and command are required.";
+    return;
+  }
+  const args = mcpServerArgsInput.value.trim().split(/\s+/).filter(Boolean);
+  const env = parseEnvVarsText(mcpServerEnvInput.value);
+  void withBusyLabel(mcpServerFormSave, "Saving…", async () => {
+    try {
+      await window.agent.addMcpServer({ name, command, args, env });
+      showMcpServersListView();
+      await refreshMcpServersList();
+    } catch (err) {
+      mcpServerFormError.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
+});
+
+window.agent.onMcpServerStatusChanged(() => {
+  if (!mcpServersPanel.hidden && !mcpServersListView.hidden) void refreshMcpServersList();
+});
+
 openErrorLogBtn.addEventListener("click", () => {
   void window.agent.openErrorLog();
 });
@@ -619,6 +749,7 @@ document.addEventListener("keydown", (e) => {
   if (!onboardingOverlay.hidden) dismissOnboarding();
   else if (!whatsNewOverlay.hidden) dismissWhatsNew();
   else if (!aboutPanel.hidden) closeAboutPanel();
+  else if (!mcpServersPanel.hidden) closeMcpServersPanel();
   else if (!settingsPanel.hidden) closeSettingsPanel();
   else if (!changesPanel.hidden) closeChangesPanel();
 });

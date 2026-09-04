@@ -35,6 +35,7 @@
       <nav id="activity-bar" aria-label="Panels">
         <button id="settings-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="Settings" aria-label="Settings">⚙</button>
         <button id="about-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="About" aria-label="About">?</button>
+        <button id="mcp-servers-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="MCP Servers" aria-label="MCP Servers">🔌</button>
       </nav>
 
       <aside id="sidebar">
@@ -107,6 +108,41 @@
           <a id="report-issue-link" href="#" target="_blank" rel="noopener">Report an issue…</a>
           <button id="open-error-log" type="button">Open error log</button>
           <button id="about-close">Close</button>
+        </div>
+
+        <div id="mcp-servers-panel" hidden>
+          <h2>MCP Servers</h2>
+          <p class="hint-text">Give the agent tools from local MCP servers. Every call still asks for your approval, like a run_command call.</p>
+
+          <div id="mcp-servers-list-view">
+            <div id="mcp-servers-list"></div>
+            <div id="mcp-servers-empty" class="hint-text">No MCP servers configured yet.</div>
+            <button id="mcp-servers-add-toggle" type="button">+ Add server</button>
+          </div>
+
+          <div id="mcp-servers-form-view" hidden>
+            <button id="mcp-servers-form-back" type="button">&larr; Back</button>
+            <label>
+              Name
+              <input id="mcp-server-name" type="text" placeholder="github" />
+            </label>
+            <label>
+              Command
+              <input id="mcp-server-command" type="text" placeholder="npx" />
+            </label>
+            <label>
+              Args <span class="hint-text">(space-separated)</span>
+              <input id="mcp-server-args" type="text" placeholder="-y @modelcontextprotocol/server-github" />
+            </label>
+            <label>
+              Env vars <span class="hint-text">(one KEY=value per line)</span>
+              <textarea id="mcp-server-env" rows="3" placeholder="GITHUB_TOKEN=..."></textarea>
+            </label>
+            <div id="mcp-server-form-error" class="error-text"></div>
+            <button id="mcp-server-form-save" type="button" class="primary">Save</button>
+          </div>
+
+          <button id="mcp-servers-close" type="button">Close</button>
         </div>
 
         <div id="settings-panel" hidden>

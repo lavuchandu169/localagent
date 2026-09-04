@@ -528,7 +528,8 @@ summary:focus-visible {
 }
 
 #about-panel,
-#settings-panel {
+#settings-panel,
+#mcp-servers-panel {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
@@ -640,7 +641,8 @@ summary:focus-visible {
 }
 
 #about-panel p,
-#settings-panel p {
+#settings-panel p,
+#mcp-servers-panel p {
   margin: 0 0 10px;
   color: var(--text);
   line-height: 1.5;
@@ -661,6 +663,31 @@ summary:focus-visible {
   margin: 0;
   font-family: var(--font-mono);
   color: var(--text);
+}
+
+.mcp-server-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.mcp-server-row .mcp-server-status-dot {
+  font-size: 10px;
+}
+
+.mcp-server-row .mcp-server-name {
+  font-weight: 600;
+  flex: 1;
+}
+
+.mcp-server-row .mcp-server-detail {
+  color: var(--text-dim);
 }
 
 #settings-panel ol {
