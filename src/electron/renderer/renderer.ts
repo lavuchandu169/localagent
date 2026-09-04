@@ -4,7 +4,7 @@ import { groupDiffIntoSegments } from "../../diffUtil.js";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
 import type { PickedAttachment } from "../attachments.js";
-import { createTabRegistry, openNewTab, activeTab, type TabRegistry, type TabState } from "./tabState.js";
+import { createTabRegistry, openNewTab, closeTab, focusTab, findTabForSession, tabDotState, activeTab, MAX_OPEN_TABS, type TabRegistry, type TabState } from "./tabState.js";
 import type { UpdateStatus } from "../updateManager.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
@@ -270,6 +270,9 @@ const newSessionBtn = byId<HTMLButtonElement>("new-session-btn");
 const setupSection = byId<HTMLElement>("setup");
 const statusWorkspaceEl = byId<HTMLSpanElement>("status-workspace");
 const themeSelect = byId<HTMLSelectElement>("theme-select");
+const tabStripList = byId<HTMLDivElement>("tab-strip-list");
+const tabStripNew = byId<HTMLButtonElement>("tab-strip-new");
+const tabStripCapMessage = byId<HTMLDivElement>("tab-strip-cap-message");
 
 // Theme (Warm Dark / Mono Ink) — a per-viewer UI preference only, so
 // localStorage is the right tool here (same reasoning as the onboarding
@@ -304,6 +307,19 @@ function setWorkspaceText(text: string): void {
   statusWorkspaceEl.textContent = text;
 }
 
+// Declared here (rather than beside renderTabStrip below, which uses it)
+// because renderTabStrip is called synchronously from the module-state
+// block just below — a module-level `const` referenced before its own
+// declaration's line throws (temporal dead zone), even though the
+// function that reads it is itself hoisted.
+const DOT_GLYPH: Record<ReturnType<typeof tabDotState>, string> = {
+  unconfigured: "○",
+  running: "●",
+  "waiting-approval": "◐",
+  done: "✓",
+  error: "✕",
+};
+
 let hardwareInfo: HardwareInfo | null = null;
 const toolCards = new Map<string, HTMLElement>();
 const tabRegistry: TabRegistry = createTabRegistry();
@@ -311,6 +327,7 @@ const tabRegistry: TabRegistry = createTabRegistry();
 // at least one tab, even though open tabs are never restored across a
 // relaunch — this is a brand-new, unconfigured one every time.
 openNewTab(tabRegistry);
+renderTabStrip();
 
 /** Throws if called before the first tab exists — which, given the openNewTab() call directly above and closeTab() never running before then, is only reachable if this module's own invariant is broken. Every call site below already assumes a tab exists (matching every existing `if (!sessionId) return;` guard's assumption that setup has happened), so a thrown error here surfaces a real bug immediately instead of silently no-oping deep in some handler. */
 function requireActiveTab(): TabState {
@@ -1594,6 +1611,143 @@ function clearEventLog(): void {
   usageBadge.hidden = true;
 }
 
+/** Restores the setup form's fields (workspace text, model/mode selects, plan-first checkbox, and the two custom-server subfields) from a tab's stored selection — the visual half of switching tabs. Does not touch anything session-lifecycle-related (setSetupControlsDisabled, editSettingsBtn, revert/changes buttons) — that's handled by clearAndReplayEventLog below, since those depend on whether the tab has ever had a session, which the event replay determines. */
+function syncFormFromTab(tab: TabState): void {
+  setWorkspaceText(tab.workspaceRoot ? tab.workspaceRoot : "No workspace selected — optional, you can just chat");
+  aboutWorkspace.textContent = tab.workspaceRoot ?? "(none selected)";
+
+  if (tab.provider.kind === "embedded") {
+    modelSelect.value = tab.provider.size;
+  } else if (tab.provider.kind === "anthropic") {
+    modelSelect.value = tab.provider.model ?? DEFAULT_ANTHROPIC_MODEL;
+  } else {
+    modelSelect.value = CUSTOM_SERVER_VALUE;
+    baseUrlInput.value = tab.provider.baseUrl;
+    externalModelInput.value = tab.provider.model;
+  }
+  updateModelDependentFields();
+
+  modeSelect.value = tab.mode;
+  updateModeDescription();
+  planFirstCheckbox.checked = tab.planFirst;
+
+  taskInput.value = tab.draftTask;
+  renderAttachmentChips();
+}
+
+/** Clears the shared event log and re-renders a tab's entire stored `events` history through it — the same reconstruction resumeSession already does when loading a session from disk, just from memory instead. Also restores every other piece of UI state that Step 6's replay-driven renderEvent cases set as a side effect (revert/changes button visibility via checkpoint.created, the usage badge via "usage" events) by virtue of actually replaying those events. Session-lifecycle chrome that ISN'T derivable from events alone (setSetupControlsDisabled, editSettingsBtn's label/visibility, the model badge) is set here directly from the tab's own fields. */
+function clearAndReplayEventLog(tab: TabState): void {
+  clearEventLog();
+  for (const event of tab.events) renderEvent(event);
+
+  const hasSession = tab.sessionId !== null;
+  setSetupControlsDisabled(hasSession);
+  setupSection.hidden = hasSession && !tab.editingSession;
+  editSettingsBtn.hidden = !hasSession;
+  editSettingsBtn.textContent = tab.editingSession ? "Cancel edit" : "Edit settings…";
+  startSessionBtn.disabled = tab.editingSession ? false : hasSession;
+  startSessionBtn.textContent = tab.editingSession ? "Apply changes" : hasSession ? "Starting…" : "Start session";
+  taskInput.disabled = !hasSession;
+  attachFileBtn.disabled = !hasSession;
+  runTaskBtn.disabled = !hasSession;
+
+  if (hasSession && tab.activeProvider) {
+    const provider = tab.activeProvider;
+    const modelText =
+      provider.kind === "embedded"
+        ? (provider.size in EMBEDDED_MODELS ? describeEmbeddedModel(provider.size as EmbeddedModelId) : provider.size)
+        : provider.kind === "anthropic"
+          ? (() => {
+              const modelId = provider.model ?? DEFAULT_ANTHROPIC_MODEL;
+              return `${ANTHROPIC_MODELS[modelId]?.name ?? modelId} (Anthropic API)`;
+            })()
+          : `${provider.model} (${provider.baseUrl})`;
+    const gpuText = provider.kind === "embedded" && hardwareInfo?.gpu ? ` · ${hardwareInfo.gpu} GPU` : "";
+    activeModelBadge.innerHTML = "";
+    const dot = document.createElement("span");
+    dot.className = "signal-dot";
+    activeModelBadge.appendChild(dot);
+    activeModelBadge.appendChild(document.createTextNode(`${modelText}${gpuText}`));
+    activeModelBadge.hidden = false;
+  } else {
+    activeModelBadge.hidden = true;
+  }
+}
+
+/** Rebuilds the whole tab strip from tabRegistry — called after any open/close/focus/title/dot-state change. Built via createElement/textContent, never innerHTML: a tab's title comes from a resumed session's saved title, which — like every other user/session-derived string in this file (see renderMcpServerRow's own doc comment) — must never be parsed as HTML. */
+function renderTabStrip(): void {
+  tabStripList.innerHTML = "";
+  for (const tabId of tabRegistry.order) {
+    const tab = tabRegistry.tabs.get(tabId)!;
+    const item = document.createElement("div");
+    item.className = "tab-strip-item" + (tabId === tabRegistry.activeTabId ? " active" : "");
+
+    const dot = document.createElement("span");
+    dot.className = "tab-strip-item-dot";
+    dot.textContent = DOT_GLYPH[tabDotState(tab)];
+    item.appendChild(dot);
+
+    const title = document.createElement("span");
+    title.className = "tab-strip-item-title";
+    title.textContent = tab.title ?? "New session";
+    item.appendChild(title);
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "tab-strip-item-close";
+    close.textContent = "×";
+    close.setAttribute("aria-label", `Close ${tab.title ?? "New session"}`);
+    close.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeTab(tabRegistry, tabId);
+      renderTabStrip();
+      const stillActive = activeTab(tabRegistry);
+      if (stillActive) {
+        syncFormFromTab(stillActive);
+        clearAndReplayEventLog(stillActive);
+      } else {
+        // Every tab closed — Global Constraints guarantees this doesn't
+        // happen from user action alone (closing the app's only tab is
+        // still allowed, same as it is today via the sidebar's delete
+        // button through resetToSetup), so immediately open a fresh one
+        // rather than leaving the shared DOM pointed at nothing.
+        const fresh = openNewTab(tabRegistry)!;
+        renderTabStrip();
+        syncFormFromTab(fresh);
+        clearAndReplayEventLog(fresh);
+      }
+    });
+    item.appendChild(close);
+
+    item.addEventListener("click", () => switchToTab(tabId));
+    tabStripList.appendChild(item);
+  }
+  tabStripNew.disabled = tabRegistry.order.length >= MAX_OPEN_TABS;
+}
+
+/** Focuses an already-open tab and re-renders the shared DOM from it — a no-op if tabId isn't open or is already active (avoids a pointless clear+replay of the tab you're already looking at). */
+function switchToTab(tabId: string): void {
+  if (tabId === tabRegistry.activeTabId) return;
+  focusTab(tabRegistry, tabId);
+  renderTabStrip();
+  const tab = activeTab(tabRegistry);
+  if (!tab) return;
+  syncFormFromTab(tab);
+  clearAndReplayEventLog(tab);
+}
+
+tabStripNew.addEventListener("click", () => {
+  const tab = openNewTab(tabRegistry);
+  if (!tab) {
+    tabStripCapMessage.hidden = false;
+    return;
+  }
+  tabStripCapMessage.hidden = true;
+  renderTabStrip();
+  syncFormFromTab(tab);
+  clearAndReplayEventLog(tab);
+});
+
 function resetToSetup(): void {
   const tab = requireActiveTab();
   if (tab.sessionId) void window.agent.cancelSession(tab.sessionId);
@@ -1624,7 +1778,7 @@ function resetToSetup(): void {
   void refreshSessionList(sessionSearchInput.value.trim());
 }
 
-newSessionBtn.addEventListener("click", resetToSetup);
+newSessionBtn.addEventListener("click", () => tabStripNew.click());
 
 // `triggerEl` is the specific sidebar item that was clicked — previously
 // clicking it gave no feedback at all until the resume finished. It's
@@ -1639,25 +1793,36 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
     triggerEl.textContent = "Resuming…";
   }
   try {
+    const alreadyOpen = findTabForSession(tabRegistry, id);
+    if (alreadyOpen) {
+      switchToTab(alreadyOpen.tabId);
+      return;
+    }
+
     const record = await window.agent.loadSession(id);
     if (!record) {
       startError.textContent = "Couldn't load this session — the saved file looks corrupted.";
       return;
     }
 
-    const tab = requireActiveTab();
-    if (tab.sessionId) {
-      await window.agent.cancelSession(tab.sessionId);
+    // Reuses the current tab if it's still unconfigured (never started a
+    // session) — matches today's "+" button's own default-fresh-tab
+    // starting point — otherwise opens a new one, respecting the cap.
+    const current = activeTab(tabRegistry);
+    const tab = current && current.sessionId === null ? current : openNewTab(tabRegistry);
+    if (!tab) {
+      tabStripCapMessage.hidden = false;
+      return;
     }
-    tab.sessionId = null;
-    taskInput.disabled = true;
-    attachFileBtn.disabled = true;
-    runTaskBtn.disabled = true;
+    tabStripCapMessage.hidden = true;
 
-    clearEventLog();
-    for (const event of record.events) {
-      renderEvent(event);
-    }
+    tab.events = [...record.events];
+    tab.title = record.title;
+    renderTabStrip();
+    focusTab(tabRegistry, tab.tabId);
+    renderTabStrip();
+    syncFormFromTab(tab);
+    clearAndReplayEventLog(tab);
 
     await beginSession({
       sessionId: record.id,
@@ -1667,12 +1832,9 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
       createdAt: record.createdAt,
       ownerEmail: record.ownerEmail,
     });
+    tab.title = record.title;
+    renderTabStrip();
   } finally {
-    // On success, beginSession's own refreshSessionList call already
-    // rebuilt the sidebar (replacing triggerEl with a freshly-labeled
-    // element), so this is a harmless no-op on a now-detached node in that
-    // case — it only visibly matters on the failure path above, where the
-    // list never re-rendered and this element is still the one on screen.
     if (triggerEl) {
       triggerEl.disabled = false;
       triggerEl.textContent = originalLabel;
@@ -1689,6 +1851,7 @@ function renderSessionList(entries: SessionIndexEntry[]): void {
     const item = document.createElement("div");
     item.className = "session-item";
     if (entry.id === activeTab(tabRegistry)?.sessionId) item.classList.add("active");
+    if (findTabForSession(tabRegistry, entry.id)) item.classList.add("open-in-tab");
 
     const label = document.createElement("button");
     label.type = "button";
@@ -1707,11 +1870,14 @@ function renderSessionList(entries: SessionIndexEntry[]): void {
       e.stopPropagation();
       void (async () => {
         await window.agent.deleteSession(entry.id);
-        if (entry.id === activeTab(tabRegistry)?.sessionId) {
+        const tabForThisSession = findTabForSession(tabRegistry, entry.id);
+        if (tabForThisSession && tabForThisSession.tabId === tabRegistry.activeTabId) {
           resetToSetup();
-        } else {
-          await refreshSessionList(sessionSearchInput.value.trim());
+        } else if (tabForThisSession) {
+          closeTab(tabRegistry, tabForThisSession.tabId);
+          renderTabStrip();
         }
+        await refreshSessionList(sessionSearchInput.value.trim());
       })();
     });
 

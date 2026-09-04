@@ -236,6 +236,10 @@ body {
   border-left: 2px solid var(--accent);
 }
 
+.session-item.open-in-tab .session-item-label {
+  font-weight: 600;
+}
+
 .session-item-label {
   flex: 1;
   min-width: 0;
