@@ -4,6 +4,7 @@ import { groupDiffIntoSegments } from "../../diffUtil.js";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
 import type { PickedAttachment } from "../attachments.js";
+import { createTabRegistry, openNewTab, activeTab, type TabRegistry, type TabState } from "./tabState.js";
 import type { UpdateStatus } from "../updateManager.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
@@ -267,8 +268,6 @@ const sessionListEmpty = byId<HTMLDivElement>("session-list-empty");
 const sessionSearchInput = byId<HTMLInputElement>("session-search");
 const newSessionBtn = byId<HTMLButtonElement>("new-session-btn");
 const setupSection = byId<HTMLElement>("setup");
-const tabBar = byId<HTMLDivElement>("tab-bar");
-const tabLabel = byId<HTMLSpanElement>("tab-label");
 const statusWorkspaceEl = byId<HTMLSpanElement>("status-workspace");
 const themeSelect = byId<HTMLSelectElement>("theme-select");
 
@@ -305,12 +304,20 @@ function setWorkspaceText(text: string): void {
   statusWorkspaceEl.textContent = text;
 }
 
-let workspaceRoot: string | null = null;
-let sessionId: string | null = null;
 let hardwareInfo: HardwareInfo | null = null;
-/** True while the setup controls are unlocked for editing an already-active session's workspace/model/mode — see editSettingsBtn/applySessionEdits. */
-let editingSession = false;
 const toolCards = new Map<string, HTMLElement>();
+const tabRegistry: TabRegistry = createTabRegistry();
+// Global launch behavior (see plan Global Constraints): the app always has
+// at least one tab, even though open tabs are never restored across a
+// relaunch — this is a brand-new, unconfigured one every time.
+openNewTab(tabRegistry);
+
+/** Throws if called before the first tab exists — which, given the openNewTab() call directly above and closeTab() never running before then, is only reachable if this module's own invariant is broken. Every call site below already assumes a tab exists (matching every existing `if (!sessionId) return;` guard's assumption that setup has happened), so a thrown error here surfaces a real bug immediately instead of silently no-oping deep in some handler. */
+function requireActiveTab(): TabState {
+  const tab = activeTab(tabRegistry);
+  if (!tab) throw new Error("No active tab — this should be unreachable (see requireActiveTab's doc comment).");
+  return tab;
+}
 
 /**
  * Running total for the active session, rebuilt from scratch by clearEventLog
@@ -338,8 +345,6 @@ function formatTokenCount(tokens: number): string {
 }
 
 const MAX_ATTACHMENTS_PER_TASK = 5;
-
-let pendingAttachments: PickedAttachment[] = [];
 
 /**
  * Builds one chip — shared by the composer's removable row (Step 3 below)
@@ -377,12 +382,13 @@ function buildAttachmentChip(attachment: PickedAttachment, onRemove?: () => void
 
 /** Rebuilds the composer's chip row from `pendingAttachments` — called after every add/remove, same "just re-render from state" pattern renderSessionList already uses for the sidebar. */
 function renderAttachmentChips(): void {
+  const tab = requireActiveTab();
   attachmentChipsRow.innerHTML = "";
-  attachmentChipsRow.hidden = pendingAttachments.length === 0;
-  for (const [index, attachment] of pendingAttachments.entries()) {
+  attachmentChipsRow.hidden = tab.pendingAttachments.length === 0;
+  for (const [index, attachment] of tab.pendingAttachments.entries()) {
     attachmentChipsRow.appendChild(
       buildAttachmentChip(attachment, () => {
-        pendingAttachments = pendingAttachments.filter((_, i) => i !== index);
+        tab.pendingAttachments = tab.pendingAttachments.filter((_, i) => i !== index);
         renderAttachmentChips();
       })
     );
@@ -391,7 +397,7 @@ function renderAttachmentChips(): void {
 
 attachFileBtn.addEventListener("click", () => {
   void withBusyLabel(attachFileBtn, "…", async () => {
-    const remaining = MAX_ATTACHMENTS_PER_TASK - pendingAttachments.length;
+    const remaining = MAX_ATTACHMENTS_PER_TASK - requireActiveTab().pendingAttachments.length;
     if (remaining <= 0) {
       logLine(`[attachments] Already at the ${MAX_ATTACHMENTS_PER_TASK}-attachment limit for this task — remove one before adding another.`, "log-error");
       return;
@@ -405,7 +411,8 @@ attachFileBtn.addEventListener("click", () => {
       // 5-attachment cap is just already-documented product behavior.
       logLine(`[attachments] Only added ${attachments.length} of ${attachments.length + skipped} picked files — the ${MAX_ATTACHMENTS_PER_TASK}-attachment limit was reached.`, "log-status");
     }
-    pendingAttachments = [...pendingAttachments, ...attachments];
+    const tab = requireActiveTab();
+    tab.pendingAttachments = [...tab.pendingAttachments, ...attachments];
     renderAttachmentChips();
   });
 });
@@ -961,7 +968,7 @@ anthropicSettingsSaveBtn.addEventListener("click", () => {
 chooseWorkspaceBtn.addEventListener("click", async () => {
   const picked = await window.agent.pickWorkspace();
   if (picked) {
-    workspaceRoot = picked;
+    requireActiveTab().workspaceRoot = picked;
     setWorkspaceText(picked);
     aboutWorkspace.textContent = picked;
   }
@@ -1169,7 +1176,8 @@ function renderEvent(event: AgentEvent): void {
           const checkedIds = new Set(Array.from(card.querySelectorAll<HTMLInputElement>(".diff-hunk-toggle input:checked")).map((el) => Number(el.dataset.hunkId)));
           approvedHunkIds = allHunkIds.filter((id) => !renderedIds.has(id) || checkedIds.has(id));
         }
-        if (sessionId) void window.agent.respondPermission(sessionId, event.call.id, approved, approvedHunkIds);
+        const tab = activeTab(tabRegistry);
+        if (tab?.sessionId) void window.agent.respondPermission(tab.sessionId, event.call.id, approved, approvedHunkIds);
       };
       approve.addEventListener("click", () => respond(true));
       deny.addEventListener("click", () => respond(false));
@@ -1222,7 +1230,8 @@ function renderEvent(event: AgentEvent): void {
         approve.disabled = true;
         reject.disabled = true;
         prompt.classList.add("permission-resolved");
-        if (sessionId) void window.agent.respondPlan(sessionId, approved);
+        const tab = activeTab(tabRegistry);
+        if (tab?.sessionId) void window.agent.respondPlan(tab.sessionId, approved);
       };
       approve.addEventListener("click", () => respond(true));
       reject.addEventListener("click", () => respond(false));
@@ -1247,7 +1256,8 @@ function renderEvent(event: AgentEvent): void {
 }
 
 window.agent.onEvent((incomingSessionId, event) => {
-  if (incomingSessionId !== sessionId) return;
+  const tab = activeTab(tabRegistry);
+  if (incomingSessionId !== tab?.sessionId) return;
   renderEvent(event);
 });
 
@@ -1291,10 +1301,8 @@ function deriveProviderConfigFromForm(): ProviderConfig {
   return { kind: "embedded", size: modelSelect.value };
 }
 
-/** The provider config the currently-active session actually started with — set whenever beginSession succeeds, compared against in applySessionEdits to decide whether a settings edit is safe to apply in place. */
-let activeProviderConfig: ProviderConfig | null = null;
-
 async function beginSession(resume?: ResumePayload): Promise<void> {
+  const tab = requireActiveTab();
   startError.textContent = "";
 
   const provider = deriveProviderConfigFromForm();
@@ -1302,7 +1310,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
   // workspaceRoot omitted entirely when none was picked — startSession defaults
   // it to the home directory and hands back whichever path it actually used.
   const config: SessionConfig = {
-    ...(workspaceRoot ? { workspaceRoot } : {}),
+    ...(tab.workspaceRoot ? { workspaceRoot: tab.workspaceRoot } : {}),
     provider,
     mode: modeSelect.value as PermissionMode,
     planFirst: planFirstCheckbox.checked,
@@ -1312,9 +1320,9 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
   startSessionBtn.textContent = "Starting…";
   try {
     const result = await window.agent.startSession(config, resume);
-    sessionId = result.sessionId;
-    if (!workspaceRoot) {
-      workspaceRoot = result.workspaceRoot;
+    tab.sessionId = result.sessionId;
+    if (!tab.workspaceRoot) {
+      tab.workspaceRoot = result.workspaceRoot;
       setWorkspaceText(`${result.workspaceRoot} (default — no folder chosen)`);
       aboutWorkspace.textContent = result.workspaceRoot;
     }
@@ -1327,19 +1335,17 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
     );
     // All setup controls lock here, not just Start — see setSetupControlsDisabled.
     setSetupControlsDisabled(true);
-    editingSession = false;
+    tab.editingSession = false;
     editSettingsBtn.textContent = "Edit settings…";
     editSettingsBtn.hidden = false;
     revertCheckpointBtn.hidden = true; // a fresh/resumed/edited session has no checkpoint of its own yet — see the checkpoint.created event handler
     viewChangesBtn.hidden = true;
-    activeProviderConfig = provider;
+    tab.activeProvider = provider;
     // Chat-first once a session is running: the setup form collapses out of
     // the way (Edit settings… brings it back) and a tab appears for the
     // now-open session — see resetToSetup and editSettingsBtn's handler for
     // the reverse.
     setupSection.hidden = true;
-    tabLabel.textContent = resume?.title ?? "New session";
-    tabBar.hidden = false;
 
     const modelText =
       provider.kind === "embedded"
@@ -1370,7 +1376,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
     // here (see applySessionEdits) — there's nothing left to edit, so this
     // falls back to a normal "start fresh" state rather than staying in
     // edit mode pointed at a session that no longer exists.
-    editingSession = false;
+    tab.editingSession = false;
     editSettingsBtn.hidden = true;
   } finally {
     downloadProgressRow.hidden = true;
@@ -1379,7 +1385,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
 }
 
 startSessionBtn.addEventListener("click", () => {
-  if (editingSession) void applySessionEdits();
+  if (activeTab(tabRegistry)?.editingSession) void applySessionEdits();
   else void beginSession();
 });
 
@@ -1388,8 +1394,9 @@ cancelDownloadBtn.addEventListener("click", () => {
 });
 
 revertCheckpointBtn.addEventListener("click", () => {
-  if (!sessionId) return;
-  const idToRevert = sessionId;
+  const tab = activeTab(tabRegistry);
+  if (!tab?.sessionId) return;
+  const idToRevert = tab.sessionId;
   void withBusyLabel(revertCheckpointBtn, "Reverting…", async () => {
     const result = await window.agent.revertCheckpoint(idToRevert);
     if (result.ok) {
@@ -1464,8 +1471,9 @@ function closeChangesPanel(): void {
 }
 
 viewChangesBtn.addEventListener("click", () => {
-  if (!sessionId) return;
-  const idToView = sessionId;
+  const tab = activeTab(tabRegistry);
+  if (!tab?.sessionId) return;
+  const idToView = tab.sessionId;
   void withBusyLabel(viewChangesBtn, "Loading…", async () => {
     const result = await window.agent.getChanges(idToView);
     if (result.ok) {
@@ -1509,21 +1517,22 @@ function providerConfigsEqual(a: ProviderConfig, b: ProviderConfig): boolean {
  * alternating models, no crash.
  */
 async function applySessionEdits(): Promise<void> {
-  if (!sessionId || !activeProviderConfig) return;
-  const idBeingEdited = sessionId;
+  const tab = activeTab(tabRegistry);
+  if (!tab?.sessionId || !tab.activeProvider) return;
+  const idBeingEdited = tab.sessionId;
   const newProvider = deriveProviderConfigFromForm();
   const newMode = modeSelect.value as PermissionMode;
   startError.textContent = "";
 
-  if (providerConfigsEqual(newProvider, activeProviderConfig)) {
+  if (providerConfigsEqual(newProvider, tab.activeProvider)) {
     startSessionBtn.disabled = true;
     startSessionBtn.textContent = "Applying…";
     const ok = await window.agent.updateSessionSettings(idBeingEdited, {
-      workspaceRoot: workspaceRoot ?? undefined,
+      workspaceRoot: tab.workspaceRoot ?? undefined,
       mode: newMode,
       planFirst: planFirstCheckbox.checked,
     });
-    editingSession = false;
+    tab.editingSession = false;
     if (!ok) {
       startError.textContent = "Couldn't apply changes — the session may have already ended.";
       startSessionBtn.disabled = false;
@@ -1546,7 +1555,7 @@ async function applySessionEdits(): Promise<void> {
       return;
     }
     await window.agent.cancelSession(idBeingEdited);
-    sessionId = null;
+    tab.sessionId = null;
     taskInput.disabled = true;
     attachFileBtn.disabled = true;
     runTaskBtn.disabled = true;
@@ -1559,20 +1568,21 @@ async function applySessionEdits(): Promise<void> {
       ownerEmail: snapshot.ownerEmail,
     });
   } finally {
-    editingSession = false;
+    tab.editingSession = false;
   }
 }
 
 editSettingsBtn.addEventListener("click", () => {
-  editingSession = !editingSession;
-  setSetupControlsDisabled(!editingSession);
-  startSessionBtn.disabled = !editingSession;
-  startSessionBtn.textContent = editingSession ? "Apply changes" : "Start session";
-  editSettingsBtn.textContent = editingSession ? "Cancel edit" : "Edit settings…";
+  const tab = requireActiveTab();
+  tab.editingSession = !tab.editingSession;
+  setSetupControlsDisabled(!tab.editingSession);
+  startSessionBtn.disabled = !tab.editingSession;
+  startSessionBtn.textContent = tab.editingSession ? "Apply changes" : "Start session";
+  editSettingsBtn.textContent = tab.editingSession ? "Cancel edit" : "Edit settings…";
   // Editing brings the collapsed setup form back into view; cancelling
   // (without applying) collapses it again — applying goes through
   // applySessionEdits/beginSession above, which already re-collapse it.
-  setupSection.hidden = editingSession ? false : true;
+  setupSection.hidden = tab.editingSession ? false : true;
 });
 
 function clearEventLog(): void {
@@ -1585,19 +1595,20 @@ function clearEventLog(): void {
 }
 
 function resetToSetup(): void {
-  if (sessionId) void window.agent.cancelSession(sessionId);
-  sessionId = null;
-  workspaceRoot = null;
-  activeProviderConfig = null;
+  const tab = requireActiveTab();
+  if (tab.sessionId) void window.agent.cancelSession(tab.sessionId);
+  tab.sessionId = null;
+  tab.workspaceRoot = null;
+  tab.activeProvider = null;
   clearEventLog();
   taskInput.value = "";
   taskInput.disabled = true;
   attachFileBtn.disabled = true;
   runTaskBtn.disabled = true;
-  pendingAttachments = [];
+  tab.pendingAttachments = [];
   renderAttachmentChips();
   activeModelBadge.hidden = true;
-  editingSession = false;
+  tab.editingSession = false;
   editSettingsBtn.hidden = true;
   editSettingsBtn.textContent = "Edit settings…";
   revertCheckpointBtn.hidden = true;
@@ -1610,8 +1621,6 @@ function resetToSetup(): void {
   startSessionBtn.disabled = false;
   startSessionBtn.textContent = "Start session";
   setupSection.hidden = false;
-  tabBar.hidden = true;
-  tabLabel.textContent = "";
   void refreshSessionList(sessionSearchInput.value.trim());
 }
 
@@ -1636,10 +1645,11 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
       return;
     }
 
-    if (sessionId) {
-      await window.agent.cancelSession(sessionId);
+    const tab = requireActiveTab();
+    if (tab.sessionId) {
+      await window.agent.cancelSession(tab.sessionId);
     }
-    sessionId = null;
+    tab.sessionId = null;
     taskInput.disabled = true;
     attachFileBtn.disabled = true;
     runTaskBtn.disabled = true;
@@ -1678,7 +1688,7 @@ function renderSessionList(entries: SessionIndexEntry[]): void {
   for (const entry of entries) {
     const item = document.createElement("div");
     item.className = "session-item";
-    if (entry.id === sessionId) item.classList.add("active");
+    if (entry.id === activeTab(tabRegistry)?.sessionId) item.classList.add("active");
 
     const label = document.createElement("button");
     label.type = "button";
@@ -1697,7 +1707,7 @@ function renderSessionList(entries: SessionIndexEntry[]): void {
       e.stopPropagation();
       void (async () => {
         await window.agent.deleteSession(entry.id);
-        if (entry.id === sessionId) {
+        if (entry.id === activeTab(tabRegistry)?.sessionId) {
           resetToSetup();
         } else {
           await refreshSessionList(sessionSearchInput.value.trim());
@@ -1723,11 +1733,12 @@ sessionSearchInput.addEventListener("input", () => {
 void refreshSessionList("");
 
 runTaskBtn.addEventListener("click", async () => {
-  if (!sessionId || (!taskInput.value.trim() && pendingAttachments.length === 0)) return;
+  const tab = activeTab(tabRegistry);
+  if (!tab?.sessionId || (!taskInput.value.trim() && tab.pendingAttachments.length === 0)) return;
   toolCards.clear();
   runTaskBtn.disabled = true;
   const task = taskInput.value;
-  const sentAttachments = pendingAttachments;
+  const sentAttachments = tab.pendingAttachments;
 
   if (task.trim()) logLine(task, "log-task");
   // A read-only copy of the same chips shown under the sent task bubble,
@@ -1754,9 +1765,9 @@ runTaskBtn.addEventListener("click", async () => {
       }
     : undefined;
 
-  pendingAttachments = [];
+  tab.pendingAttachments = [];
   renderAttachmentChips();
-  await window.agent.runTask(sessionId, task, attachments);
+  await window.agent.runTask(tab.sessionId, task, attachments);
   await refreshSessionList(sessionSearchInput.value.trim());
 });
 

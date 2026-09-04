@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import type { AgentEvent, PermissionMode } from "../../types.js";
 import type { PickedAttachment } from "../attachments.js"; // same import renderer.ts already uses
 import type { ProviderConfig } from "../sessionRegistry.js";
