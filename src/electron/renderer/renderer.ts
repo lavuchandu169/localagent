@@ -1953,6 +1953,8 @@ runTaskBtn.addEventListener("click", async () => {
     : undefined;
 
   tab.pendingAttachments = [];
+  tab.draftTask = "";
+  taskInput.value = "";
   renderAttachmentChips();
   await window.agent.runTask(tab.sessionId, task, attachments);
   await refreshSessionList(sessionSearchInput.value.trim());
@@ -1963,6 +1965,11 @@ taskInput.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (!runTaskBtn.disabled) runTaskBtn.click();
   }
+});
+
+taskInput.addEventListener("input", () => {
+  const tab = activeTab(tabRegistry);
+  if (tab) tab.draftTask = taskInput.value;
 });
 
 function renderAuthState(status: AuthStatus): void {
