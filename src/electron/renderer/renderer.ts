@@ -4,7 +4,7 @@ import { groupDiffIntoSegments } from "../../diffUtil.js";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
 import type { PickedAttachment } from "../attachments.js";
-import { createTabRegistry, openNewTab, closeTab, focusTab, findTabForSession, tabDotState, activeTab, MAX_OPEN_TABS, type TabRegistry, type TabState } from "./tabState.js";
+import { createTabRegistry, openNewTab, closeTab, focusTab, findTabForSession, tabDotState, activeTab, routeEvent, MAX_OPEN_TABS, type TabRegistry, type TabState } from "./tabState.js";
 import type { UpdateStatus } from "../updateManager.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
@@ -1273,9 +1273,16 @@ function renderEvent(event: AgentEvent): void {
 }
 
 window.agent.onEvent((incomingSessionId, event) => {
-  const tab = activeTab(tabRegistry);
-  if (incomingSessionId !== tab?.sessionId) return;
-  renderEvent(event);
+  routeEvent(tabRegistry, incomingSessionId, event);
+  const tab = findTabForSession(tabRegistry, incomingSessionId);
+  if (!tab) return; // a session with no open tab at all — same silent-discard as before this task
+  if (tab.tabId === tabRegistry.activeTabId) {
+    renderEvent(event);
+  }
+  // Re-render the strip on every event regardless of which tab it belongs
+  // to, so a backgrounded tab's dot (waiting-approval, done, error) updates
+  // live without needing to switch to it first.
+  renderTabStrip();
 });
 
 function formatBytes(bytes: number): string {
@@ -1285,8 +1292,10 @@ function formatBytes(bytes: number): string {
 
 let progressLastTime = 0;
 let progressLastBytes = 0;
+let downloadInProgress = false;
 
 window.agent.onDownloadProgress((status) => {
+  downloadInProgress = true;
   downloadProgressRow.hidden = false;
   const pct = status.totalSize > 0 ? (status.downloadedSize / status.totalSize) * 100 : 0;
   downloadBarFill.style.width = `${pct.toFixed(1)}%`;
@@ -1335,6 +1344,12 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
 
   startSessionBtn.disabled = true;
   startSessionBtn.textContent = "Starting…";
+  if (downloadInProgress) {
+    startError.textContent = "Another tab is already downloading a model — wait for it to finish before starting a session that needs a download.";
+    startSessionBtn.disabled = false;
+    startSessionBtn.textContent = "Start session";
+    return;
+  }
   try {
     const result = await window.agent.startSession(config, resume);
     tab.sessionId = result.sessionId;
@@ -1398,6 +1413,7 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
   } finally {
     downloadProgressRow.hidden = true;
     progressLastTime = 0;
+    downloadInProgress = false;
   }
 }
 
@@ -2001,7 +2017,23 @@ signOutBtn.addEventListener("click", () => {
 
 window.agent.onSessionsChanged(() => {
   void refreshSessionList(sessionSearchInput.value.trim());
+  void syncTabTitlesFromSidebar();
 });
+
+/** Sessions get their real title only once their first task completes and they're actually saved to disk (see agent:sessions-changed) — this keeps every open tab's displayed title in sync with that, including tabs that aren't currently focused, without needing a dedicated per-session title-changed event. */
+async function syncTabTitlesFromSidebar(): Promise<void> {
+  if (tabRegistry.order.length === 0) return;
+  const entries = await window.agent.listSessions();
+  let changed = false;
+  for (const entry of entries) {
+    const tab = findTabForSession(tabRegistry, entry.id);
+    if (tab && tab.title !== entry.title) {
+      tab.title = entry.title;
+      changed = true;
+    }
+  }
+  if (changed) renderTabStrip();
+}
 
 window.agent.onCloudSyncScopeWarning(() => {
   authError.textContent = "Sign in again to keep backing up your sessions to Google Drive.";
