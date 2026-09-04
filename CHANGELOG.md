@@ -3,6 +3,16 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.28 — 2026-09-04
+
+- Multi-session tabs: open several sessions at once in a real tab strip,
+  up to 6 at a time. Each tab keeps running and updating in the
+  background whether or not you're looking at it — no lost progress, no
+  reload when you switch back — with a status dot on every tab so you
+  can tell at a glance which ones are running, waiting on your approval,
+  done, or failed. Closing a tab never stops the session running behind
+  it; reopen it anytime from the sidebar.
+
 ## v0.1.0-beta.27 — 2026-09-04
 
 - MCP client support: connect the agent to local MCP servers (e.g. a
