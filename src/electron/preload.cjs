@@ -60,6 +60,14 @@ contextBridge.exposeInMainWorld("agent", {
   },
   installUpdate: () => ipcRenderer.invoke("agent:install-update"),
   openUpdateFile: () => ipcRenderer.invoke("agent:open-update-file"),
+  listMcpServers: () => ipcRenderer.invoke("agent:list-mcp-servers"),
+  addMcpServer: (input) => ipcRenderer.invoke("agent:add-mcp-server", input),
+  removeMcpServer: (id) => ipcRenderer.invoke("agent:remove-mcp-server", id),
+  onMcpServerStatusChanged: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("agent:mcp-server-status-changed", listener);
+    return () => ipcRenderer.removeListener("agent:mcp-server-status-changed", listener);
+  },
   getGoogleSettings: () => ipcRenderer.invoke("agent:get-google-settings"),
   saveGoogleSettings: (settings) => ipcRenderer.invoke("agent:save-google-settings", settings),
   getAnthropicSettings: () => ipcRenderer.invoke("agent:get-anthropic-settings"),

@@ -11,6 +11,7 @@ const { autoUpdater } = electronUpdaterPkg;
 import path from "node:path";
 import os from "node:os";
 import fsPromises from "node:fs/promises";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
@@ -21,6 +22,9 @@ import { detectHardware, recommendModel } from "./hardwareInfo.js";
 import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken, getStoredEmail } from "./googleAuth.js";
 import { loadGoogleSettings, saveGoogleSettings, resolveGoogleCredentials } from "./googleSettings.js";
 import { loadAnthropicSettings, saveAnthropicSettings, resolveAnthropicApiKey } from "./anthropicSettings.js";
+import { loadMcpSettings, saveMcpSettings, type McpServerConfig } from "./mcpSettings.js";
+import { connectMcpServer, disconnectMcpServer, type McpConnection, type McpServerStatus } from "./mcpClient.js";
+import { adaptMcpTools, type McpToolCaller } from "../mcpToolAdapter.js";
 import { listSessions, searchSessions, loadSessionRecord, claimUnownedSessions } from "../sessionStore.js";
 import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 import { loadEnvFile } from "./loadEnvFile.js";
@@ -99,10 +103,11 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const authFilePath = path.join(app.getPath("userData"), "auth.json");
   const settingsFilePath = path.join(app.getPath("userData"), "googleSettings.json");
   const anthropicSettingsFilePath = path.join(app.getPath("userData"), "anthropicSettings.json");
+  const mcpSettingsFilePath = path.join(app.getPath("userData"), "mcpServers.json");
   const sessionsDir = path.join(app.getPath("userData"), "sessions");
   const win = createWindow();
 
@@ -166,12 +171,74 @@ app.whenReady().then(() => {
     });
   }
 
+  let mcpConnections: McpConnection[] = [];
+
+  function currentMcpTools() {
+    return mcpConnections
+      .filter((c) => c.status.state === "connected" && c.client)
+      .flatMap((c) => {
+        // adaptMcpTools's McpToolCaller is deliberately narrower than the SDK's
+        // real Client.callTool (whose return type also covers task-based tool
+        // results, {toolResult: unknown} — a feature this app doesn't use).
+        // This one-line wrapper is the single place that narrowing happens,
+        // rather than widening McpToolCaller itself and making every adapter
+        // consumer handle a shape it never actually receives.
+        const caller = { callTool: (params: { name: string; arguments: Record<string, unknown> }) => c.client!.callTool(params) as ReturnType<McpToolCaller["callTool"]> };
+        return adaptMcpTools(c.config.name, caller, c.tools);
+      });
+  }
+
+  async function connectAndTrack(config: McpServerConfig): Promise<McpConnection> {
+    const connection = await connectMcpServer(config, (status: McpServerStatus) => {
+      const existing = mcpConnections.find((c) => c.config.id === config.id);
+      if (existing) existing.status = status;
+      broadcastToAllWindows("agent:mcp-server-status-changed", { id: config.id, status });
+    });
+    mcpConnections = mcpConnections.filter((c) => c.config.id !== config.id).concat(connection);
+    return connection;
+  }
+
+  // Connects in dev runs too, unlike the packaged-only autoUpdater — there's
+  // no reason to gate this, and testing MCP servers from source is exactly
+  // when a developer most needs it to actually run.
+  const mcpConfigs = await loadMcpSettings(mcpSettingsFilePath, storageCrypto);
+  await Promise.all(mcpConfigs.filter((c) => c.enabled).map(connectAndTrack));
+
   ipcMain.handle("agent:install-update", () => {
     updateManager?.installUpdate();
   });
 
   ipcMain.handle("agent:open-update-file", () => {
     updateManager?.openDownloadedFile();
+  });
+
+  ipcMain.handle("agent:list-mcp-servers", () => {
+    return mcpConnections.map((c) => ({
+      id: c.config.id,
+      name: c.config.name,
+      command: c.config.command,
+      args: c.config.args,
+      status: c.status,
+    }));
+  });
+
+  ipcMain.handle("agent:add-mcp-server", async (_event, input: { name: string; command: string; args: string[]; env: Record<string, string> }) => {
+    const existingConfigs = await loadMcpSettings(mcpSettingsFilePath, storageCrypto);
+    if (existingConfigs.some((c) => c.name === input.name)) {
+      throw new Error(`A server named "${input.name}" already exists.`);
+    }
+    const config: McpServerConfig = { id: crypto.randomUUID(), name: input.name, command: input.command, args: input.args, env: input.env, enabled: true };
+    await saveMcpSettings(mcpSettingsFilePath, [...existingConfigs, config], storageCrypto);
+    const connection = await connectAndTrack(config);
+    return { id: config.id, name: config.name, command: config.command, args: config.args, status: connection.status };
+  });
+
+  ipcMain.handle("agent:remove-mcp-server", async (_event, id: string) => {
+    const oldConnection = mcpConnections.find((c) => c.config.id === id);
+    if (oldConnection) await disconnectMcpServer(oldConnection);
+    mcpConnections = mcpConnections.filter((c) => c.config.id !== id);
+    const existingConfigs = await loadMcpSettings(mcpSettingsFilePath, storageCrypto);
+    await saveMcpSettings(mcpSettingsFilePath, existingConfigs.filter((c) => c.id !== id), storageCrypto);
   });
 
   let scopeWarningSent = false;
@@ -223,6 +290,7 @@ app.whenReady().then(() => {
         onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
         signal: controller.signal,
         resume,
+        extraTools: currentMcpTools(),
       });
     } catch (err) {
       // EmbeddedLlamaProvider.healthCheck() catches every error internally
