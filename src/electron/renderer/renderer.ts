@@ -103,7 +103,9 @@ interface AgentBridge {
   installUpdate(): Promise<void>;
   openUpdateFile(): Promise<void>;
   listMcpServers(): Promise<{ id: string; name: string; command: string; args: string[]; status: McpServerStatus }[]>;
-  addMcpServer(input: { name: string; command: string; args: string[]; env: Record<string, string> }): Promise<{ id: string; name: string; command: string; args: string[]; status: McpServerStatus }>;
+  addMcpServer(
+    input: { name: string; command: string; args: string[]; env: Record<string, string> }
+  ): Promise<{ ok: true; server: { id: string; name: string; command: string; args: string[]; status: McpServerStatus } } | { ok: false; error: string }>;
   removeMcpServer(id: string): Promise<void>;
   onMcpServerStatusChanged(callback: (payload: { id: string; status: McpServerStatus }) => void): () => void;
   getGoogleSettings(): Promise<{ clientId: string; hasSecret: boolean; envOverride: boolean }>;
@@ -203,6 +205,7 @@ const mcpServersToggle = byId<HTMLButtonElement>("mcp-servers-toggle");
 const mcpServersPanel = byId<HTMLDivElement>("mcp-servers-panel");
 const mcpServersListView = byId<HTMLDivElement>("mcp-servers-list-view");
 const mcpServersList = byId<HTMLDivElement>("mcp-servers-list");
+const mcpServersListError = byId<HTMLDivElement>("mcp-servers-list-error");
 const mcpServersEmpty = byId<HTMLDivElement>("mcp-servers-empty");
 const mcpServersAddToggle = byId<HTMLButtonElement>("mcp-servers-add-toggle");
 const mcpServersFormView = byId<HTMLDivElement>("mcp-servers-form-view");
@@ -616,7 +619,14 @@ function renderMcpServerRow(server: McpServerView): HTMLDivElement {
   removeBtn.type = "button";
   removeBtn.textContent = "Remove";
   removeBtn.addEventListener("click", () => {
-    void window.agent.removeMcpServer(server.id).then(refreshMcpServersList);
+    void (async () => {
+      try {
+        await window.agent.removeMcpServer(server.id);
+      } catch (err) {
+        mcpServersListError.textContent = `Couldn't remove "${server.name}": ${err instanceof Error ? err.message : String(err)}`;
+      }
+      await refreshMcpServersList();
+    })();
   });
 
   row.appendChild(dotSpan);
@@ -627,11 +637,17 @@ function renderMcpServerRow(server: McpServerView): HTMLDivElement {
   return row;
 }
 
+/** Never throws — a failure to list (or, via the callers above, to remove) a server leaves the panel showing stale data, but always with a visible reason rather than silently, per the existing #mcp-server-form-error pattern this mirrors for the list view. */
 async function refreshMcpServersList() {
-  const servers = await window.agent.listMcpServers();
-  mcpServersList.innerHTML = "";
-  mcpServersEmpty.hidden = servers.length > 0;
-  for (const server of servers) mcpServersList.appendChild(renderMcpServerRow(server));
+  try {
+    const servers = await window.agent.listMcpServers();
+    mcpServersListError.textContent = "";
+    mcpServersList.innerHTML = "";
+    mcpServersEmpty.hidden = servers.length > 0;
+    for (const server of servers) mcpServersList.appendChild(renderMcpServerRow(server));
+  } catch (err) {
+    mcpServersListError.textContent = `Couldn't load MCP servers: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 mcpServersToggle.addEventListener("click", () => {
@@ -684,9 +700,13 @@ mcpServerFormSave.addEventListener("click", () => {
   const env = parseEnvVarsText(mcpServerEnvInput.value);
   void withBusyLabel(mcpServerFormSave, "Saving…", async () => {
     try {
-      await window.agent.addMcpServer({ name, command, args, env });
-      showMcpServersListView();
-      await refreshMcpServersList();
+      const result = await window.agent.addMcpServer({ name, command, args, env });
+      if (result.ok) {
+        showMcpServersListView();
+        await refreshMcpServersList();
+      } else {
+        mcpServerFormError.textContent = result.error;
+      }
     } catch (err) {
       mcpServerFormError.textContent = err instanceof Error ? err.message : String(err);
     }

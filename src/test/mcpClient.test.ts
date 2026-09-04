@@ -123,6 +123,31 @@ await (async () => {
     check("client is undefined when listTools fails post-handshake", connection.client === undefined);
     check("the transport was closed so the connected client/child process doesn't leak", transportClosed);
   }
+
+  {
+    // A server whose process spawns fine (transport.start() resolves) but
+    // never actually replies to the initialize request — e.g. a misconfigured
+    // command like `sleep 30`. Without a timeout override this would hang for
+    // the SDK's full 60s DEFAULT_REQUEST_TIMEOUT_MSEC; a short deps.timeoutMs
+    // here proves connectMcpServer's own timeout plumbing (not just the SDK's
+    // default) actually takes effect and reports "failed" instead of hanging.
+    const statuses: McpServerStatus[] = [];
+    const hangingTransport: Transport = {
+      start: async () => {},
+      // Silently drops every outgoing message — simulates a process that
+      // accepts stdin but never writes a response back.
+      send: async () => {},
+      close: async () => {},
+    };
+    const startedAt = Date.now();
+    const connection = await connectMcpServer(makeConfig({ name: "hanging-server" }), (s) => statuses.push(s), {
+      createTransport: () => hangingTransport,
+      timeoutMs: 50,
+    });
+    const elapsedMs = Date.now() - startedAt;
+    check("a hanging server resolves with status failed rather than hanging forever", connection.status.state === "failed");
+    check("resolves close to the short override timeout, not the SDK's 60s default", elapsedMs < 5000);
+  }
 })();
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

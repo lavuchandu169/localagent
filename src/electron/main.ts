@@ -24,7 +24,7 @@ import { loadGoogleSettings, saveGoogleSettings, resolveGoogleCredentials } from
 import { loadAnthropicSettings, saveAnthropicSettings, resolveAnthropicApiKey } from "./anthropicSettings.js";
 import { loadMcpSettings, saveMcpSettings, type McpServerConfig } from "./mcpSettings.js";
 import { connectMcpServer, disconnectMcpServer, type McpConnection, type McpServerStatus } from "./mcpClient.js";
-import { adaptMcpTools, type McpToolCaller } from "../mcpToolAdapter.js";
+import { adaptMcpTools, sanitizeMcpServerName, type McpToolCaller } from "../mcpToolAdapter.js";
 import { listSessions, searchSessions, loadSessionRecord, claimUnownedSessions } from "../sessionStore.js";
 import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 import { loadEnvFile } from "./loadEnvFile.js";
@@ -198,12 +198,6 @@ app.whenReady().then(async () => {
     return connection;
   }
 
-  // Connects in dev runs too, unlike the packaged-only autoUpdater — there's
-  // no reason to gate this, and testing MCP servers from source is exactly
-  // when a developer most needs it to actually run.
-  const mcpConfigs = await loadMcpSettings(mcpSettingsFilePath, storageCrypto);
-  await Promise.all(mcpConfigs.filter((c) => c.enabled).map(connectAndTrack));
-
   ipcMain.handle("agent:install-update", () => {
     updateManager?.installUpdate();
   });
@@ -224,13 +218,31 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("agent:add-mcp-server", async (_event, input: { name: string; command: string; args: string[]; env: Record<string, string> }) => {
     const existingConfigs = await loadMcpSettings(mcpSettingsFilePath, storageCrypto);
-    if (existingConfigs.some((c) => c.name === input.name)) {
-      throw new Error(`A server named "${input.name}" already exists.`);
+    // Compared sanitized, not raw: sanitizeMcpServerName (mcpToolAdapter.ts)
+    // lowercases and strips symbols when building each tool's
+    // mcp__<server>__<tool> prefix, so e.g. "GitHub" and "github" are
+    // different strings here but would produce IDENTICAL tool-name
+    // prefixes — the second server's tools would silently shadow the
+    // first's in the tool registry (last-write-wins, no error) if both
+    // were allowed to save.
+    if (existingConfigs.some((c) => sanitizeMcpServerName(c.name) === sanitizeMcpServerName(input.name))) {
+      return { ok: false as const, error: `A server matching "${input.name}" already exists (server names that differ only by case or punctuation are treated as the same).` };
     }
     const config: McpServerConfig = { id: crypto.randomUUID(), name: input.name, command: input.command, args: input.args, env: input.env, enabled: true };
-    await saveMcpSettings(mcpSettingsFilePath, [...existingConfigs, config], storageCrypto);
+    // Connect before persisting. connectAndTrack/connectMcpServer never
+    // throws (a bad command resolves to a "failed" status, same as any
+    // other connection failure) — so this doesn't gate saving on success;
+    // a mistyped command still ends up saved with status "failed", same as
+    // before, so the user has something to see and Remove rather than it
+    // silently vanishing. What this ordering buys, now that the startup
+    // path (see the fire-and-forget connect chain above) no longer lets a
+    // slow/hanging connect block the rest of the app's IPC surface, is
+    // just that the persisted file and the in-memory connection list
+    // always agree with what was actually attempted, instead of a config
+    // existing on disk a beat before anything ever tried to use it.
     const connection = await connectAndTrack(config);
-    return { id: config.id, name: config.name, command: config.command, args: config.args, status: connection.status };
+    await saveMcpSettings(mcpSettingsFilePath, [...existingConfigs, config], storageCrypto);
+    return { ok: true as const, server: { id: config.id, name: config.name, command: config.command, args: config.args, status: connection.status } };
   });
 
   ipcMain.handle("agent:remove-mcp-server", async (_event, id: string) => {
@@ -513,6 +525,37 @@ app.whenReady().then(async () => {
       // Invalid id — nothing to delete.
     }
   });
+
+  // Deliberately NOT awaited here — every ipcMain.handle(...) call above
+  // this point has already registered synchronously by the time this line
+  // runs, so the renderer's startup IPC calls (hardware info, model list,
+  // auth status, session list — all fired the instant createWindow()'s
+  // page finishes loading) never race a still-pending await on this chain.
+  // Connecting to an MCP server is not fast (mcpClient.ts's own timeout is
+  // 10s, and was the SDK's 60s default before that was added) — awaiting
+  // this before handler registration used to leave EVERY IPC call in the
+  // app rejecting with Electron's "No handler registered" for however long
+  // a misconfigured/hanging server took to fail. Connects in dev runs too,
+  // unlike the packaged-only autoUpdater — there's no reason to gate this,
+  // and testing MCP servers from source is exactly when a developer most
+  // needs it to actually run. A session started before a connect finishes
+  // simply gets fewer MCP tools this one time — currentMcpTools() is read
+  // fresh on every agent:start-session call, not cached at startup, and
+  // agent:mcp-server-status-changed already updates the panel live once a
+  // connect resolves — the same "config fixed at session start" tradeoff
+  // this app already accepts elsewhere.
+  void loadMcpSettings(mcpSettingsFilePath, storageCrypto).then((configs) =>
+    Promise.all(configs.filter((c) => c.enabled).map(connectAndTrack))
+  );
+
+  // Most stdio servers exit on their own once the parent's stdin pipe
+  // closes, but that's a convention, not a guarantee — a server that
+  // ignores stdin EOF would otherwise orphan a real running process every
+  // time this app quits.
+  app.on("before-quit", () => {
+    for (const connection of mcpConnections) void disconnectMcpServer(connection);
+  });
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

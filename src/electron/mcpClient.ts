@@ -16,18 +16,26 @@ export interface McpConnection {
 
 const CLIENT_INFO = { name: "localagent-mcp-client", version: "1.0.0" };
 
+// Both connect() (spawn + handshake) and listTools() otherwise fall back to
+// the SDK's own DEFAULT_REQUEST_TIMEOUT_MSEC (60s) — long enough that one
+// misconfigured/hanging server noticeably stalls both app startup (finding
+// #1) and the "add a new server" form's Save button. 10s is generous for a
+// well-behaved local stdio server while still failing fast on a hang.
+const CONNECT_TIMEOUT_MSEC = 10_000;
+
 /**
  * Connects to one configured MCP server. Never throws — a failure at any
- * stage (spawn, handshake, tool listing) resolves to a "failed" status
- * instead, matching this app's established "background work degrades,
- * never throws at the caller" posture (auto-updater, cloud sync).
- * `deps.createTransport` is only for tests — production callers always
- * get the real StdioClientTransport.
+ * stage (spawn, handshake, tool listing, or a timeout) resolves to a
+ * "failed" status instead, matching this app's established "background
+ * work degrades, never throws at the caller" posture (auto-updater, cloud
+ * sync). `deps.createTransport` and `deps.timeoutMs` are only for tests —
+ * production callers always get the real StdioClientTransport and the
+ * real timeout.
  */
 export async function connectMcpServer(
   config: McpServerConfig,
   onStatusChange: (status: McpServerStatus) => void,
-  deps: { createTransport?: () => Transport } = {}
+  deps: { createTransport?: () => Transport; timeoutMs?: number } = {}
 ): Promise<McpConnection> {
   onStatusChange({ state: "connecting" });
 
@@ -38,6 +46,7 @@ export async function connectMcpServer(
       args: config.args,
       env: { ...getDefaultEnvironment(), ...config.env },
     });
+  const timeout = deps.timeoutMs ?? CONNECT_TIMEOUT_MSEC;
 
   // No special capabilities declared — this client only ever calls tools.
   const client = new Client(CLIENT_INFO);
@@ -45,8 +54,8 @@ export async function connectMcpServer(
   client.onerror = (err) => onStatusChange({ state: "failed", error: err.message });
 
   try {
-    await client.connect(transport);
-    const listed = await client.listTools();
+    await client.connect(transport, { timeout });
+    const listed = await client.listTools(undefined, { timeout });
     const status: McpServerStatus = { state: "connected", toolCount: listed.tools.length };
     onStatusChange(status);
     return { config, status, client, tools: listed.tools };
