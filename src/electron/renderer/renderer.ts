@@ -1872,7 +1872,9 @@ function renderSessionList(entries: SessionIndexEntry[]): void {
         await window.agent.deleteSession(entry.id);
         const tabForThisSession = findTabForSession(tabRegistry, entry.id);
         if (tabForThisSession && tabForThisSession.tabId === tabRegistry.activeTabId) {
+          tabForThisSession.title = null;
           resetToSetup();
+          renderTabStrip();
         } else if (tabForThisSession) {
           closeTab(tabRegistry, tabForThisSession.tabId);
           renderTabStrip();
