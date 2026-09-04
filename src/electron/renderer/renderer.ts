@@ -1344,11 +1344,14 @@ async function beginSession(resume?: ResumePayload): Promise<void> {
 
   startSessionBtn.disabled = true;
   startSessionBtn.textContent = "Starting…";
-  if (downloadInProgress) {
-    startError.textContent = "Another tab is already downloading a model — wait for it to finish before starting a session that needs a download.";
-    startSessionBtn.disabled = false;
-    startSessionBtn.textContent = "Start session";
-    return;
+  if (downloadInProgress && provider.kind === "embedded") {
+    const cached = await window.agent.listCachedModels();
+    if (!cached[provider.size]) {
+      startError.textContent = "Another tab is already downloading a model — wait for it to finish before starting a session that needs a download.";
+      startSessionBtn.disabled = false;
+      startSessionBtn.textContent = "Start session";
+      return;
+    }
   }
   try {
     const result = await window.agent.startSession(config, resume);
