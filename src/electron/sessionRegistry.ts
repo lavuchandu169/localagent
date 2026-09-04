@@ -8,7 +8,7 @@ import { AnthropicProvider } from "../providers/anthropicProvider.js";
 import { isEmbeddedModelId } from "../models.js";
 import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
-import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode, PermissionResponse } from "../types.js";
+import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode, PermissionResponse, Tool } from "../types.js";
 import { revertToCheckpoint } from "../checkpoints.js";
 import { getChanges, type FileChangeWithDiff } from "../changesSince.js";
 
@@ -101,6 +101,8 @@ export async function startSession(
     /** Lets the caller cancel an in-progress embedded-model download — see buildProvider. */
     signal?: AbortSignal;
     resume?: ResumePayload;
+    /** Currently-connected MCP servers' tools, supplied by main.ts — see mcpClient.ts/mcpToolAdapter.ts. Defaults to none, so every existing caller/test is unaffected. */
+    extraTools?: Tool[];
   } = {}
 ): Promise<{ sessionId: string; workspaceRoot: string }> {
   const provider = (deps.providerFactory ?? buildProvider)(config.provider, deps.onDownloadProgress, deps.signal);
@@ -131,7 +133,7 @@ export async function startSession(
           ? (config.provider.model ?? "claude-sonnet-5")
           : config.provider.size,
     provider,
-    tools: defaultToolRegistry(),
+    tools: defaultToolRegistry(deps.extraTools ?? []),
     permissionMode: config.mode,
     initialMessages: deps.resume?.initialMessages,
     onApprovalNeeded: (call) =>

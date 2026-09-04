@@ -55,6 +55,29 @@ await (async () => {
 
   {
     const registry = createSessionRegistry(sessionsDir);
+    const extraTool = {
+      name: "mcp__github__ping",
+      description: "[MCP: github] Replies with pong",
+      permission: "DANGEROUS" as const,
+      inputSchema: { type: "object", properties: {} },
+      async execute() {
+        return { ok: true, output: { content: "pong" } };
+      },
+    };
+    const provider = new MockProvider([{ turn: { type: "final", content: "done" } }]);
+    await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => provider, extraTools: [extraTool] }
+    );
+    const sessionId = [...registry.sessions.keys()][0]!;
+    await runTask(registry, sessionId, "anything", () => {});
+    const toolNames = provider.receivedRequests[0]?.tools?.map((t) => t.name) ?? [];
+    check("extraTools passed to startSession reach the model's tool list", toolNames.includes("mcp__github__ping"));
+  }
+
+  {
+    const registry = createSessionRegistry(sessionsDir);
     const { workspaceRoot: resolved } = await startSession(
       registry,
       { provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },

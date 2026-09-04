@@ -9,6 +9,8 @@ import type { ChatRequest, ChatResponse, ModelInfo, ModelProvider } from "../typ
 export class MockProvider implements ModelProvider {
   id = "mock";
   private step = 0;
+  /** Every request this provider has received, in order — lets a test verify what was actually sent (e.g. which tools were offered), not just what came back. */
+  receivedRequests: ChatRequest[] = [];
   constructor(private script: ChatResponse[]) {}
 
   async listModels(): Promise<ModelInfo[]> {
@@ -19,7 +21,8 @@ export class MockProvider implements ModelProvider {
     return true;
   }
 
-  async chat(_request: ChatRequest): Promise<ChatResponse> {
+  async chat(request: ChatRequest): Promise<ChatResponse> {
+    this.receivedRequests.push(request);
     const response = this.script[this.step];
     if (!response) {
       return { turn: { type: "final", content: "(mock provider script exhausted)" } };

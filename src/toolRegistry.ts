@@ -29,6 +29,6 @@ export class ToolRegistry {
   }
 }
 
-export function defaultToolRegistry(): ToolRegistry {
-  return new ToolRegistry([readFileTool, listDirectoryTool, grepTool, editFileTool, runCommandTool]);
+export function defaultToolRegistry(extraTools: Tool[] = []): ToolRegistry {
+  return new ToolRegistry([readFileTool, listDirectoryTool, grepTool, editFileTool, runCommandTool, ...extraTools]);
 }
