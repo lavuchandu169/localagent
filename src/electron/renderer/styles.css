@@ -370,34 +370,96 @@ summary:focus-visible {
 
 /* One open "tab" for the active session, shown once beginSession succeeds
    and hidden again by resetToSetup — see renderer.ts. */
-#tab-bar {
+#tab-strip {
   flex-shrink: 0;
   display: flex;
+  align-items: center;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
+  overflow-x: auto;
 }
 
-#tab-bar[hidden] {
-  display: none;
+#tab-strip-list {
+  display: flex;
+  flex: 1;
+  min-width: 0;
 }
 
-#tab-item {
+.tab-strip-item {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 6px 14px;
-  font-size: 11px;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
   color: var(--text);
   background: var(--bg);
   border-right: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  max-width: 160px;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
-#tab-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--warn);
+.tab-strip-item.active {
+  background: var(--bg-raised);
+  border-bottom-color: var(--accent);
+}
+
+.tab-strip-item-dot {
   flex-shrink: 0;
+  font-size: 10px;
+}
+
+.tab-strip-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.tab-strip-item-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.tab-strip-item-close:hover {
+  color: var(--text);
+}
+
+#tab-strip-new {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 6px 12px;
+}
+
+#tab-strip-new:hover {
+  color: var(--text);
+}
+
+#tab-strip-new[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#tab-strip-cap-message {
+  font-size: 11px;
+  color: var(--warn);
+  padding: 4px 10px;
+  flex-shrink: 0;
+}
+
+#tab-strip-cap-message[hidden] {
+  display: none;
 }
 
 #onboarding-overlay {
