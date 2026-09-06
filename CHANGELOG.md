@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.31 — 2026-09-06
+
+- Fixed the Hugging Face search box (added in beta.30) squeezing itself
+  down to almost nothing the moment results appeared — it was laid out
+  as a horizontal flex sibling of the results list instead of stacking
+  above it. Search box, results, and the path field now stack
+  vertically, and results render as a proper scrollable list.
+
 ## v0.1.0-beta.30 — 2026-09-06
 
 - The new "Custom local model" option (below) now has a search box:

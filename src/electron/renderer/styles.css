@@ -988,8 +988,60 @@ label .hint-text {
 /* .row's `display: flex` is author-origin and beats the UA [hidden] rule
    regardless of specificity, so these need their own explicit override. */
 #external-fields[hidden],
-#anthropic-fields[hidden] {
+#anthropic-fields[hidden],
+#custom-embedded-fields[hidden] {
   display: none;
+}
+
+/* custom-embedded-fields stacks its search box, results, and URI field
+   vertically instead of .row's default horizontal layout — otherwise the
+   search results <ul> sits as a flex sibling of the search input and
+   squeezes it down to almost nothing the moment results appear. */
+#custom-embedded-fields {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+#custom-embedded-search-status {
+  margin-top: -4px;
+}
+
+#custom-embedded-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+}
+
+#custom-embedded-search-results li {
+  border-bottom: 1px solid var(--border);
+}
+
+#custom-embedded-search-results li:last-child {
+  border-bottom: none;
+}
+
+#custom-embedded-search-results button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  cursor: pointer;
+}
+
+#custom-embedded-search-results button:hover,
+#custom-embedded-search-results button:focus-visible {
+  background: var(--bg-panel);
 }
 
 #auth-signed-out[hidden],
