@@ -3,6 +3,15 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.29 — 2026-09-06
+
+- New "Custom local model (Hugging Face GGUF)…" option in the Model
+  dropdown's Custom group: type any `hf:org/repo:quant` path and it
+  downloads and runs in-process exactly like the curated embedded
+  models, no app update needed to try a model that isn't on the
+  curated list. No quality or tool-call-compatibility check is done
+  for you, same as the existing custom-server option for remote models.
+
 ## v0.1.0-beta.28 — 2026-09-04
 
 - Multi-session tabs: open several sessions at once in a real tab strip,

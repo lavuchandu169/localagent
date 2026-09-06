@@ -187,6 +187,8 @@ const externalFields = byId<HTMLDivElement>("external-fields");
 const anthropicFields = byId<HTMLDivElement>("anthropic-fields");
 const baseUrlInput = byId<HTMLInputElement>("base-url");
 const externalModelInput = byId<HTMLInputElement>("external-model");
+const customEmbeddedFields = byId<HTMLDivElement>("custom-embedded-fields");
+const customEmbeddedUriInput = byId<HTMLInputElement>("custom-embedded-uri");
 const modelSelect = byId<HTMLSelectElement>("model-select");
 // Anthropic models offered in the Cloud group — curated here (not
 // user-typed like the custom-server option) since they all share the same
@@ -198,6 +200,7 @@ const ANTHROPIC_MODELS: Record<string, { name: string; note: string }> = {
 };
 const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 const CUSTOM_SERVER_VALUE = "custom-server";
+const CUSTOM_EMBEDDED_VALUE = "custom-embedded";
 const modeSelect = byId<HTMLSelectElement>("mode");
 const planFirstCheckbox = byId<HTMLInputElement>("plan-first");
 const modeDescription = byId<HTMLSpanElement>("mode-description");
@@ -457,6 +460,7 @@ function setSetupControlsDisabled(disabled: boolean): void {
   modeSelect.disabled = disabled;
   baseUrlInput.disabled = disabled;
   externalModelInput.disabled = disabled;
+  customEmbeddedUriInput.disabled = disabled;
   planFirstCheckbox.disabled = disabled;
 }
 
@@ -501,6 +505,10 @@ const customOption = document.createElement("option");
 customOption.value = CUSTOM_SERVER_VALUE;
 customOption.textContent = "Custom server (Ollama, LM Studio, vLLM)…";
 customGroup.appendChild(customOption);
+const customEmbeddedOption = document.createElement("option");
+customEmbeddedOption.value = CUSTOM_EMBEDDED_VALUE;
+customEmbeddedOption.textContent = "Custom local model (Hugging Face GGUF)…";
+customGroup.appendChild(customEmbeddedOption);
 modelSelect.appendChild(customGroup);
 
 for (const mode of Object.keys(MODE_LABELS) as PermissionMode[]) {
@@ -522,6 +530,7 @@ updateModeDescription();
 /** Shows/hides the two fields that only apply to one specific model-select value each — everything else needs neither. */
 function updateModelDependentFields() {
   externalFields.hidden = modelSelect.value !== CUSTOM_SERVER_VALUE;
+  customEmbeddedFields.hidden = modelSelect.value !== CUSTOM_EMBEDDED_VALUE;
   anthropicFields.hidden = !(modelSelect.value in ANTHROPIC_MODELS);
 }
 modelSelect.addEventListener("change", () => {
@@ -539,6 +548,7 @@ updateModelDependentFields();
 planFirstCheckbox.addEventListener("change", () => captureFormIntoTab());
 baseUrlInput.addEventListener("input", () => captureFormIntoTab());
 externalModelInput.addEventListener("input", () => captureFormIntoTab());
+customEmbeddedUriInput.addEventListener("input", () => captureFormIntoTab());
 
 /**
  * Rebuilds every EMBEDDED model option's label from scratch (base name +
@@ -1367,6 +1377,9 @@ function deriveProviderConfigFromForm(): ProviderConfig {
   if (modelSelect.value === CUSTOM_SERVER_VALUE) {
     return { kind: "openai-compatible", baseUrl: baseUrlInput.value.trim(), model: externalModelInput.value.trim() };
   }
+  if (modelSelect.value === CUSTOM_EMBEDDED_VALUE) {
+    return { kind: "embedded", size: customEmbeddedUriInput.value.trim() };
+  }
   return { kind: "embedded", size: modelSelect.value };
 }
 
@@ -1793,7 +1806,12 @@ function syncFormFromTab(tab: TabState): void {
   // applied): there the in-progress selection IS the thing to restore.
   const formProvider = tab.activeProvider && !tab.editingSession ? tab.activeProvider : tab.provider;
   if (formProvider.kind === "embedded") {
-    modelSelect.value = formProvider.size;
+    if (formProvider.size in EMBEDDED_MODELS) {
+      modelSelect.value = formProvider.size;
+    } else {
+      modelSelect.value = CUSTOM_EMBEDDED_VALUE;
+      customEmbeddedUriInput.value = formProvider.size;
+    }
   } else if (formProvider.kind === "anthropic") {
     modelSelect.value = formProvider.model ?? DEFAULT_ANTHROPIC_MODEL;
   } else {

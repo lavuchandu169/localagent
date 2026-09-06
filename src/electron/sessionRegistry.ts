@@ -86,7 +86,7 @@ export function buildProvider(
   if (config.kind === "anthropic") {
     return new AnthropicProvider({ apiKey: config.apiKey, model: config.model });
   }
-  if (!isEmbeddedModelId(config.size)) {
+  if (!isEmbeddedModelId(config.size) && !config.size.startsWith("hf:")) {
     throw new Error(`Invalid embedded model size: ${config.size}`);
   }
   return new EmbeddedLlamaProvider({ size: config.size, onDownloadProgress, signal });

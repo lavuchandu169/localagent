@@ -1,6 +1,6 @@
 import type { ChatHistoryItem, ChatModelFunctionCall, ChatModelFunctions } from "node-llama-cpp";
 import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
-import { EMBEDDED_MODELS, type EmbeddedModelId } from "../models.js";
+import { EMBEDDED_MODELS, isEmbeddedModelId, type EmbeddedModelId } from "../models.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
 
 /**
@@ -240,7 +240,8 @@ export class EmbeddedLlamaProvider implements ModelProvider {
 
   constructor(
     private opts: {
-      size: EmbeddedModelId;
+      /** A curated EmbeddedModelId, or a raw `hf:org/repo:quant` path typed directly (the "Custom local model" option) — resolved the same way either way, see loadChat. */
+      size: string;
       onDownloadProgress?: (status: { totalSize: number; downloadedSize: number }) => void;
       /** Aborts an in-progress download — resolveModelFile rejects with an AbortError-shaped error when it fires. */
       signal?: AbortSignal;
@@ -254,7 +255,8 @@ export class EmbeddedLlamaProvider implements ModelProvider {
 
   private async loadChat(): Promise<import("node-llama-cpp").LlamaChat> {
     const { getLlama, resolveModelFile, LlamaChat } = await import("node-llama-cpp");
-    const modelPath = await resolveModelFile(EMBEDDED_MODELS[this.opts.size].uri, {
+    const uri = isEmbeddedModelId(this.opts.size) ? EMBEDDED_MODELS[this.opts.size].uri : this.opts.size;
+    const modelPath = await resolveModelFile(uri, {
       cli: false,
       onProgress: this.opts.onDownloadProgress,
       signal: this.opts.signal,

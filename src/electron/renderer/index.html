@@ -221,6 +221,13 @@
               <input id="external-model" type="text" placeholder="qwen2.5-coder:latest" />
             </label>
           </div>
+          <div id="custom-embedded-fields" class="row" hidden>
+            <label>
+              Hugging Face GGUF path
+              <input id="custom-embedded-uri" type="text" placeholder="hf:org/repo-GGUF:Q4_K_M" />
+            </label>
+            <span class="hint-text">Downloads and runs locally, same as the curated models — but nothing checks quality or tool-call compatibility for you.</span>
+          </div>
           <div id="anthropic-fields" class="row" hidden>
             <span class="hint-text">Sends file contents and task context to Anthropic over the network. Needs an API key — set <code>ANTHROPIC_API_KEY</code> in your environment, or add one in Settings (gear icon).</span>
           </div>

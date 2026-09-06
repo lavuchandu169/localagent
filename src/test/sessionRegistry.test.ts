@@ -148,6 +148,17 @@ await (async () => {
   }
 
   {
+    check("buildProvider accepts a custom hf: path not in the curated list", (() => {
+      try {
+        buildProvider({ kind: "embedded", size: "hf:IFM/K2-Horizon-7B-GGUF:Q4_K_M" });
+        return true;
+      } catch {
+        return false;
+      }
+    })());
+  }
+
+  {
     const registry = createSessionRegistry(sessionsDir);
     const script: ChatResponse[] = [{ turn: { type: "final", content: "all done" } }];
     const { sessionId } = await startSession(
