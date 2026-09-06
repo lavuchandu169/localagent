@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.30 — 2026-09-06
+
+- The new "Custom local model" option (below) now has a search box:
+  type a keyword to search Hugging Face's GGUF model listings, click a
+  result to fill in its path automatically (defaulting to the Q4_K_M
+  quant, editable if a repo doesn't ship it) — no need to already know
+  the exact repo path.
+
 ## v0.1.0-beta.29 — 2026-09-06
 
 - New "Custom local model (Hugging Face GGUF)…" option in the Model

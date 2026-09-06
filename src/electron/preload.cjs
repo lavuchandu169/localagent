@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("agent", {
   pickAttachments: (limit) => ipcRenderer.invoke("agent:pick-attachments", limit),
   listCachedModels: () => ipcRenderer.invoke("agent:list-cached-models"),
   deleteCachedModel: (id) => ipcRenderer.invoke("agent:delete-cached-model", id),
+  searchHfModels: (query) => ipcRenderer.invoke("agent:search-hf-models", query),
   cancelDownload: () => ipcRenderer.invoke("agent:cancel-download"),
   getHardwareInfo: () => ipcRenderer.invoke("agent:hardware-info"),
   getDiagnostics: () => ipcRenderer.invoke("agent:diagnostics"),

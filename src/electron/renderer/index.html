@@ -223,6 +223,12 @@
           </div>
           <div id="custom-embedded-fields" class="row" hidden>
             <label>
+              Search Hugging Face
+              <input id="custom-embedded-search" type="text" placeholder="e.g. qwen coder" autocomplete="off" />
+            </label>
+            <div id="custom-embedded-search-status" class="hint-text"></div>
+            <ul id="custom-embedded-search-results" hidden></ul>
+            <label>
               Hugging Face GGUF path
               <input id="custom-embedded-uri" type="text" placeholder="hf:org/repo-GGUF:Q4_K_M" />
             </label>

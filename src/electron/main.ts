@@ -17,6 +17,7 @@ import { createSessionRegistry, startSession, runTask, respondPermission, respon
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import type { AttachedImage, AttachedText, PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
+import { searchHuggingFaceGgufModels } from "./modelSearch.js";
 import { isEmbeddedModelId } from "../models.js";
 import { detectHardware, recommendModel } from "./hardwareInfo.js";
 import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken, getStoredEmail } from "./googleAuth.js";
@@ -383,6 +384,8 @@ app.whenReady().then(async () => {
     if (!isEmbeddedModelId(id)) return false;
     return deleteModel(id);
   });
+
+  ipcMain.handle("agent:search-hf-models", (_event, query: string) => searchHuggingFaceGgufModels(query));
 
   ipcMain.handle("agent:hardware-info", async () => {
     const info = await detectHardware();

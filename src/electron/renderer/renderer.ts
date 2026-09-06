@@ -25,6 +25,7 @@ import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
+import type { HfSearchResult } from "../modelSearch.js";
 
 interface HardwareInfo {
   totalRamBytes: number;
@@ -100,6 +101,7 @@ interface AgentBridge {
   onDownloadProgress(callback: (status: DownloadProgress) => void): () => void;
   listCachedModels(): Promise<Record<string, boolean>>;
   deleteCachedModel(id: string): Promise<boolean>;
+  searchHfModels(query: string): Promise<HfSearchResult>;
   cancelDownload(): Promise<void>;
   getHardwareInfo(): Promise<HardwareInfo>;
   getDiagnostics(): Promise<{ appVersion: string; platform: string; osRelease: string; arch: string }>;
@@ -189,6 +191,11 @@ const baseUrlInput = byId<HTMLInputElement>("base-url");
 const externalModelInput = byId<HTMLInputElement>("external-model");
 const customEmbeddedFields = byId<HTMLDivElement>("custom-embedded-fields");
 const customEmbeddedUriInput = byId<HTMLInputElement>("custom-embedded-uri");
+const customEmbeddedSearchInput = byId<HTMLInputElement>("custom-embedded-search");
+const customEmbeddedSearchStatus = byId<HTMLDivElement>("custom-embedded-search-status");
+const customEmbeddedSearchResults = byId<HTMLUListElement>("custom-embedded-search-results");
+/** The default quant filled in when a search result is picked — every one of this app's curated EMBEDDED_MODELS entries already uses this exact quant, so it's the safest guess across GGUF repos generally. The field stays editable if a particular repo doesn't ship it. */
+const DEFAULT_SEARCH_QUANT = "Q4_K_M";
 const modelSelect = byId<HTMLSelectElement>("model-select");
 // Anthropic models offered in the Cloud group — curated here (not
 // user-typed like the custom-server option) since they all share the same
@@ -461,6 +468,7 @@ function setSetupControlsDisabled(disabled: boolean): void {
   baseUrlInput.disabled = disabled;
   externalModelInput.disabled = disabled;
   customEmbeddedUriInput.disabled = disabled;
+  customEmbeddedSearchInput.disabled = disabled;
   planFirstCheckbox.disabled = disabled;
 }
 
@@ -549,6 +557,61 @@ planFirstCheckbox.addEventListener("change", () => captureFormIntoTab());
 baseUrlInput.addEventListener("input", () => captureFormIntoTab());
 externalModelInput.addEventListener("input", () => captureFormIntoTab());
 customEmbeddedUriInput.addEventListener("input", () => captureFormIntoTab());
+
+/** Renders (or clears) the Hugging Face search results list under the search box. */
+function renderHfSearchResults(result: HfSearchResult): void {
+  customEmbeddedSearchResults.innerHTML = "";
+  if (!result.ok) {
+    customEmbeddedSearchStatus.textContent = `Search failed: ${result.error}`;
+    customEmbeddedSearchResults.hidden = true;
+    return;
+  }
+  if (result.results.length === 0) {
+    customEmbeddedSearchStatus.textContent = customEmbeddedSearchInput.value.trim() ? "No matching models found." : "";
+    customEmbeddedSearchResults.hidden = true;
+    return;
+  }
+  customEmbeddedSearchStatus.textContent = "";
+  for (const model of result.results) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${model.id} — ${model.downloads.toLocaleString()} downloads`;
+    button.addEventListener("click", () => {
+      customEmbeddedUriInput.value = `hf:${model.id}:${DEFAULT_SEARCH_QUANT}`;
+      captureFormIntoTab();
+      customEmbeddedSearchInput.value = "";
+      customEmbeddedSearchStatus.textContent = "";
+      customEmbeddedSearchResults.innerHTML = "";
+      customEmbeddedSearchResults.hidden = true;
+    });
+    item.appendChild(button);
+    customEmbeddedSearchResults.appendChild(item);
+  }
+  customEmbeddedSearchResults.hidden = false;
+}
+
+let hfSearchDebounce: ReturnType<typeof setTimeout> | undefined;
+let hfSearchToken = 0;
+customEmbeddedSearchInput.addEventListener("input", () => {
+  const query = customEmbeddedSearchInput.value.trim();
+  if (hfSearchDebounce) clearTimeout(hfSearchDebounce);
+  if (!query) {
+    customEmbeddedSearchStatus.textContent = "";
+    customEmbeddedSearchResults.hidden = true;
+    customEmbeddedSearchResults.innerHTML = "";
+    return;
+  }
+  customEmbeddedSearchStatus.textContent = "Searching…";
+  const thisToken = ++hfSearchToken;
+  hfSearchDebounce = setTimeout(() => {
+    void window.agent.searchHfModels(query).then((result) => {
+      // Stale response from an earlier keystroke — a newer search has since started, ignore it.
+      if (thisToken !== hfSearchToken) return;
+      renderHfSearchResults(result);
+    });
+  }, 400);
+});
 
 /**
  * Rebuilds every EMBEDDED model option's label from scratch (base name +
