@@ -106,9 +106,9 @@ export async function startSession(
   } = {}
 ): Promise<{ sessionId: string; workspaceRoot: string }> {
   const provider = (deps.providerFactory ?? buildProvider)(config.provider, deps.onDownloadProgress, deps.signal);
-  const healthy = await provider.healthCheck();
-  if (!healthy) {
-    throw new Error(`Could not start provider "${provider.id}" — health check failed.`);
+  const health = await provider.healthCheck();
+  if (!health.ok) {
+    throw new Error(`Could not start provider "${provider.id}": ${health.error}`);
   }
 
   const sessionId = deps.resume?.sessionId ?? crypto.randomUUID();

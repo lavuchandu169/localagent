@@ -75,10 +75,13 @@ export interface ChatResponse {
   raw?: unknown;
 }
 
+/** healthCheck's result: `ok:false` always carries the real failure reason — the underlying error message, not a bare boolean — so a caller can show the user something more useful than "health check failed". */
+export type HealthCheckResult = { ok: true } | { ok: false; error: string };
+
 export interface ModelProvider {
   id: string;
   listModels(): Promise<ModelInfo[]>;
-  healthCheck(): Promise<boolean>;
+  healthCheck(): Promise<HealthCheckResult>;
   chat(request: ChatRequest): Promise<ChatResponse>;
   /** Releases any local native resources (loaded model weights, KV cache/context). Optional — only providers holding local resources (the embedded provider) implement it; remote providers have nothing to release. */
   dispose?(): Promise<void>;

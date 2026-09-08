@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.32 — 2026-09-08
+
+- "Health check failed" errors now show the real reason instead of that
+  generic message — a download failure, a missing quantization, a
+  network error, whatever actually went wrong. Every provider
+  (embedded, custom server, Claude) surfaces its real failure message
+  now instead of collapsing every error into a bare pass/fail.
+
 ## v0.1.0-beta.31 — 2026-09-06
 
 - Fixed the Hugging Face search box (added in beta.30) squeezing itself

@@ -306,14 +306,12 @@ app.whenReady().then(async () => {
         extraTools: currentMcpTools(),
       });
     } catch (err) {
-      // EmbeddedLlamaProvider.healthCheck() catches every error internally
-      // (including an aborted download) and just returns false, so the
-      // original AbortError never reaches here — startSession only ever
-      // throws its own generic "health check failed" message regardless of
-      // cause. The controller itself is the only place left that still
-      // knows whether THIS failure was actually a deliberate cancel, so
-      // that's checked here instead of trying to sniff the (already-lost)
-      // error text on the renderer side.
+      // healthCheck's real error message now reaches here (see
+      // HealthCheckResult), but a deliberate cancel would otherwise surface
+      // as a raw AbortError-shaped message instead of the clearer "Download
+      // cancelled." — the controller is still the only place that reliably
+      // knows THIS failure was a deliberate cancel, so it's checked here
+      // rather than pattern-matching the error text.
       if (controller.signal.aborted) throw new Error("Download cancelled.");
       throw err;
     } finally {

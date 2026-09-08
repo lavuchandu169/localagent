@@ -89,16 +89,19 @@ await (async () => {
   {
     const registry = createSessionRegistry(sessionsDir);
     let threw = false;
+    let message = "";
     try {
       await startSession(
         registry,
         { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
-        { providerFactory: () => ({ id: "unhealthy", listModels: async () => [], healthCheck: async () => false, chat: async () => { throw new Error("should not be called"); } }) }
+        { providerFactory: () => ({ id: "unhealthy", listModels: async () => [], healthCheck: async () => ({ ok: false, error: "fake failure" }), chat: async () => { throw new Error("should not be called"); } }) }
       );
-    } catch {
+    } catch (err) {
       threw = true;
+      message = err instanceof Error ? err.message : String(err);
     }
     check("startSession rejects when the provider's health check fails", threw);
+    check("the thrown error carries the real failure reason, not a generic message", message.includes("fake failure"));
   }
 
   {

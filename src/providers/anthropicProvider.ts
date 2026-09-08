@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, ToolCall } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
 
 const DEFAULT_MODEL_ID = "claude-sonnet-5";
@@ -146,12 +146,12 @@ export class AnthropicProvider implements ModelProvider {
     return [{ id: this.model, local: false }];
   }
 
-  async healthCheck(): Promise<boolean> {
+  async healthCheck(): Promise<HealthCheckResult> {
     try {
       await this.client.models.retrieve(this.model);
-      return true;
-    } catch {
-      return false;
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 

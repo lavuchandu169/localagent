@@ -57,18 +57,18 @@ async function main() {
     model = "claude-sonnet-5";
     provider = new AnthropicProvider();
     console.log("\n[localagent] using the Claude Sonnet 5 API — code and task context will be sent to Anthropic over the network…");
-    const healthy = await provider.healthCheck();
-    if (!healthy) {
-      console.error("\nCould not reach the Anthropic API with the current credentials.");
+    const health = await provider.healthCheck();
+    if (!health.ok) {
+      console.error(`\nCould not reach the Anthropic API with the current credentials: ${health.error}`);
       console.error("Set ANTHROPIC_API_KEY, or run `ant auth login`, then try again.\n");
       process.exit(1);
     }
   } else if (baseUrl) {
     model = args.model ?? "qwen2.5-coder:latest";
     provider = new OpenAICompatibleProvider({ baseUrl, local: true });
-    const healthy = await provider.healthCheck();
-    if (!healthy) {
-      console.error(`\nCould not reach a local model server at ${baseUrl}.`);
+    const health = await provider.healthCheck();
+    if (!health.ok) {
+      console.error(`\nCould not reach a local model server at ${baseUrl}: ${health.error}`);
       console.error("Start Ollama (or LM Studio / any OpenAI-compatible server) and pass --base-url, or run `npm run demo` for an offline mock-provider walkthrough.\n");
       process.exit(1);
     }
@@ -85,9 +85,9 @@ async function main() {
     model = size;
     provider = new EmbeddedLlamaProvider({ size });
     console.log(`\n[localagent] no --base-url given, running ${describeEmbeddedModel(size)} in-process (downloads and caches on first run)…`);
-    const healthy = await provider.healthCheck();
-    if (!healthy) {
-      console.error(`\nFailed to download or load ${EMBEDDED_MODELS[size].name}.`);
+    const health = await provider.healthCheck();
+    if (!health.ok) {
+      console.error(`\nFailed to download or load ${EMBEDDED_MODELS[size].name}: ${health.error}`);
       console.error("Check your network connection, or pass --base-url to use an external server instead.\n");
       process.exit(1);
     }

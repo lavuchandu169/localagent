@@ -1,5 +1,5 @@
 import type { ChatHistoryItem, ChatModelFunctionCall, ChatModelFunctions } from "node-llama-cpp";
-import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, ToolCall } from "../types.js";
 import { EMBEDDED_MODELS, isEmbeddedModelId, type EmbeddedModelId } from "../models.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
 
@@ -296,12 +296,12 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     return (Object.keys(EMBEDDED_MODELS) as EmbeddedModelId[]).map((size) => ({ id: size, local: true }));
   }
 
-  async healthCheck(): Promise<boolean> {
+  async healthCheck(): Promise<HealthCheckResult> {
     try {
       await this.getChat();
-      return true;
-    } catch {
-      return false;
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 

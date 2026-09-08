@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatResponse, ModelInfo, ModelProvider } from "../types.js";
+import type { ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider } from "../types.js";
 
 /**
  * A scripted provider: each call to chat() returns the next scripted response
@@ -17,8 +17,8 @@ export class MockProvider implements ModelProvider {
     return [{ id: "mock-model", local: true }];
   }
 
-  async healthCheck(): Promise<boolean> {
-    return true;
+  async healthCheck(): Promise<HealthCheckResult> {
+    return { ok: true };
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {

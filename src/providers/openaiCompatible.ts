@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRequest, ChatResponse, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, ToolCall } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
 
 /**
@@ -93,12 +93,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
   }
 
-  async healthCheck(): Promise<boolean> {
+  async healthCheck(): Promise<HealthCheckResult> {
     try {
       const res = await fetch(`${this.opts.baseUrl}/models`, { headers: this.headers() });
-      return res.ok;
-    } catch {
-      return false;
+      if (!res.ok) return { ok: false, error: `Server responded ${res.status} ${res.statusText}` };
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 
