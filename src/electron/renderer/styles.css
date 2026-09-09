@@ -225,6 +225,11 @@ body {
   gap: 4px;
   border-radius: 4px;
   padding: 4px 4px 4px 8px;
+  /* Reserves the active state's border width up front so it fades its color
+     in on transition instead of popping the layout wider the instant it
+     appears. */
+  border-left: 2px solid transparent;
+  transition: background 0.15s ease, border-left-color 0.15s ease;
 }
 
 .session-item:hover {
@@ -233,7 +238,7 @@ body {
 
 .session-item.active {
   background: var(--bg-raised);
-  border-left: 2px solid var(--accent);
+  border-left-color: var(--accent);
 }
 
 .session-item.open-in-tab .session-item-label {
@@ -413,6 +418,26 @@ summary:focus-visible {
 .tab-strip-item-dot {
   flex-shrink: 0;
   font-size: 10px;
+}
+
+.tab-strip-item-dot-running {
+  animation: dot-breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes dot-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-strip-item-dot-running {
+    animation: none;
+  }
 }
 
 .tab-strip-item-title {
@@ -604,7 +629,8 @@ summary:focus-visible {
    rather than "panels" once only one is ever open at a time). */
 #about-panel,
 #settings-panel,
-#mcp-servers-panel {
+#mcp-servers-panel,
+#command-palette-overlay {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -621,7 +647,8 @@ summary:focus-visible {
    own `display: flex` above, which beats the UA [hidden] rule. */
 #about-panel[hidden],
 #settings-panel[hidden],
-#mcp-servers-panel[hidden] {
+#mcp-servers-panel[hidden],
+#command-palette-overlay[hidden] {
   display: none;
 }
 
@@ -665,6 +692,59 @@ summary:focus-visible {
 
 .modal-close-x:hover:not(:disabled) {
   color: var(--text);
+  background: var(--bg-raised);
+  transform: none;
+}
+
+#command-palette-card {
+  width: 560px;
+  /* Keeps the results list visible without the whole card growing past a
+     reasonable height on a long session list — the list itself scrolls. */
+  display: flex;
+  flex-direction: column;
+}
+
+#command-palette-input {
+  width: 100%;
+  font-size: 14px;
+}
+
+#command-palette-results {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+#command-palette-results li + li {
+  border-top: 1px solid var(--border);
+}
+
+#command-palette-results button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 8px 4px;
+  font-size: 13px;
+  font-family: var(--font-sans);
+  color: var(--text);
+  cursor: pointer;
+}
+
+#command-palette-results button .command-palette-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+#command-palette-results button:hover:not(:disabled),
+#command-palette-results button.selected {
   background: var(--bg-raised);
   transform: none;
 }
@@ -987,6 +1067,12 @@ a:hover {
   color: var(--text-dim);
   max-width: 320px;
   font-family: var(--font-sans);
+}
+
+.saved-toast {
+  color: var(--accent);
+  font-weight: 600;
+  animation: card-in 0.15s ease;
 }
 
 #update-banner {
@@ -1418,6 +1504,10 @@ label .hint-text {
   /* Tool arguments/results can contain long unbreakable tokens (paths, blobs) —
      wrap them instead of overflowing the window with a horizontal scrollbar. */
   overflow-wrap: anywhere;
+  /* Scopes the View Transition switchToTab wraps (renderer.ts) to just this
+     region, so switching tabs crossfades the chat content instead of the
+     whole window (sidebar/tab-strip/status-bar stay static, unaffected). */
+  view-transition-name: event-log;
 }
 
 #event-log:has(#empty-state:not([hidden])) {
@@ -1444,6 +1534,17 @@ label .hint-text {
   border: 2px solid var(--border);
   background: radial-gradient(circle, var(--accent) 0 4px, transparent 5px);
   opacity: 0.5;
+}
+
+.log-status,
+.log-task,
+.log-text,
+.log-done,
+.log-error {
+  /* Same entrance animation .tool-card already uses (card-in, below) — these
+     five previously popped in instantly while tool cards already faded in,
+     which read as inconsistent given turns are what you look at the most. */
+  animation: card-in 0.15s ease;
 }
 
 .log-status {

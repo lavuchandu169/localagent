@@ -33,6 +33,7 @@
 
     <div id="app-shell">
       <nav id="activity-bar" aria-label="Panels">
+        <button id="command-palette-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="Jump to a session or open a panel (Ctrl+K / ⌘K)" aria-label="Command palette">🔎</button>
         <button id="settings-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="Settings" aria-label="Settings">⚙</button>
         <button id="about-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="About" aria-label="About">?</button>
         <button id="mcp-servers-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="MCP Servers" aria-label="MCP Servers">🔌</button>
@@ -154,6 +155,15 @@
           </div>
         </div>
 
+        <div id="command-palette-overlay" hidden>
+          <div class="modal-card" id="command-palette-card">
+            <button id="command-palette-close-x" class="modal-close-x" type="button" aria-label="Close">×</button>
+            <input id="command-palette-input" type="text" placeholder="Jump to a session, or open Settings / About / MCP Servers…" autocomplete="off" />
+            <ul id="command-palette-results"></ul>
+            <div id="command-palette-empty" class="hint-text" hidden>No matches.</div>
+          </div>
+        </div>
+
         <div id="settings-panel" hidden>
           <div class="modal-card">
             <button id="settings-close-x" class="modal-close-x" type="button" aria-label="Close">×</button>
@@ -185,7 +195,7 @@
               <input id="settings-client-secret" type="password" placeholder="" />
             </label>
             <div id="settings-error" class="error-text"></div>
-            <div id="settings-saved" class="hint-text" hidden>Saved.</div>
+            <div id="settings-saved" class="hint-text saved-toast" hidden>Saved.</div>
             <button id="settings-save">Save</button>
             <button id="settings-close">Close</button>
 
@@ -202,7 +212,7 @@
               <input id="anthropic-api-key" type="password" placeholder="" />
             </label>
             <div id="anthropic-settings-error" class="error-text"></div>
-            <div id="anthropic-settings-saved" class="hint-text" hidden>Saved.</div>
+            <div id="anthropic-settings-saved" class="hint-text saved-toast" hidden>Saved.</div>
             <button id="anthropic-settings-save">Save</button>
           </div>
         </div>

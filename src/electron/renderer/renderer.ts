@@ -225,6 +225,12 @@ const updateBannerLink = byId<HTMLAnchorElement>("update-banner-link");
 const updateBannerOpenFileBtn = byId<HTMLButtonElement>("update-banner-open-file");
 const updateBannerRestartBtn = byId<HTMLButtonElement>("update-banner-restart");
 const updateBannerDismiss = byId<HTMLButtonElement>("update-banner-dismiss");
+const commandPaletteToggle = byId<HTMLButtonElement>("command-palette-toggle");
+const commandPaletteOverlay = byId<HTMLDivElement>("command-palette-overlay");
+const commandPaletteCloseX = byId<HTMLButtonElement>("command-palette-close-x");
+const commandPaletteInput = byId<HTMLInputElement>("command-palette-input");
+const commandPaletteResults = byId<HTMLUListElement>("command-palette-results");
+const commandPaletteEmpty = byId<HTMLDivElement>("command-palette-empty");
 const aboutToggle = byId<HTMLButtonElement>("about-toggle");
 const aboutPanel = byId<HTMLDivElement>("about-panel");
 const aboutClose = byId<HTMLButtonElement>("about-close");
@@ -701,9 +707,10 @@ aboutToggle.addEventListener("click", () => {
   if (opening) {
     // These are full-window modals now (see .modal-card in styles.css) — only
     // one should ever be open at once, so opening this one closes whichever
-    // of the other two is currently up first.
+    // of the others is currently up first.
     if (!settingsPanel.hidden) closeSettingsPanel();
     if (!mcpServersPanel.hidden) closeMcpServersPanel();
+    if (!commandPaletteOverlay.hidden) closeCommandPalette();
   }
   aboutPanel.hidden = !opening;
   aboutToggle.setAttribute("aria-expanded", String(opening));
@@ -801,6 +808,7 @@ mcpServersToggle.addEventListener("click", () => {
   if (opening) {
     if (!aboutPanel.hidden) closeAboutPanel();
     if (!settingsPanel.hidden) closeSettingsPanel();
+    if (!commandPaletteOverlay.hidden) closeCommandPalette();
   }
   mcpServersPanel.hidden = !opening;
   mcpServersToggle.setAttribute("aria-expanded", String(opening));
@@ -923,6 +931,7 @@ settingsToggle.addEventListener("click", async () => {
   if (opening) {
     if (!aboutPanel.hidden) closeAboutPanel();
     if (!mcpServersPanel.hidden) closeMcpServersPanel();
+    if (!commandPaletteOverlay.hidden) closeCommandPalette();
     await openSettingsPanel();
   }
   settingsPanel.hidden = !opening;
@@ -934,6 +943,142 @@ settingsClose.addEventListener("click", closeSettingsPanel);
 settingsCloseX.addEventListener("click", closeSettingsPanel);
 settingsPanel.addEventListener("click", (e) => {
   if (e.target === settingsPanel) closeSettingsPanel();
+});
+
+// Command palette (Ctrl+K / ⌘K) — navigation only: jump to an existing
+// session, or open one of the three panels above. Deliberately excludes
+// anything that mutates a running session's state (switching its model,
+// starting a task, reverting a checkpoint) — those need their own form UI,
+// not a one-line list entry, and mixing "go to X" with "do X to the
+// currently active session" in the same list invites mistakes.
+interface PaletteCommand {
+  id: string;
+  label: string;
+  hint?: string;
+  run: () => void;
+}
+
+/** The four fixed entries, always present regardless of what's typed — the dynamic per-session entries (below) are appended after these. */
+function staticPaletteCommands(): PaletteCommand[] {
+  return [
+    { id: "new-session", label: "New session", run: () => { closeCommandPalette(); newSessionBtn.click(); } },
+    { id: "open-settings", label: "Open Settings", run: () => { closeCommandPalette(); settingsToggle.click(); } },
+    { id: "open-about", label: "Open About", run: () => { closeCommandPalette(); aboutToggle.click(); } },
+    { id: "open-mcp-servers", label: "Open MCP Servers", run: () => { closeCommandPalette(); mcpServersToggle.click(); } },
+  ];
+}
+
+/** Fetched fresh each time the palette opens (see openCommandPalette) — hasn't gone stale by the time it's used, since the palette is a short-lived one-shot flow, not something left open in the background. */
+let paletteSessions: SessionIndexEntry[] = [];
+
+function sessionPaletteCommands(): PaletteCommand[] {
+  return paletteSessions.map((entry) => ({
+    id: `session:${entry.id}`,
+    label: entry.title,
+    hint: "session",
+    run: () => {
+      closeCommandPalette();
+      void resumeSession(entry.id);
+    },
+  }));
+}
+
+function filteredPaletteCommands(): PaletteCommand[] {
+  const query = commandPaletteInput.value.trim().toLowerCase();
+  const all = [...staticPaletteCommands(), ...sessionPaletteCommands()];
+  if (!query) return all;
+  return all.filter((c) => c.label.toLowerCase().includes(query));
+}
+
+let paletteSelectedIndex = 0;
+
+function renderCommandPaletteResults(): void {
+  const commands = filteredPaletteCommands();
+  paletteSelectedIndex = Math.min(paletteSelectedIndex, Math.max(commands.length - 1, 0));
+  commandPaletteResults.innerHTML = "";
+  commandPaletteEmpty.hidden = commands.length > 0;
+  commands.forEach((cmd, i) => {
+    const li = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = cmd.label;
+    if (cmd.hint) {
+      const hintSpan = document.createElement("span");
+      hintSpan.className = "command-palette-hint";
+      hintSpan.textContent = cmd.hint;
+      button.appendChild(hintSpan);
+    }
+    if (i === paletteSelectedIndex) {
+      button.classList.add("selected");
+      // Keeps arrow-key navigation visible once the list is taller than its
+      // own scrollable area (many saved sessions) — a mouse click never
+      // needs this, only ArrowUp/ArrowDown do.
+      button.scrollIntoView({ block: "nearest" });
+    }
+    button.addEventListener("click", () => cmd.run());
+    li.appendChild(button);
+    commandPaletteResults.appendChild(li);
+  });
+}
+
+function closeCommandPalette(): void {
+  commandPaletteOverlay.hidden = true;
+  commandPaletteToggle.setAttribute("aria-expanded", "false");
+  commandPaletteToggle.focus();
+}
+
+function openCommandPalette(): void {
+  if (!aboutPanel.hidden) closeAboutPanel();
+  if (!mcpServersPanel.hidden) closeMcpServersPanel();
+  if (!settingsPanel.hidden) closeSettingsPanel();
+  commandPaletteInput.value = "";
+  paletteSelectedIndex = 0;
+  commandPaletteOverlay.hidden = false;
+  commandPaletteToggle.setAttribute("aria-expanded", "true");
+  renderCommandPaletteResults(); // static commands show immediately; the line below fills in sessions once they've loaded
+  commandPaletteInput.focus();
+  void window.agent.listSessions().then((entries) => {
+    paletteSessions = entries;
+    if (!commandPaletteOverlay.hidden) renderCommandPaletteResults();
+  });
+}
+
+commandPaletteToggle.addEventListener("click", () => {
+  if (commandPaletteOverlay.hidden) openCommandPalette();
+  else closeCommandPalette();
+});
+commandPaletteCloseX.addEventListener("click", closeCommandPalette);
+commandPaletteOverlay.addEventListener("click", (e) => {
+  if (e.target === commandPaletteOverlay) closeCommandPalette();
+});
+
+commandPaletteInput.addEventListener("input", () => {
+  paletteSelectedIndex = 0;
+  renderCommandPaletteResults();
+});
+
+commandPaletteInput.addEventListener("keydown", (e) => {
+  const commands = filteredPaletteCommands();
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    paletteSelectedIndex = Math.min(paletteSelectedIndex + 1, commands.length - 1);
+    renderCommandPaletteResults();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    paletteSelectedIndex = Math.max(paletteSelectedIndex - 1, 0);
+    renderCommandPaletteResults();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    commands[paletteSelectedIndex]?.run();
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    if (commandPaletteOverlay.hidden) openCommandPalette();
+    else closeCommandPalette();
+  }
 });
 
 // Escape closes whichever of these dismissible panels/modals is currently
@@ -950,6 +1095,7 @@ document.addEventListener("keydown", (e) => {
   else if (!aboutPanel.hidden) closeAboutPanel();
   else if (!mcpServersPanel.hidden) closeMcpServersPanel();
   else if (!settingsPanel.hidden) closeSettingsPanel();
+  else if (!commandPaletteOverlay.hidden) closeCommandPalette();
   else if (!changesPanel.hidden) closeChangesPanel();
 });
 
@@ -1076,6 +1222,21 @@ function dismissWhatsNew(): void {
 whatsNewDismiss.addEventListener("click", dismissWhatsNew);
 showWhatsNewIfNeeded();
 
+const savedToastTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+/** Shows a "Saved." toast (fading in via .saved-toast's own animation) and auto-hides it after a few seconds — clears any timer from a previous save on the same element first, so rapid re-saves don't hide it early. */
+function showSavedToast(el: HTMLElement): void {
+  const existing = savedToastTimers.get(el);
+  if (existing) clearTimeout(existing);
+  el.hidden = false;
+  savedToastTimers.set(
+    el,
+    setTimeout(() => {
+      el.hidden = true;
+      savedToastTimers.delete(el);
+    }, 2500)
+  );
+}
+
 settingsSaveBtn.addEventListener("click", () => {
   settingsError.textContent = "";
   settingsSaved.hidden = true;
@@ -1094,7 +1255,7 @@ settingsSaveBtn.addEventListener("click", () => {
         settingsClientSecretInput.value = "";
         settingsClientSecretInput.placeholder = secretValueSent ? "•••• saved" : "";
       }
-      settingsSaved.hidden = false;
+      showSavedToast(settingsSaved);
     } catch (err) {
       settingsError.textContent = err instanceof Error ? err.message : String(err);
     }
@@ -1113,7 +1274,7 @@ anthropicSettingsSaveBtn.addEventListener("click", () => {
         anthropicApiKeyInput.value = "";
         anthropicApiKeyInput.placeholder = keyValueSent ? "•••• saved" : "";
       }
-      anthropicSettingsSaved.hidden = false;
+      showSavedToast(anthropicSettingsSaved);
     } catch (err) {
       anthropicSettingsError.textContent = err instanceof Error ? err.message : String(err);
     }
@@ -1968,7 +2129,7 @@ function renderTabStrip(): void {
     item.className = "tab-strip-item" + (tabId === tabRegistry.activeTabId ? " active" : "");
 
     const dot = document.createElement("span");
-    dot.className = "tab-strip-item-dot";
+    dot.className = `tab-strip-item-dot tab-strip-item-dot-${tabDotState(tab)}`;
     dot.textContent = DOT_GLYPH[tabDotState(tab)];
     item.appendChild(dot);
 
@@ -2019,6 +2180,15 @@ function renderTabStrip(): void {
   tabStripNew.disabled = tabRegistry.order.length >= MAX_OPEN_TABS;
 }
 
+/** Runs `update` immediately, the same as calling it directly, when the View Transitions API isn't available. Where it is, wraps it in a view transition instead — #event-log's own `view-transition-name` (styles.css) scopes the resulting crossfade to just that region. */
+function withViewTransition(update: () => void): void {
+  if (typeof document.startViewTransition === "function") {
+    document.startViewTransition(update);
+  } else {
+    update();
+  }
+}
+
 /** Focuses an already-open tab and re-renders the shared DOM from it — a no-op if tabId isn't open or is already active (avoids a pointless clear+replay of the tab you're already looking at). */
 function switchToTab(tabId: string): void {
   if (tabId === tabRegistry.activeTabId) return;
@@ -2027,7 +2197,7 @@ function switchToTab(tabId: string): void {
   const tab = activeTab(tabRegistry);
   if (!tab) return;
   syncFormFromTab(tab);
-  clearAndReplayEventLog(tab);
+  withViewTransition(() => clearAndReplayEventLog(tab));
   // The sidebar's "active"/"open-in-tab" markers are keyed off which tab is
   // focused and which sessions are open — both just changed.
   void refreshSessionList(sessionSearchInput.value.trim());

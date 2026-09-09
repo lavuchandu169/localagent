@@ -3,6 +3,20 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.35 — 2026-09-09
+
+- Chat turns, status lines, and tool diagnostics now fade in as they
+  arrive instead of popping in instantly; switching between tabs
+  crossfades the chat log instead of swapping it instantly; a tab's
+  status dot pulses while a task is running; the sidebar's active-session
+  accent bar fades in smoothly instead of jumping into place; and
+  Settings' "Saved." confirmations now fade in and auto-dismiss after a
+  few seconds instead of sitting there until the panel closes.
+- New: a command palette (Ctrl+K / ⌘K, or the 🔎 icon) — jump to any
+  saved session, or open Settings/About/MCP Servers, by typing instead
+  of hunting through the sidebar. Navigation only for now — it doesn't
+  touch a running session's settings.
+
 ## v0.1.0-beta.34 — 2026-09-09
 
 - Settings, About, and MCP Servers now have an obvious "×" in the
