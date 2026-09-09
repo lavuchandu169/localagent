@@ -695,6 +695,13 @@ function closeAboutPanel(): void {
 
 aboutToggle.addEventListener("click", () => {
   const opening = aboutPanel.hidden;
+  if (opening) {
+    // These are full-window modals now (see .modal-card in styles.css) — only
+    // one should ever be open at once, so opening this one closes whichever
+    // of the other two is currently up first.
+    if (!settingsPanel.hidden) closeSettingsPanel();
+    if (!mcpServersPanel.hidden) closeMcpServersPanel();
+  }
   aboutPanel.hidden = !opening;
   aboutToggle.setAttribute("aria-expanded", String(opening));
   if (opening) {
@@ -781,6 +788,10 @@ async function refreshMcpServersList() {
 
 mcpServersToggle.addEventListener("click", () => {
   const opening = mcpServersPanel.hidden;
+  if (opening) {
+    if (!aboutPanel.hidden) closeAboutPanel();
+    if (!settingsPanel.hidden) closeSettingsPanel();
+  }
   mcpServersPanel.hidden = !opening;
   mcpServersToggle.setAttribute("aria-expanded", String(opening));
   if (opening) {
@@ -895,7 +906,11 @@ function closeSettingsPanel(): void {
 
 settingsToggle.addEventListener("click", async () => {
   const opening = settingsPanel.hidden;
-  if (opening) await openSettingsPanel();
+  if (opening) {
+    if (!aboutPanel.hidden) closeAboutPanel();
+    if (!mcpServersPanel.hidden) closeMcpServersPanel();
+    await openSettingsPanel();
+  }
   settingsPanel.hidden = !opening;
   settingsToggle.setAttribute("aria-expanded", String(opening));
   if (opening) settingsClose.focus();

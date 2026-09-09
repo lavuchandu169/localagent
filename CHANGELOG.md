@@ -3,6 +3,15 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.33 — 2026-09-09
+
+- Settings, About, and MCP Servers are real full-window modals now
+  instead of panels pushed into the page — opening one closes any
+  other that was already open (previously they could stack on top of
+  each other), each fades and scales in smoothly on open, and links
+  and buttons throughout the app now have proper hover/press styling
+  instead of default/no feedback.
+
 ## v0.1.0-beta.32 — 2026-09-08
 
 - "Health check failed" errors now show the real reason instead of that

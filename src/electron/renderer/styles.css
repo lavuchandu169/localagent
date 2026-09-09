@@ -594,17 +594,65 @@ summary:focus-visible {
   width: 100%;
 }
 
+/* Settings/About/MCP Servers are full-window modals now, not panels pushed
+   into the page flow — same backdrop-plus-card pattern as #onboarding-overlay
+   and #whats-new-overlay below. Previously each was its own plain block with
+   no shared-visibility handling, so opening one while another was already
+   open just stacked both in the document flow instead of replacing it (the
+   toggle handlers in renderer.ts now also close the other two before
+   opening one, but the modal treatment is what makes that read as "pages"
+   rather than "panels" once only one is ever open at a time). */
 #about-panel,
 #settings-panel,
 #mcp-servers-panel {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
   font-size: 12px;
   color: var(--text-dim);
-  flex-shrink: 0;
-  overflow-y: auto;
   font-family: var(--font-sans);
+}
+
+/* .row's `display: flex` pattern applies here too — these three set their
+   own `display: flex` above, which beats the UA [hidden] rule. */
+#about-panel[hidden],
+#settings-panel[hidden],
+#mcp-servers-panel[hidden] {
+  display: none;
+}
+
+.modal-card {
+  width: 480px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 20px 24px;
+  border-radius: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  animation: modal-in 180ms ease-out;
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-card {
+    animation: none;
+  }
 }
 
 /* The "Files changed" panel — like about/settings it's a dismissible
@@ -861,6 +909,17 @@ textarea:hover {
 button {
   cursor: pointer;
   font-weight: 500;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease, filter 0.15s ease;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--text-dim);
+  transform: translateY(-1px);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(0.95);
 }
 
 button.primary {
@@ -879,6 +938,17 @@ select:disabled,
 input:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+a:hover {
+  text-decoration: underline;
+  filter: brightness(1.15);
 }
 
 .hint-text {
