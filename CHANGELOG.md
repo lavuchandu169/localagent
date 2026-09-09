@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.34 — 2026-09-09
+
+- Settings, About, and MCP Servers now have an obvious "×" in the
+  top-right corner, and clicking the dimmed backdrop outside any of
+  them closes it too — previously the only way to close Settings was
+  a "Close" button buried mid-panel, easy to miss on a panel that
+  long.
+
 ## v0.1.0-beta.33 — 2026-09-09
 
 - Settings, About, and MCP Servers are real full-window modals now

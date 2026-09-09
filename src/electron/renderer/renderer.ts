@@ -228,6 +228,7 @@ const updateBannerDismiss = byId<HTMLButtonElement>("update-banner-dismiss");
 const aboutToggle = byId<HTMLButtonElement>("about-toggle");
 const aboutPanel = byId<HTMLDivElement>("about-panel");
 const aboutClose = byId<HTMLButtonElement>("about-close");
+const aboutCloseX = byId<HTMLButtonElement>("about-close-x");
 const mcpServersToggle = byId<HTMLButtonElement>("mcp-servers-toggle");
 const mcpServersPanel = byId<HTMLDivElement>("mcp-servers-panel");
 const mcpServersListView = byId<HTMLDivElement>("mcp-servers-list-view");
@@ -244,6 +245,7 @@ const mcpServerEnvInput = byId<HTMLTextAreaElement>("mcp-server-env");
 const mcpServerFormError = byId<HTMLDivElement>("mcp-server-form-error");
 const mcpServerFormSave = byId<HTMLButtonElement>("mcp-server-form-save");
 const mcpServersClose = byId<HTMLButtonElement>("mcp-servers-close");
+const mcpServersCloseX = byId<HTMLButtonElement>("mcp-servers-close-x");
 const reportIssueLink = byId<HTMLAnchorElement>("report-issue-link");
 const openErrorLogBtn = byId<HTMLButtonElement>("open-error-log");
 const onboardingOverlay = byId<HTMLDivElement>("onboarding-overlay");
@@ -257,6 +259,7 @@ const aboutHardware = byId<HTMLSpanElement>("about-hardware");
 const settingsToggle = byId<HTMLButtonElement>("settings-toggle");
 const settingsPanel = byId<HTMLDivElement>("settings-panel");
 const settingsClose = byId<HTMLButtonElement>("settings-close");
+const settingsCloseX = byId<HTMLButtonElement>("settings-close-x");
 const settingsClientIdInput = byId<HTMLInputElement>("settings-client-id");
 const settingsClientSecretInput = byId<HTMLInputElement>("settings-client-secret");
 const settingsEnvOverrideNotice = byId<HTMLDivElement>("settings-env-override");
@@ -710,6 +713,13 @@ aboutToggle.addEventListener("click", () => {
   }
 });
 aboutClose.addEventListener("click", closeAboutPanel);
+aboutCloseX.addEventListener("click", closeAboutPanel);
+// Clicking the dimmed backdrop (not the card itself) closes it — the
+// standard modal affordance, and the only way to close that doesn't
+// depend on scroll position within a possibly-long panel.
+aboutPanel.addEventListener("click", (e) => {
+  if (e.target === aboutPanel) closeAboutPanel();
+});
 
 function closeMcpServersPanel() {
   mcpServersPanel.hidden = true;
@@ -801,6 +811,10 @@ mcpServersToggle.addEventListener("click", () => {
 });
 
 mcpServersClose.addEventListener("click", closeMcpServersPanel);
+mcpServersCloseX.addEventListener("click", closeMcpServersPanel);
+mcpServersPanel.addEventListener("click", (e) => {
+  if (e.target === mcpServersPanel) closeMcpServersPanel();
+});
 
 mcpServersAddToggle.addEventListener("click", () => {
   mcpServerNameInput.value = "";
@@ -917,6 +931,10 @@ settingsToggle.addEventListener("click", async () => {
 });
 
 settingsClose.addEventListener("click", closeSettingsPanel);
+settingsCloseX.addEventListener("click", closeSettingsPanel);
+settingsPanel.addEventListener("click", (e) => {
+  if (e.target === settingsPanel) closeSettingsPanel();
+});
 
 // Escape closes whichever of these dismissible panels/modals is currently
 // open — the standard keyboard expectation. Onboarding and what's-new take
