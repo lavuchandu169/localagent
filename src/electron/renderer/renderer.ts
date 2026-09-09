@@ -219,6 +219,7 @@ const attachFileBtn = byId<HTMLButtonElement>("attach-file");
 const attachmentChipsRow = byId<HTMLDivElement>("attachment-chips");
 const eventLog = byId<HTMLDivElement>("event-log");
 const emptyState = byId<HTMLDivElement>("empty-state");
+const examplePrompts = byId<HTMLDivElement>("example-prompts");
 const updateBanner = byId<HTMLDivElement>("update-banner");
 const updateBannerText = byId<HTMLSpanElement>("update-banner-text");
 const updateBannerLink = byId<HTMLAnchorElement>("update-banner-link");
@@ -675,8 +676,23 @@ Promise.all([window.agent.listCachedModels(), window.agent.getHardwareInfo()]).t
   hardwareInfo = hw;
   const ramGb = (hw.totalRamBytes / 1024 ** 3).toFixed(0);
   aboutHardware.textContent = hw.gpu ? `${ramGb}GB RAM · ${hw.gpu} GPU` : `${ramGb}GB RAM · CPU only`;
-  // Informational only — shows what fits the machine without changing the user's selection.
   refreshEmbeddedModelLabels(cached);
+  // Onboarding-only: before the user has ever dismissed the onboarding
+  // modal (i.e. this machine's very first launch), the dropdown starts on
+  // whatever this hardware can run best instead of always the smallest
+  // model — a one-time nudge toward better quality, not a standing
+  // override of a choice the user has already made on a later launch.
+  let onboardingSeenAtLoad = false;
+  try {
+    onboardingSeenAtLoad = localStorage.getItem(ONBOARDING_SEEN_KEY) === "1";
+  } catch {
+    onboardingSeenAtLoad = true;
+  }
+  if (!onboardingSeenAtLoad && hw.recommended in EMBEDDED_MODELS) {
+    modelSelect.value = hw.recommended;
+    updateModelDependentFields();
+    captureFormIntoTab();
+  }
 });
 
 /** Builds a GitHub "new issue" URL pre-filled with app version/OS/hardware, so a reporter doesn't have to dig this up themselves. */
@@ -1142,6 +1158,46 @@ function dismissOnboarding(): void {
 
 onboardingDismiss.addEventListener("click", dismissOnboarding);
 showOnboardingIfFirstRun();
+
+// Example-task chips — shown above the composer only for the very first
+// session this machine has ever sent a task in, never again after that.
+// Deliberately NOT tied to #empty-state's own visibility: beginSession
+// always logs a "Session started" status line the instant a session
+// starts, which hides #empty-state immediately — before the user would
+// ever get a chance to see anything nested inside it. Distinct from
+// ONBOARDING_SEEN_KEY too: a user can dismiss the onboarding modal (just
+// reading it) well before actually starting a session and sending a task,
+// so this needs its own flag set at the actual moment that matters —
+// runTaskBtn's handler, below.
+const FIRST_TASK_SENT_KEY = "localagent:first-task-sent";
+
+function firstTaskAlreadySent(): boolean {
+  try {
+    return localStorage.getItem(FIRST_TASK_SENT_KEY) === "1";
+  } catch {
+    return true; // an inaccessible localStorage shouldn't show this every time — treat as already past it
+  }
+}
+
+function markFirstTaskSent(): void {
+  try {
+    localStorage.setItem(FIRST_TASK_SENT_KEY, "1");
+  } catch {
+    // Best-effort — if this fails, the chips just show again next time; not worth surfacing an error for.
+  }
+}
+
+/** Called from clearAndReplayEventLog, which already knows whether the active tab has a live session — the chips only make sense once a task can actually be sent (taskInput isn't disabled). */
+function updateExamplePromptsVisibility(hasSession: boolean): void {
+  examplePrompts.hidden = !hasSession || firstTaskAlreadySent();
+}
+
+for (const chip of document.querySelectorAll<HTMLButtonElement>(".example-prompt-chip")) {
+  chip.addEventListener("click", () => {
+    taskInput.value = chip.textContent ?? "";
+    taskInput.focus();
+  });
+}
 
 const WHATS_NEW_SEEN_KEY = "localagent:whats-new-seen-version";
 
@@ -2100,6 +2156,7 @@ function clearAndReplayEventLog(tab: TabState): void {
   for (const event of tab.events) renderEvent(event);
 
   const hasSession = tab.sessionId !== null;
+  updateExamplePromptsVisibility(hasSession);
   setSetupControlsDisabled(hasSession);
   setupSection.hidden = hasSession && !tab.editingSession;
   editSettingsBtn.hidden = !hasSession;
@@ -2422,6 +2479,7 @@ void refreshSessionList("");
 runTaskBtn.addEventListener("click", async () => {
   const tab = activeTab(tabRegistry);
   if (!tab?.sessionId || (!taskInput.value.trim() && tab.pendingAttachments.length === 0)) return;
+  markFirstTaskSent();
   toolCards.clear();
   runTaskBtn.disabled = true;
   tab.running = true;

@@ -3,6 +3,17 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.36 — 2026-09-09
+
+- First-run onboarding: on this machine's very first launch, the Model
+  dropdown now starts on whichever embedded model your hardware can
+  run best instead of always the smallest one (later launches leave
+  your own choice alone). Your first-ever session also shows a few
+  clickable example tasks above the composer ("Explain what this
+  codebase does", etc.) — pick one to fill in the task box, edit it if
+  you want, then hit Run. Shown once, never again after your first
+  real task.
+
 ## v0.1.0-beta.35 — 2026-09-09
 
 - Chat turns, status lines, and tool diagnostics now fade in as they

@@ -1536,6 +1536,33 @@ label .hint-text {
   opacity: 0.5;
 }
 
+#example-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 0;
+}
+
+#example-prompts[hidden] {
+  display: none;
+}
+
+.example-prompt-chip {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  color: var(--text);
+}
+
+.example-prompt-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  transform: none;
+}
+
 .log-status,
 .log-task,
 .log-text,
