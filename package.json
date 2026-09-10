@@ -1,7 +1,7 @@
 {
   "name": "localagent",
   "version": "0.1.0-beta.36",
-  "description": "Local-first autonomous coding agent prototype (vertical slice: Phases 1-5)",
+  "description": "A local-first autonomous coding agent for macOS and Windows — bring your own model (embedded GGUF, Ollama/LM Studio/vLLM, or Claude), with a real agent loop, permission engine, MCP tools, and multi-session desktop UI.",
   "license": "UNLICENSED",
   "author": "Chandu Lavu",
   "repository": {

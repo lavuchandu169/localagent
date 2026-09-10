@@ -5,5 +5,7 @@ release/
 .env
 .claude/
 .superpowers/
+.DS_Store
+docs/superpowers/
 src/electron/embeddedCredentials.ts
 src/whatsNew.ts
