@@ -3,6 +3,15 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.38 — 2026-09-11
+
+- Fixed beta.37: the Windows signing hook was at the wrong config path
+  (`win.sign` instead of `win.signtoolOptions.sign`) for the pinned
+  electron-builder version, which failed config validation and broke
+  both platforms' builds outright — caught by beta.37's own CI run.
+  Verified this time against the installed electron-builder's actual
+  JSON schema, not a search result describing a different version.
+
 ## v0.1.0-beta.37 — 2026-09-11
 
 - No user-visible change — this release exists to verify in CI that the
