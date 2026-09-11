@@ -82,28 +82,38 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Prepare signing/notarization environment
+        shell: bash
+        # GitHub Actions' `env: X: ${{ secrets.Y }}` always defines X as an
+        # empty string when the secret doesn't exist — it never omits the
+        # variable. electron-builder's CSC_LINK handling treats that empty
+        # string as "a path was given" and tries to resolve it, landing on
+        # the job's working directory itself ("... not a file") instead of
+        # skipping signing. Verified locally: with these truly unset,
+        # electron-builder correctly logs "skipped macOS application code
+        # signing" and continues; with them set to "", it hard-fails. This
+        # step only ever writes a name to $GITHUB_ENV when the secret is
+        # genuinely non-empty, so the variable is either real or fully
+        # absent for the next step — never present-but-empty.
+        run: |
+          set_if_present() {
+            if [ -n "$2" ]; then
+              echo "$1=$2" >> "$GITHUB_ENV"
+            fi
+          }
+          set_if_present CSC_LINK "${{ secrets.CSC_LINK }}"
+          set_if_present CSC_KEY_PASSWORD "${{ secrets.CSC_KEY_PASSWORD }}"
+          set_if_present APPLE_API_KEY "${{ secrets.APPLE_API_KEY }}"
+          set_if_present APPLE_API_KEY_ID "${{ secrets.APPLE_API_KEY_ID }}"
+          set_if_present APPLE_API_ISSUER "${{ secrets.APPLE_API_ISSUER }}"
+          set_if_present APPLE_TEAM_ID "${{ secrets.APPLE_TEAM_ID }}"
+          set_if_present APPLE_ID "${{ secrets.APPLE_ID }}"
+          set_if_present APPLE_APP_SPECIFIC_PASSWORD "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}"
       - run: npm run package:mac -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID_EMBED }}
           GOOGLE_OAUTH_CLIENT_SECRET_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET_EMBED }}
-          # Signing (Developer ID Application certificate) — electron-builder
-          # skips signing entirely when CSC_LINK is unset, exactly today's
-          # unsigned behavior, so these being empty repo secrets changes
-          # nothing until real ones are added.
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          # Notarization — mac.notarize:true (package.json) only takes effect
-          # once one of these credential sets is actually present; @electron/
-          # notarize logs "skipped" and continues otherwise, it doesn't fail
-          # the build. API-key method (recommended: no expiry, no 2FA) or the
-          # Apple-ID method — whichever set ends up populated is used.
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
 
   build-win:
     needs: create-release
@@ -123,16 +133,25 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Prepare signing environment
+        shell: bash
+        # Same reasoning as build-mac's equivalent step: only ever define
+        # these when the secret is genuinely non-empty, so
+        # scripts/sign-windows.mjs's own "is this set" check (and whatever
+        # real SSL.com call eventually replaces its stub) never has to
+        # distinguish "unset" from "empty string" — it's just unset.
+        run: |
+          set_if_present() {
+            if [ -n "$2" ]; then
+              echo "$1=$2" >> "$GITHUB_ENV"
+            fi
+          }
+          set_if_present ES_USERNAME "${{ secrets.ES_USERNAME }}"
+          set_if_present ES_PASSWORD "${{ secrets.ES_PASSWORD }}"
+          set_if_present CREDENTIAL_ID "${{ secrets.CREDENTIAL_ID }}"
+          set_if_present ES_TOTP_SECRET "${{ secrets.ES_TOTP_SECRET }}"
       - run: npm run package:win -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID_EMBED }}
           GOOGLE_OAUTH_CLIENT_SECRET_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET_EMBED }}
-          # SSL.com eSigner — read by scripts/sign-windows.mjs (win.sign in
-          # package.json). That script no-ops when these are unset, same as
-          # today's unsigned build, until it's actually implemented against
-          # a real SSL.com account (see the comment at the top of the file).
-          ES_USERNAME: ${{ secrets.ES_USERNAME }}
-          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
-          CREDENTIAL_ID: ${{ secrets.CREDENTIAL_ID }}
-          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}

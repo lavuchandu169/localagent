@@ -3,6 +3,17 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.39 — 2026-09-11
+
+- Fixed beta.38: build-mac still failed — GitHub Actions defines a
+  secret-backed env var as an empty string when the secret doesn't
+  exist rather than omitting it, and electron-builder's `CSC_LINK`
+  handling treats that empty string as a real (invalid) path instead of
+  "no certificate," crashing instead of skipping signing. Reproduced
+  and confirmed locally before pushing this time. The workflow now only
+  ever defines these variables when the underlying secret is actually
+  non-empty, for both platforms.
+
 ## v0.1.0-beta.38 — 2026-09-11
 
 - Fixed beta.37: the Windows signing hook was at the wrong config path
