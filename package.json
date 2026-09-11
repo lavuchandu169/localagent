@@ -1,6 +1,6 @@
 {
   "name": "localagent",
-  "version": "0.1.0-beta.36",
+  "version": "0.1.0-beta.37",
   "description": "A local-first autonomous coding agent for macOS and Windows — bring your own model (embedded GGUF, Ollama/LM Studio/vLLM, or Claude), with a real agent loop, permission engine, MCP tools, and multi-session desktop UI.",
   "license": "UNLICENSED",
   "author": "Chandu Lavu",
@@ -59,7 +59,11 @@
             "arm64"
           ]
         }
-      ]
+      ],
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "notarize": true
     },
     "win": {
       "icon": "src/electron/renderer/icon-512.png",
@@ -70,7 +74,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "sign": "scripts/sign-windows.mjs"
     },
     "publish": {
       "provider": "github",

@@ -3,6 +3,17 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.37 — 2026-09-11
+
+- No user-visible change — this release exists to verify in CI that the
+  code-signing/notarization groundwork below doesn't break the existing
+  unsigned build. Mac packaging now has hardened-runtime entitlements and
+  notarization wired up (inactive until real Apple credentials are added
+  as repo secrets — `@electron/notarize` skips gracefully without them,
+  it doesn't fail the build); Windows packaging has an SSL.com eSigner
+  signing hook stubbed in (also inactive until real credentials exist).
+  Both installers remain unsigned for now.
+
 ## v0.1.0-beta.36 — 2026-09-09
 
 - First-run onboarding: on this machine's very first launch, the Model

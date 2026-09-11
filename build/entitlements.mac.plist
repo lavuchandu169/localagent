@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Standard Electron hardened-runtime entitlements — required for
+    notarization once this app is signed. Electron itself documents these
+    same four as necessary for any Electron app: allow-jit and
+    allow-unsigned-executable-memory are for V8's JIT compiler,
+    disable-library-validation lets the process load node-llama-cpp's
+    native @node-llama-cpp/* addons (compiled separately, not signed by
+    this app's own Developer ID), and network.client is this app's real
+    outbound network use (Anthropic API, Google OAuth/Drive, Hugging Face
+    model downloads, MCP servers, GitHub update checks) once a user opts
+    into a feature that needs it.
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>
