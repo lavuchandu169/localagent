@@ -917,6 +917,48 @@ await (async () => {
     check("it still completes", events.filter((e) => e.type === "done").length === 1);
   }
 
+  {
+    // A real reported failure: a MODIFICATION-phrased task (no "create/
+    // build/add"-style verb at all) answered with fenced code and zero tool
+    // calls, exactly like the creation case above. taskImpliesCreation's
+    // verb whitelist must catch this phrasing too, not just literal
+    // creation wording, or this exact bug resurfaces for the far more common
+    // "change/update/fix existing code" task shape.
+    const script: ChatResponse[] = [
+      { turn: { type: "final", content: "Here's the updated route:\n```python\n@app.route('/x', methods=['POST'])\n```" } },
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "app.py" } },
+            { id: "e1", name: "edit_file", arguments: { path: "app.py", content: "@app.route('/x', methods=['POST'])\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "Changed it." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    await fs.writeFile(path.join(tmpDir, "app.py"), "@app.route('/x', methods=['GET'])\n", "utf-8");
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("change the /x route in app.py from GET to POST")) {
+      events.push(event);
+    }
+    check(
+      "a modification-phrased task ('change...') answered with code-in-prose is nudged, same as a creation task",
+      events.filter((e) => e.type === "status" && e.message.includes("nudging")).length === 1
+    );
+    const writtenContent = await fs.readFile(path.join(tmpDir, "app.py"), "utf-8").catch(() => null);
+    check("the file was actually written after the nudge", writtenContent === "@app.route('/x', methods=['POST'])\n");
+  }
+
   await fs.rm(tmpDir, { recursive: true, force: true });
 })();
 

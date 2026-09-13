@@ -3,6 +3,18 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.40 — 2026-09-13
+
+- Fixed a gap in beta.18's "model describes code instead of writing it"
+  safety net: it only recognized literal creation wording ("create",
+  "build", "add", ...), so a modification-phrased task ("change the X
+  route from GET to POST") could still get answered entirely in prose
+  with nothing written to disk, uncaught. Now also recognizes change/
+  update/modify/fix/refactor/rename/edit/replace/convert/remove/delete
+  — arguably the more common way to phrase a real task against
+  existing code. Found from a real report, reproduced with a failing
+  test before fixing it.
+
 ## v0.1.0-beta.39 — 2026-09-11
 
 - Fixed beta.38: build-mac still failed — GitHub Actions defines a

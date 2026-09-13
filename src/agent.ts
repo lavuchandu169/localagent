@@ -80,9 +80,19 @@ Rules:
 6. For tasks that require understanding a whole project (summarizing, reviewing, documenting, or answering "what does this codebase do"), use list_directory and grep to build a complete picture and read every file that's actually relevant — don't stop after one or two files just because you have *an* answer, if the task implies covering the whole thing.
 7. When asked to create, write, build, design, or scaffold something, materialize it for real via edit_file — one call per file, never all of it crammed into a single call, and never left as code in your reply instead of a real tool call. See the IMPORTANT section above.`;
 
-/** A rough "this task is asking for something to be built" signal — deliberately generous (false positives just cost one harmless extra nudge turn; false negatives bring back the exact bug this exists to catch), used only to gate the corrective nudge below. */
+/**
+ * A rough "this task asks for a file to end up different than it is now"
+ * signal — deliberately generous (false positives just cost one harmless
+ * extra nudge turn; false negatives bring back the exact bug this exists to
+ * catch), used only to gate the corrective nudge below. Originally covered
+ * only literal creation verbs (create/build/add/...); a real report showed
+ * a modification-phrased task ("change the X route from GET to POST") hit
+ * the exact same code-in-prose failure and slipped through uncaught, so
+ * this also covers changing/fixing/refactoring existing code — not just
+ * building something new.
+ */
 function taskImpliesCreation(task: string): boolean {
-  return /\b(create|write|build|design|scaffold|make|generate|implement|add)\b/i.test(task);
+  return /\b(create|write|build|design|scaffold|make|generate|implement|add|change|update|modify|fix|refactor|rename|edit|replace|convert|remove|delete)\b/i.test(task);
 }
 
 /** Whether a response's text contains a real fenced code block (as opposed to a stray inline single backtick) — the tell-tale sign the model wrote out file content instead of calling edit_file. */
