@@ -92,12 +92,14 @@ Rules:
  * building something new.
  */
 function taskImpliesCreation(task: string): boolean {
-  return /\b(create|write|build|design|scaffold|make|generate|implement|add|change|update|modify|fix|refactor|rename|edit|replace|convert|remove|delete)\b/i.test(task);
+  return /\b(create|write|rewrite|build|design|scaffold|make|generate|implement|add|change|update|modify|fix|patch|refactor|rename|edit|replace|convert|remove|delete|optimi[sz]e|tweak|clean ?up)\b/i.test(
+    task
+  );
 }
 
-/** Whether a response's text contains a real fenced code block (as opposed to a stray inline single backtick) — the tell-tale sign the model wrote out file content instead of calling edit_file. */
+/** Whether a response's text contains a real fenced code block — the tell-tale sign the model wrote out file content instead of calling edit_file. Checks both fence styles (``` and ~~~); a model doesn't reliably pick one over the other. */
 function containsFencedCode(content: string): boolean {
-  return (content.match(/```/g)?.length ?? 0) >= 2;
+  return (content.match(/```/g)?.length ?? 0) >= 2 || (content.match(/~~~/g)?.length ?? 0) >= 2;
 }
 
 export class AgentSession {
@@ -112,8 +114,25 @@ export class AgentSession {
   private checkpointHash: string | null = null;
   /** Whether THIS task has already attempted its one checkpoint — reset at the start of every run() call. Attempted, not "succeeded": a non-git workspace or any other createCheckpoint failure still marks this true so every subsequent write this task doesn't retry it. */
   private checkpointAttemptedThisTask = false;
-  /** Whether THIS task has attempted (called, regardless of approval outcome) any WRITE-permission tool yet — reset at the start of every run() call. Feeds the corrective-nudge check below: if the model already tried to write and was denied, that's a real policy decision, not the "described code instead of writing it" failure the nudge exists to catch. */
+  /**
+   * Whether the model's MOST RECENT attempt at a WRITE-permission tool this
+   * task was denied or rejected — reset at the start of every run() call,
+   * and every time any write attempt happens (set true only if that attempt
+   * was denied/rejected; cleared back to false the moment any write actually
+   * succeeds). Feeds the corrective-nudge check below: if the model already
+   * tried to write and was told no, that's a real policy decision to
+   * respect, not the "described code instead of writing it" failure the
+   * nudge exists to catch — but that grace must not persist forever. It
+   * used to be a plain "has any write ever been attempted this task" flag,
+   * which meant a task that wrote file 1 successfully then described files
+   * 2 and 3 in prose (never calling edit_file for them) was never nudged
+   * for those — the earlier success permanently disarmed the check for the
+   * rest of the task. Scoping it to "was the most recent attempt a denial"
+   * instead closes that gap while still preserving its original purpose.
+   */
   private wroteThisTask = false;
+  /** Whether ANY write this task has actually succeeded (unlike wroteThisTask, this never gets cleared once true) — reset at the start of every run() call. Lets the "final" branch tell a genuinely completed task apart from one where the corrective nudge fired and the model still never wrote anything, even after being told to. */
+  private anyWriteSucceededThisTask = false;
   /** Whether the one-shot corrective nudge (see the "final" branch in run()) has already fired this task — reset at the start of every run() call. At most one nudge per task, so a model that ignores it too doesn't loop forever. */
   private correctiveNudgeSentThisTask = false;
   /** Whether THIS task's first-turn plan has already been proposed — reset at the start of every run() call. Gates only turn 1; once a task's plan has been shown (and approved), later turns in that same task run normally. */
@@ -246,6 +265,7 @@ export class AgentSession {
     this.state = "THINKING";
     this.checkpointAttemptedThisTask = false;
     this.wroteThisTask = false;
+    this.anyWriteSucceededThisTask = false;
     this.correctiveNudgeSentThisTask = false;
     this.planProposedThisTask = false;
     yield* this.autoReadNamedFiles(task);
@@ -348,7 +368,20 @@ export class AgentSession {
         this.messages.push({ role: "assistant", content: response.turn.content });
         yield { type: "text", text: response.turn.content };
         this.state = "COMPLETED";
-        yield { type: "done", success: true, summary: response.turn.content };
+        // A task whose corrective nudge already fired (the model was
+        // explicitly told to call edit_file instead of describing files)
+        // and which STILL never got a single successful write this task
+        // didn't actually do what it claimed — verified live: a small model
+        // can apologize in prose right back instead of complying, and that
+        // used to still report success:true with nothing ever written.
+        const nudgeFailedToProduceAWrite = this.correctiveNudgeSentThisTask && !this.anyWriteSucceededThisTask;
+        yield nudgeFailedToProduceAWrite
+          ? {
+              type: "done",
+              success: false,
+              summary: "The model described changes but never actually wrote them, even after being asked to. Nothing was changed.",
+            }
+          : { type: "done", success: true, summary: response.turn.content };
         return;
       }
 
@@ -381,14 +414,6 @@ export class AgentSession {
         if (call.name === "read_file" && typeof call.arguments.path === "string") {
           this.readPaths.add(call.arguments.path);
         }
-        // Attempted, not "succeeded" — even a call that goes on to get
-        // denied proves the model knows how to reach for edit_file, which
-        // is exactly what the corrective nudge below needs to know it
-        // doesn't need to fire.
-        if (tool.permission === "WRITE") {
-          this.wroteThisTask = true;
-        }
-
         // One checkpoint per task, taken before the FIRST tool call this
         // task that isn't pure READ — regardless of what decision that call
         // ends up getting (ALLOW/ASK/DENY), same principle as the diff
@@ -420,6 +445,7 @@ export class AgentSession {
         yield diff ? { type: "permission.request", call, decision, diff } : { type: "permission.request", call, decision };
 
         if (decision === "DENY") {
+          if (tool.permission === "WRITE") this.wroteThisTask = true;
           this.messages.push({
             role: "tool",
             tool_call_id: call.id,
@@ -433,6 +459,7 @@ export class AgentSession {
         if (decision === "ASK") {
           const response = this.opts.onApprovalNeeded ? await this.opts.onApprovalNeeded(call) : { approved: false };
           if (!response.approved) {
+            if (tool.permission === "WRITE") this.wroteThisTask = true;
             this.messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -488,6 +515,15 @@ export class AgentSession {
           },
         });
         yield { type: "tool.result", call, result };
+        // A write that actually succeeded clears any earlier denial's grace
+        // period — the model has now demonstrably completed a real write
+        // this task, so a LATER final turn describing yet more files in
+        // prose deserves a fresh nudge, not leftover suppression from an
+        // unrelated earlier denial.
+        if (tool.permission === "WRITE" && result.ok) {
+          this.wroteThisTask = false;
+          this.anyWriteSucceededThisTask = true;
+        }
 
         this.messages.push({
           role: "tool",

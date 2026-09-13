@@ -3,6 +3,20 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.41 — 2026-09-13
+
+- Three more gaps found in the "model describes code instead of writing
+  it" safety net, via a deeper review after beta.40 plus a live retry
+  that reproduced one live: (1) a multi-file task that wrote one file
+  for real then described the rest in prose was never nudged for those
+  — an earlier success no longer excuses later files going unwritten;
+  (2) a task where the nudge fires but the model still never writes
+  anything (verified live — it can just apologize in prose again) now
+  correctly reports failure instead of a false "done"; (3) the verb
+  whitelist gated the nudge on now also recognizes rewrite/patch/
+  optimize/tweak/clean up, and fenced-code detection now also catches
+  ~~~ fences, not just triple-backtick ones.
+
 ## v0.1.0-beta.40 — 2026-09-13
 
 - Fixed a gap in beta.18's "model describes code instead of writing it"

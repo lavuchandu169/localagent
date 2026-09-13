@@ -959,6 +959,90 @@ await (async () => {
     check("the file was actually written after the nudge", writtenContent === "@app.route('/x', methods=['POST'])\n");
   }
 
+  {
+    // A real reported gap: wroteThisTask used to be "has any write EVER
+    // happened this task" — permanently true the instant one file was
+    // written, even successfully. A multi-file task that writes file 1
+    // for real, then describes files 2 and 3 in prose in a LATER turn,
+    // must still get nudged for those — an earlier success shouldn't
+    // excuse later files never being written.
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "index.html" } },
+            { id: "e1", name: "edit_file", arguments: { path: "index.html", content: "<html></html>\n" } },
+          ],
+        },
+      },
+      {
+        turn: {
+          type: "final",
+          content: "Here's style.css and app.js:\n```css\nbody {}\n```\n```js\nconsole.log('hi');\n```",
+        },
+      },
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r2", name: "read_file", arguments: { path: "style.css" } },
+            { id: "e2", name: "edit_file", arguments: { path: "style.css", content: "body {}\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "Done." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("scaffold index.html, style.css, and app.js")) {
+      events.push(event);
+    }
+    check(
+      "a successful write to one file doesn't excuse later files described in prose from being nudged",
+      events.filter((e) => e.type === "status" && e.message.includes("nudging")).length === 1
+    );
+    const styleWritten = await fs.readFile(path.join(tmpDir, "style.css"), "utf-8").catch(() => null);
+    check("the second file was actually written after that nudge", styleWritten === "body {}\n");
+  }
+
+  {
+    // A real reported failure, seen live: the nudge fires (once), but a
+    // small model can just apologize in prose again instead of actually
+    // calling edit_file. correctiveNudgeSentThisTask correctly stops it from
+    // being nudged a second time — but the task must not then silently
+    // report success when nothing was ever written.
+    const script: ChatResponse[] = [
+      { turn: { type: "final", content: "Here's foo.py:\n```python\nprint('hi')\n```" } },
+      { turn: { type: "final", content: "Sorry for the confusion — I was only explaining, nothing was written." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("create foo.py that prints hi")) {
+      events.push(event);
+    }
+    check("the nudge still fires exactly once", events.filter((e) => e.type === "status" && e.message.includes("nudging")).length === 1);
+    const doneEvent = events.find((e) => e.type === "done");
+    check(
+      "a task where the nudge fired but nothing was ever written reports success:false, not a false success",
+      doneEvent?.type === "done" && doneEvent.success === false
+    );
+  }
+
   await fs.rm(tmpDir, { recursive: true, force: true });
 })();
 
