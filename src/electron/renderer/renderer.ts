@@ -1499,6 +1499,7 @@ function renderEvent(event: AgentEvent): void {
       result.className = event.result.ok ? "tool-card-ok" : "tool-card-error";
       result.textContent = event.result.ok ? "ok" : `error: ${event.result.error ?? "unknown"}`;
       card.appendChild(result);
+      eventLog.scrollTop = eventLog.scrollHeight;
       break;
     }
     case "permission.request": {
@@ -1517,6 +1518,7 @@ function renderEvent(event: AgentEvent): void {
         status.className = "log-status";
         status.textContent = `[permission] ${event.call.name} -> ${event.decision}`;
         card.appendChild(status);
+        eventLog.scrollTop = eventLog.scrollHeight;
         break;
       }
       const prompt = document.createElement("div");
@@ -1556,6 +1558,7 @@ function renderEvent(event: AgentEvent): void {
       prompt.appendChild(approve);
       prompt.appendChild(deny);
       card.appendChild(prompt);
+      eventLog.scrollTop = eventLog.scrollHeight;
       break;
     }
     case "checkpoint.created":

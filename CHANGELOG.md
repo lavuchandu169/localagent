@@ -3,6 +3,16 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.43 — 2026-09-14
+
+- Fixed the event log not auto-scrolling when a diff, an approve/deny
+  prompt, or a tool's result got appended to an already-visible tool
+  card — every other kind of update already auto-scrolled, these two
+  didn't, so a diff or a completed tool call could land below the
+  visible area with nothing pulling it into view. Live progress (the
+  "Turn N: thinking…" status lines and tool-call cards already existed
+  — this was about them actually staying in view as they update.)
+
 ## v0.1.0-beta.42 — 2026-09-14
 
 - Doubled the embedded provider's output token cap (2048 → 4096).
