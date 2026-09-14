@@ -18,6 +18,7 @@ import { extractFilenameCandidates } from "./filenameCandidates.js";
 import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
 import { createCheckpoint } from "./checkpoints.js";
+import { detectVerifyCommand } from "./verifyCommand.js";
 
 export interface AgentSessionOptions {
   workspaceRoot: string;
@@ -133,6 +134,18 @@ export class AgentSession {
   private wroteThisTask = false;
   /** Whether ANY write this task has actually succeeded (unlike wroteThisTask, this never gets cleared once true) — reset at the start of every run() call. Lets the "final" branch tell a genuinely completed task apart from one where the corrective nudge fired and the model still never wrote anything, even after being told to. */
   private anyWriteSucceededThisTask = false;
+  /**
+   * Whether a write has succeeded since the last auto-verify attempt (or
+   * since task start, if none has run yet) — reset at the start of every
+   * run() call, set true on every successful WRITE-tool execution, cleared
+   * the moment an auto-verify attempt actually runs (see autoVerifyAfterEdit
+   * and its call site in the "final" branch below). This makes auto-verify
+   * fire once per NEW batch of writes, not just once per task — a model
+   * that edits again after a failed verification still gets checked again
+   * before it's allowed to claim done a second time, bounded by the
+   * existing per-task turn budget either way.
+   */
+  private writeSucceededSinceLastVerify = false;
   /** Whether the one-shot corrective nudge (see the "final" branch in run()) has already fired this task — reset at the start of every run() call. At most one nudge per task, so a model that ignores it too doesn't loop forever. */
   private correctiveNudgeSentThisTask = false;
   /** Whether THIS task's first-turn plan has already been proposed — reset at the start of every run() call. Gates only turn 1; once a task's plan has been shown (and approved), later turns in that same task run normally. */
@@ -252,6 +265,70 @@ export class AgentSession {
     }
   }
 
+  /**
+   * Runtime-enforced verification, same principle as autoReadNamedFiles and
+   * the corrective nudge above: don't just trust a "done" claim after a
+   * write succeeded — actually run the project's own test command, if one
+   * can be detected, and let the model see the real result before the task
+   * actually finishes. Same spirit as demo.ts's scripted proof ("verified by
+   * rerunning math.test.js... only reports success after seeing a real exit
+   * code 0"), generalized to real sessions. Goes through the exact same
+   * PermissionEngine check as any model-issued run_command call — this
+   * never bypasses PLAN mode, ASK, or DENY.
+   *
+   * Returns true if a verify command was found and actually run (whether it
+   * passed or not) — the caller loops back for one more turn either way, so
+   * the model reacts to a real result instead of the task ending on an
+   * unverified claim. Returns false if no recognizable verify command
+   * exists for this workspace, or no run_command tool is registered — a
+   * total no-op in both cases, identical to today's behavior.
+   */
+  private async *autoVerifyAfterEdit(): AsyncGenerator<AgentEvent, boolean> {
+    const command = await detectVerifyCommand(this.opts.workspaceRoot);
+    if (!command) return false;
+    const tool = this.opts.tools.get("run_command");
+    if (!tool) return false;
+
+    const call: ToolCall = { id: `auto_verify_${this.turn}`, name: "run_command", arguments: { command } };
+    const decision = this.permissions.evaluate(call, tool.permission);
+    yield { type: "permission.request", call, decision };
+    this.messages.push({ role: "assistant", content: "", tool_calls: [call] });
+
+    if (decision === "DENY") {
+      this.messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        name: call.name,
+        content: JSON.stringify({ ok: false, error: "Permission denied by policy." }),
+      });
+      return true;
+    }
+    if (decision === "ASK") {
+      const response = this.opts.onApprovalNeeded ? await this.opts.onApprovalNeeded(call) : { approved: false };
+      if (!response.approved) {
+        this.messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          name: call.name,
+          content: JSON.stringify({ ok: false, error: "User rejected this action." }),
+        });
+        return true;
+      }
+    }
+
+    this.state = "EXECUTING_TOOL";
+    yield { type: "tool.start", call };
+    const result = await tool.execute(call.arguments, { workspaceRoot: this.opts.workspaceRoot, log: () => {} });
+    yield { type: "tool.result", call, result };
+    this.messages.push({
+      role: "tool",
+      tool_call_id: call.id,
+      name: call.name,
+      content: JSON.stringify(result).slice(0, 6000),
+    });
+    return true;
+  }
+
   /** The current revert target, if any — the most recent task that actually wrote/executed something in a git workspace. Read by the caller (sessionRegistry) after each run(), not pushed as its own event stream, since it needs to survive independently of whatever events a specific run() happened to yield. */
   getCheckpointHash(): string | null {
     return this.checkpointHash;
@@ -266,6 +343,7 @@ export class AgentSession {
     this.checkpointAttemptedThisTask = false;
     this.wroteThisTask = false;
     this.anyWriteSucceededThisTask = false;
+    this.writeSucceededSinceLastVerify = false;
     this.correctiveNudgeSentThisTask = false;
     this.planProposedThisTask = false;
     yield* this.autoReadNamedFiles(task);
@@ -367,6 +445,17 @@ export class AgentSession {
 
         this.messages.push({ role: "assistant", content: response.turn.content });
         yield { type: "text", text: response.turn.content };
+
+        if (this.writeSucceededSinceLastVerify) {
+          this.writeSucceededSinceLastVerify = false;
+          const verified = yield* this.autoVerifyAfterEdit();
+          if (verified) {
+            this.turn++;
+            this.state = "THINKING";
+            continue;
+          }
+        }
+
         this.state = "COMPLETED";
         // A task whose corrective nudge already fired (the model was
         // explicitly told to call edit_file instead of describing files)
@@ -523,6 +612,7 @@ export class AgentSession {
         if (tool.permission === "WRITE" && result.ok) {
           this.wroteThisTask = false;
           this.anyWriteSucceededThisTask = true;
+          this.writeSucceededSinceLastVerify = true;
         }
 
         this.messages.push({

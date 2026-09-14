@@ -39,6 +39,8 @@ check("rm is DESTRUCTIVE", classifyCommand("rm -rf foo") === "DESTRUCTIVE");
 check("git status is SAFE_READ", classifyCommand("git status") === "SAFE_READ");
 check("npm install is NETWORK", classifyCommand("npm install left-pad") === "NETWORK");
 check("unrecognized command is UNKNOWN", classifyCommand("some-custom-tool --flag") === "UNKNOWN");
+check("cargo test is SAFE_READ", classifyCommand("cargo test") === "SAFE_READ");
+check("go test is SAFE_READ", classifyCommand("go test ./...") === "SAFE_READ");
 
 console.log("\nPermission engine:");
 {
@@ -1044,6 +1046,103 @@ await (async () => {
   }
 
   await fs.rm(tmpDir, { recursive: true, force: true });
+})();
+
+console.log("\nAuto-verify after a successful edit:");
+await (async () => {
+  {
+    // A workspace with a real, fast, dependency-free "npm test" script —
+    // after the write succeeds and the model tries to finish, auto-verify
+    // should inject a real run_command("npm test") call (going through the
+    // exact same permission path as any model-issued command — SAFE_READ,
+    // so it auto-allows) BEFORE the task is allowed to complete, then give
+    // the model one more turn to react to the real result.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-autoverify-test-"));
+    await fs.writeFile(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "x", scripts: { test: "node -e \"process.exit(0)\"" } }),
+      "utf-8"
+    );
+
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "math.js" } },
+            { id: "e1", name: "edit_file", arguments: { path: "math.js", content: "module.exports = { add: (a, b) => a + b };\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "Fixed the bug." } },
+      { turn: { type: "final", content: "Confirmed — the test run passed." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("fix the bug in math.js")) {
+      events.push(event);
+    }
+
+    const verifyCall = events.find((e) => e.type === "tool.start" && e.call.name === "run_command");
+    check("auto-verify injected a real run_command call after the write succeeded", !!verifyCall);
+    check(
+      "the injected call actually ran npm test",
+      verifyCall?.type === "tool.start" && verifyCall.call.arguments.command === "npm test"
+    );
+    const verifyResult = events.find((e) => e.type === "tool.result" && e.call.name === "run_command");
+    check("the auto-verify command actually succeeded (real exit code 0)", verifyResult?.type === "tool.result" && verifyResult.result.ok === true);
+    const doneEvent = events.find((e) => e.type === "done");
+    check(
+      "the task's final summary reflects the model's turn AFTER seeing the verify result, not before",
+      doneEvent?.type === "done" && doneEvent.success === true && doneEvent.summary === "Confirmed — the test run passed."
+    );
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+
+  {
+    // A workspace with nothing recognizable — auto-verify must be a total
+    // no-op, same behavior as before this feature existed.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-autoverify-none-test-"));
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "notes.txt" } },
+            { id: "e1", name: "edit_file", arguments: { path: "notes.txt", content: "hello\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "Done." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("write hello to notes.txt")) {
+      events.push(event);
+    }
+    check(
+      "no recognizable project means no run_command is ever injected",
+      !events.some((e) => e.type === "tool.start" && e.call.name === "run_command")
+    );
+    check("the task still completes normally on its own final turn", events.filter((e) => e.type === "done").length === 1);
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 })();
 
 console.log("\nPlan first — a task's first turn held for approval before anything runs:");

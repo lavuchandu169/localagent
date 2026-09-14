@@ -3,6 +3,17 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.44 — 2026-09-14
+
+- New: auto-verify after an edit. Once a task's write actually succeeds,
+  if the workspace has a recognizable test command (`npm test`'s real
+  script, `pytest`, `cargo test`, or `go test`), it now runs
+  automatically — through the exact same permission check as any other
+  command, never bypassing PLAN/ASK/DENY — and the model sees the real
+  result before the task is allowed to report done, instead of just its
+  own claim. A workspace with no recognizable test setup is unaffected,
+  same as before this existed.
+
 ## v0.1.0-beta.43 — 2026-09-14
 
 - Fixed the event log not auto-scrolling when a diff, an approve/deny

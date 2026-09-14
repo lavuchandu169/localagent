@@ -2,7 +2,19 @@ import type { PermissionMode, PermissionDecision, ToolCall, PermissionLevel } fr
 
 // Deterministic command risk classification (Section 16).
 // The LLM's judgment is never trusted alone for safety-relevant decisions.
-const SAFE_READ_COMMANDS = [/^pwd\b/, /^ls\b/, /^git status\b/, /^git log\b/, /^git diff\b/, /^cat\b/, /^npm test\b/, /^pytest\b/, /^node --version/];
+const SAFE_READ_COMMANDS = [
+  /^pwd\b/,
+  /^ls\b/,
+  /^git status\b/,
+  /^git log\b/,
+  /^git diff\b/,
+  /^cat\b/,
+  /^npm test\b/,
+  /^pytest\b/,
+  /^node --version/,
+  /^cargo test\b/,
+  /^go test\b/,
+];
 const NETWORK_COMMANDS = [/^npm install\b/, /^pip install\b/, /^npm ci\b/, /^curl\b/, /^wget\b/];
 const DESTRUCTIVE_COMMANDS = [/^rm\b/, /^git reset --hard/, /^git clean -fd/, /^sudo\b/, /^:>/, /^mkfs/];
 

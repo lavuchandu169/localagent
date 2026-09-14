@@ -56,6 +56,12 @@ remaining gaps, instead of burying them.
 - Runtime-enforced grounding: if a task names a real file, it gets read
   automatically before the model's first turn — small local models proved
   unreliable at doing this on their own from prompt wording alone.
+- Runtime-enforced verification: once a task's edit actually succeeds, if
+  the workspace has a recognizable test command (`npm test`, `pytest`,
+  `cargo test`, `go test`), it's run automatically — through the same
+  permission check as any other command — and the model gets a real
+  pass/fail result before it's allowed to call the task done, instead of
+  its own unverified claim.
 - **Plan first** (off by default): hold a task's very first move for your
   approval before any of it executes, instead of only finding out after
   the fact.
