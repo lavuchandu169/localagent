@@ -3,6 +3,16 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.45 — 2026-09-15
+
+- Honest messaging update, no behavior change: the onboarding modal and
+  the two smallest coding models' labels now say plainly that they can
+  be unreliable on complex, multi-file changes — sometimes describing
+  an edit instead of actually making it — and that Claude is the more
+  dependable choice for real work. First launch still defaults to the
+  hardware-recommended embedded model either way; this only makes the
+  real tradeoff visible instead of silent.
+
 ## v0.1.0-beta.44 — 2026-09-14
 
 - New: auto-verify after an edit. Once a task's write actually succeeds,

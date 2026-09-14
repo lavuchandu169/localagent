@@ -34,14 +34,14 @@ export const EMBEDDED_MODELS: Record<EmbeddedModelId, EmbeddedModelInfo> = {
     name: "Qwen2.5-Coder 1.5B Instruct",
     quant: "Q4_K_M",
     category: "coding",
-    sizeNote: "fastest, lowest memory — default",
+    sizeNote: "fastest, lowest memory — default — can be unreliable on complex, multi-file changes",
   },
   "qwen-coder-3b": {
     uri: "hf:Qwen/Qwen2.5-Coder-3B-Instruct-GGUF:Q4_K_M",
     name: "Qwen2.5-Coder 3B Instruct",
     quant: "Q4_K_M",
     category: "coding",
-    sizeNote: "better quality, more memory",
+    sizeNote: "better quality, more memory — can be unreliable on complex, multi-file changes",
   },
   "qwen-coder-7b": {
     uri: "hf:Qwen/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M",

@@ -204,8 +204,8 @@ the id.
 
 | Id | Name | Purpose | Note |
 |---|---|---|---|
-| `qwen-coder-1.5b` | Qwen2.5-Coder 1.5B Instruct | Coding | fastest, lowest memory — default |
-| `qwen-coder-3b` | Qwen2.5-Coder 3B Instruct | Coding | better quality, more memory |
+| `qwen-coder-1.5b` | Qwen2.5-Coder 1.5B Instruct | Coding | fastest, lowest memory — default — can be unreliable on complex, multi-file changes |
+| `qwen-coder-3b` | Qwen2.5-Coder 3B Instruct | Coding | better quality, more memory — can be unreliable on complex, multi-file changes |
 | `qwen-coder-7b` | Qwen2.5-Coder 7B Instruct | Coding | best quality, needs a capable machine |
 | `qwen-3b` | Qwen2.5 3B Instruct | Chat | fast, general-purpose |
 | `llama-3.2-3b` | Llama 3.2 3B Instruct | Chat | fast, general-purpose |
