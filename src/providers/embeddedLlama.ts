@@ -312,7 +312,15 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     const result = await chat.generateResponse(history, {
       functions,
       documentFunctionParams: true,
-      maxTokens: request.maxTokens ?? 2048,
+      // 2048 was too tight for any real file-editing task — edit_file needs
+      // the model to reproduce a WHOLE file's new content as one argument,
+      // not a diff, so anything past a small fixture file could get cut off
+      // mid-generation. Verified live: a real ~190-line app.py truncated
+      // mid-JSON well before the model could finish, even on a turn where
+      // it was genuinely trying to comply. Still bounded by this session's
+      // own contextSize cap (see loadChat's createContext call) — raising
+      // this alone can't exceed whatever room is actually left in context.
+      maxTokens: request.maxTokens ?? 4096,
     });
     return fromLlamaResult(result);
   }

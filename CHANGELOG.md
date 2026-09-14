@@ -3,6 +3,15 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.42 — 2026-09-14
+
+- Doubled the embedded provider's output token cap (2048 → 4096).
+  `edit_file` needs the model to reproduce a file's whole new content
+  as one argument, not a diff — 2048 was too tight for any real
+  (non-trivial) file, and could cut a response off mid-generation on a
+  turn where the model was genuinely trying to comply. Verified live
+  against a real ~190-line file that was hitting exactly this.
+
 ## v0.1.0-beta.41 — 2026-09-13
 
 - Three more gaps found in the "model describes code instead of writing
