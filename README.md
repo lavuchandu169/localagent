@@ -9,6 +9,7 @@ review, multi-session tabs, and a polished desktop app on top, with nothing
 required to leave your machine unless you explicitly choose a cloud model.
 
 [![Latest release](https://img.shields.io/github/v/release/lavuchandu169/localagent?include_prereleases&label=release)](https://github.com/lavuchandu169/localagent/releases)
+[![CI](https://github.com/lavuchandu169/localagent/actions/workflows/ci.yml/badge.svg)](https://github.com/lavuchandu169/localagent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-proprietary-red)](LICENSE)
 ![Node](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript&logoColor=white)
@@ -494,6 +495,14 @@ Electron session registry (start/provider selection/event
 streaming/cancellation) via `MockProvider`, local session persistence,
 diff/checkpoint computation, and Drive-backed cloud sync (CRUD +
 reconcile) against a fake `fetch` — real behavior, not framework mocks.
+
+## Contributing
+
+Development happens on a `develop` branch, merged into `main` (protected,
+always releasable) to cut a release tag from. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the branch strategy, workflow, and
+how CI is wired up. Found a security issue? See
+[SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ## Project structure
 

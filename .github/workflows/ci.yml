@@ -1,0 +1,33 @@
+name: CI
+
+# Runs the build + full test suite on every push and pull request against
+# main and develop. Separate from release.yml (which is tag-triggered and
+# handles the actual build/sign/publish): this is the fast, cheap gate that
+# every ordinary commit goes through, so a broken change can't land on
+# develop or main in the first place, let alone reach a release tag.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test

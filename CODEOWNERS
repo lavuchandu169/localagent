@@ -1,0 +1,4 @@
+# Default owner for everything in the repo. GitHub will request a review
+# from this owner on pull requests that touch matching files, once branch
+# protection's review requirement is turned on for this repo.
+* @lavuchandu169
