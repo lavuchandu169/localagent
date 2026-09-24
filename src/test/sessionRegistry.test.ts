@@ -25,6 +25,22 @@ import { DriveScopeError } from "../cloudSync.js";
 import { groupDiffIntoSegments } from "../diffUtil.js";
 import type { AgentEvent, ChatResponse } from "../types.js";
 
+// A fixed sleep-then-check ("wait 50ms, assume the ASK prompt arrived by
+// now") is exactly how the partial-hunk-approval test above flaked: a
+// two-tool-call script (read_file then edit_file) genuinely needs more
+// than one round trip to reach its edit_file permission.request, so the
+// fixed budget sometimes checked too early, found no matching event, and
+// approved a call id that hadn't been requested yet — leaving the real,
+// later request with no one left to answer it. Polling for the actual
+// condition removes the guess entirely.
+async function waitFor(predicate: () => boolean, timeoutMs = 2000, intervalMs = 5): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("waitFor: condition not met within timeout");
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 let failures = 0;
 function check(name: string, cond: boolean) {
   if (cond) {
@@ -32,6 +48,26 @@ function check(name: string, cond: boolean) {
   } else {
     failures++;
     console.error(`  FAIL - ${name}`);
+  }
+}
+
+// Promise.race's losing side keeps its timer running for the full delay
+// even after the race settles — with two 5s timeouts near the end of this
+// file, those dangling timers were still pending when the file's very last
+// line called process.exit(), which Node's "unsettled top-level await"
+// diagnostic treats as a bug: it overrides the explicit exit code with 13
+// instead. clearTimeout in a finally block once the race settles avoids it.
+async function raceWithTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer!);
   }
 }
 
@@ -364,8 +400,9 @@ await (async () => {
 
     const events: AgentEvent[] = [];
     const runPromise = runTask(registry, sessionId, "fix the bug", (e) => events.push(e));
-    // Give the loop a tick to reach the edit_file ASK prompt and start awaiting it.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Wait for the actual edit_file ASK prompt — the read_file turn before it
+    // needs its own round trip first, so a fixed sleep can't reliably outlast it.
+    await waitFor(() => events.some((e) => e.type === "permission.request" && e.call.name === "edit_file"));
 
     const editEvent = events.find((e) => e.type === "permission.request" && e.call.name === "edit_file");
     const diff = editEvent?.type === "permission.request" ? editEvent.diff : undefined;
@@ -496,19 +533,13 @@ await (async () => {
 
     const events: AgentEvent[] = [];
     const runPromise = runTask(registry, sessionId, "edit a file", (e) => events.push(e));
-    // Give the loop a tick to reach the ASK permission prompt and start awaiting it.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Wait for the actual ASK prompt rather than assuming a fixed delay covers it.
+    await waitFor(() => events.some((e) => e.type === "permission.request" && e.call.name === "edit_file"));
 
     // removeSession must resolve the pending approval (with false) rather than
     // leaving runTask hanging forever.
-    await Promise.race([
-      removeSession(registry, sessionId),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("removeSession did not resolve in time")), 5000)),
-    ]);
-    await Promise.race([
-      runPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("runTask hung after removeSession — pending approval was never resolved")), 5000)),
-    ]);
+    await raceWithTimeout(removeSession(registry, sessionId), 5000, "removeSession did not resolve in time");
+    await raceWithTimeout(runPromise, 5000, "runTask hung after removeSession — pending approval was never resolved");
 
     check("runTask completes instead of hanging after its session is deleted mid-approval", true);
   })();
