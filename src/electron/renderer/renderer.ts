@@ -1748,9 +1748,17 @@ function renderActiveModelBadge(provider: ProviderConfig): void {
           })()
         : `${provider.model} (${provider.baseUrl})`;
   const gpuText = provider.kind === "embedded" && hardwareInfo?.gpu ? ` · ${hardwareInfo.gpu} GPU` : "";
+  // Provider identity color, at a glance, alongside the always-present text
+  // label — kept as a lookup rather than a growing ternary chain so a future
+  // provider kind is one new entry, not a restructured expression.
+  const providerDotClass: Record<ProviderConfig["kind"], string> = {
+    embedded: "signal-dot-embedded",
+    anthropic: "signal-dot-anthropic",
+    "openai-compatible": "signal-dot-custom",
+  };
   activeModelBadge.innerHTML = "";
   const dot = document.createElement("span");
-  dot.className = "signal-dot";
+  dot.className = `signal-dot ${providerDotClass[provider.kind]}`;
   activeModelBadge.appendChild(dot);
   activeModelBadge.appendChild(document.createTextNode(`${modelText}${gpuText}`));
   activeModelBadge.hidden = false;
