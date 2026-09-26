@@ -9,3 +9,5 @@ release/
 docs/superpowers/
 src/electron/embeddedCredentials.ts
 src/whatsNew.ts
+
+.worktrees/
