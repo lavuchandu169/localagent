@@ -63,6 +63,21 @@
   --diff-added-bg: rgba(63, 185, 80, 0.15);
   --diff-removed: #f85149;
   --diff-removed-bg: rgba(248, 81, 73, 0.15);
+  /* Purposeful state colors, distinct from --accent (which every theme
+     reuses for its own brand identity) — success/info give task and
+     provider states their own meaning instead of everything but
+     warn/danger sharing one brand color. */
+  --success: #3fb950;
+  --info: #58a6ff;
+
+  /* Provider identity colors — deliberately NOT overridden per-theme
+     (unlike --accent) so a provider reads as the same color regardless
+     of which theme is active, the same way a real brand mark would. */
+  --provider-anthropic: #c15f3c;
+  --provider-openai: #10a37f;
+  --provider-gemini: #4285f4;
+  --provider-embedded: #8a8270;
+  --provider-custom: #8a8270;
 
   --font-sans: "Public Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace;
@@ -79,6 +94,8 @@
   --accent-contrast: #0d1512;
   --warn: #d8c27f;
   --danger: #f85149;
+  --success: #7fb8a0;
+  --info: #7fa8d8;
   --gutter-you: #8a8a8a;
   --gutter-agent: #7fb8a0;
   --statusbar-bg: #262626;
@@ -418,10 +435,27 @@ summary:focus-visible {
 .tab-strip-item-dot {
   flex-shrink: 0;
   font-size: 10px;
+  color: var(--text-dim);
 }
 
+/* Each tab state gets its own color instead of every glyph sharing the
+   default dim text color — running/waiting/done/error are the things a
+   glance at the tab strip needs to tell apart fastest. */
 .tab-strip-item-dot-running {
+  color: var(--info);
   animation: dot-breathe 1.4s ease-in-out infinite;
+}
+
+.tab-strip-item-dot-waiting-approval {
+  color: var(--warn);
+}
+
+.tab-strip-item-dot-done {
+  color: var(--success);
+}
+
+.tab-strip-item-dot-error {
+  color: var(--danger);
 }
 
 @keyframes dot-breathe {
@@ -1290,6 +1324,34 @@ label .hint-text {
   background: var(--statusbar-text);
 }
 
+/* The status bar's own background IS a provider-ish brand color already
+   (--statusbar-bg), so a raw provider hue could land invisible against a
+   near-identical bar color (Anthropic's rust dot on a rust bar, in Warm
+   Dark). A thin ring in the bar's guaranteed-readable text color keeps
+   the dot visible regardless of how close the two hues land. */
+#status-bar #active-model-badge .signal-dot-anthropic,
+#status-bar #active-model-badge .signal-dot-openai,
+#status-bar #active-model-badge .signal-dot-gemini,
+#status-bar #active-model-badge .signal-dot-embedded,
+#status-bar #active-model-badge .signal-dot-custom {
+  box-shadow: 0 0 0 1px var(--statusbar-text);
+}
+#status-bar #active-model-badge .signal-dot-anthropic {
+  background: var(--provider-anthropic);
+}
+#status-bar #active-model-badge .signal-dot-openai {
+  background: var(--provider-openai);
+}
+#status-bar #active-model-badge .signal-dot-gemini {
+  background: var(--provider-gemini);
+}
+#status-bar #active-model-badge .signal-dot-embedded {
+  background: var(--provider-embedded);
+}
+#status-bar #active-model-badge .signal-dot-custom {
+  background: var(--provider-custom);
+}
+
 #status-bar #edit-settings,
 #status-bar #view-changes,
 #status-bar #revert-checkpoint {
@@ -1330,6 +1392,25 @@ label .hint-text {
   border-radius: 50%;
   background: var(--accent);
   margin-right: 6px;
+}
+
+/* Provider identity, at a glance — renderActiveModelBadge sets one of
+   these per the active session's provider.kind. Falls back to --accent
+   above for anything not yet classified. */
+#active-model-badge .signal-dot-anthropic {
+  background: var(--provider-anthropic);
+}
+#active-model-badge .signal-dot-openai {
+  background: var(--provider-openai);
+}
+#active-model-badge .signal-dot-gemini {
+  background: var(--provider-gemini);
+}
+#active-model-badge .signal-dot-embedded {
+  background: var(--provider-embedded);
+}
+#active-model-badge .signal-dot-custom {
+  background: var(--provider-custom);
 }
 
 /* The composer: a terminal-style input bar docked at the bottom of the
@@ -1604,7 +1685,7 @@ label .hint-text {
 }
 
 .log-done {
-  color: var(--accent);
+  color: var(--success);
   font-weight: 600;
   font-family: var(--font-sans);
   font-size: 12px;
@@ -1810,7 +1891,7 @@ label .hint-text {
 }
 
 .permission-prompt .approve-btn {
-  background: var(--accent);
+  background: var(--success);
   color: var(--accent-contrast);
   border: none;
   font-weight: 600;
