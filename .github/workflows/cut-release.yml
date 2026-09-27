@@ -2,9 +2,11 @@ name: Cut Release
 
 # The one manual step CONTRIBUTING.md's release process used to require by
 # hand: bump package.json's version, add a matching CHANGELOG.md entry,
-# push a vX.Y.Z tag. This workflow does all three from a single manual
-# trigger (a maintainer clicking "Run workflow" and typing the changelog
-# text) — everything after that is automatic: open the version-bump PR,
+# push a vX.Y.Z tag. This runs automatically after every merge to main
+# (deriving the changelog entry from the merged PR's own title — nothing
+# to type), and can still be triggered manually (workflow_dispatch) for a
+# non-beta bump or a hand-written multi-line changelog entry. Either way,
+# everything past "what changed" is the same: open the version-bump PR,
 # let it auto-merge once CI passes (main's branch protection still gates
 # it — nothing here bypasses that), then push the tag once merged, which
 # fires release.yml exactly like a hand-pushed tag always has.
@@ -19,6 +21,9 @@ permissions:
   pull-requests: write
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       bump_type:
@@ -43,17 +48,68 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: main
+
+      # A push-triggered run fires for EVERY commit that lands on main —
+      # including the release-bump PR's own squash-merge commit (opened by
+      # this very workflow, below). Without this guard, that merge would
+      # itself trigger another run, which would cut another release, whose
+      # merge would trigger another run — an infinite release loop. The
+      # release-bump PR's title always starts with "Release vX.Y.Z" (set
+      # explicitly below) and a squash-merge's commit message always
+      # starts with the PR title, regardless of this repo's "default squash
+      # commit message" setting — so this is a reliable, precise match, not
+      # a guess. workflow_dispatch runs are never guarded: a maintainer
+      # triggering one manually is never the automation seeing its own tail.
+      - name: Guard against re-releasing our own release-bump merge
+        id: guard
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && echo "$COMMIT_MESSAGE" | grep -qE '^Release v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "This push is the release-bump PR's own merge — not cutting another release."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v7
+        if: steps.guard.outputs.skip != 'true'
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+        if: steps.guard.outputs.skip != 'true'
+
+      # A push-triggered run has no human-supplied changelog text — the
+      # merged PR's own title (available regardless of merge method:
+      # squash, merge commit, or rebase all still resolve back to their
+      # source PR through this API) stands in for it, same one-line style
+      # most hand-written entries already use. Falls back to the commit
+      # message's own subject line only if no associated PR is found at
+      # all (a direct push to main, bypassing the PR flow, which branch
+      # protection shouldn't normally allow — cheap insurance, not the
+      # expected path).
+      - name: Determine changelog entry from the merged PR (push-triggered runs only)
+        id: pr_info
+        if: steps.guard.outputs.skip != 'true' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TITLE=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].title // empty')
+          if [ -z "$TITLE" ]; then
+            TITLE=$(git log -1 --format=%s | sed -E 's/ \(#[0-9]+\)$//')
+          fi
+          echo "changelog_entry<<CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+          echo "$TITLE" >> "$GITHUB_OUTPUT"
+          echo "CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
 
       - name: Bump version and update CHANGELOG.md
         id: bump
+        if: steps.guard.outputs.skip != 'true'
         env:
-          CHANGELOG_ENTRY: ${{ inputs.changelog_entry }}
-        run: node scripts/bump-version.mjs "${{ inputs.bump_type }}"
+          CHANGELOG_ENTRY: ${{ github.event_name == 'workflow_dispatch' && inputs.changelog_entry || steps.pr_info.outputs.changelog_entry }}
+        run: node scripts/bump-version.mjs "${{ github.event_name == 'workflow_dispatch' && inputs.bump_type || 'beta' }}"
 
       # Validates the bump before anything is committed or pushed —
       # generate-whats-new.mjs (part of `npm run build`) throws if
@@ -63,10 +119,13 @@ jobs:
       # PR opened — the working tree just has an uncommitted version bump
       # that the next run of this workflow starts over from main anyway.
       - run: npm run build
+        if: steps.guard.outputs.skip != 'true'
       - run: npm test
+        if: steps.guard.outputs.skip != 'true'
 
       - name: Open the release PR and enable auto-merge
         id: pr
+        if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -94,6 +153,7 @@ jobs:
           gh pr merge "$PR_URL" --auto --squash --delete-branch
 
       - name: Wait for the release PR to merge, then tag it
+        if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
