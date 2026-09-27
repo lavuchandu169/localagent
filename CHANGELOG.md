@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.47 — 2026-09-27
+
+- Verified the full Cut Release pipeline end-to-end, including the fork-PR-workflow-approval fix (github-actions[bot]'s release PR no longer needs manual CI approval).
+
 ## v0.1.0-beta.46 — 2026-09-27
 
 - Manual verification run: confirms the Cut Release automation completes end-to-end now that GitHub Actions is allowed to open pull requests.
