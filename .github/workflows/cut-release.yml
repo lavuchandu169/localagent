@@ -2,14 +2,22 @@ name: Cut Release
 
 # The one manual step CONTRIBUTING.md's release process used to require by
 # hand: bump package.json's version, add a matching CHANGELOG.md entry,
-# push a vX.Y.Z tag. This runs automatically after every merge to main
-# (deriving the changelog entry from the merged PR's own title — nothing
-# to type), and can still be triggered manually (workflow_dispatch) for a
-# non-beta bump or a hand-written multi-line changelog entry. Either way,
-# everything past "what changed" is the same: open the version-bump PR,
-# let it auto-merge once CI passes (main's branch protection still gates
-# it — nothing here bypasses that), then push the tag once merged, which
-# fires release.yml exactly like a hand-pushed tag always has.
+# push a vX.Y.Z tag. This runs automatically after every merge to main OR
+# develop (deriving the changelog entry from the merged PR's own title —
+# nothing to type), and can still be triggered manually (workflow_dispatch,
+# from whichever branch you pick in "Use workflow from") for a non-beta
+# bump or a hand-written multi-line changelog entry. Either way, everything
+# past "what changed" is the same: open a version-bump PR against the SAME
+# branch that triggered this run, let it auto-merge once CI passes (that
+# branch's own protection still gates it — nothing here bypasses that),
+# then push the tag once merged, which fires release.yml exactly like a
+# hand-pushed tag always has, regardless of which branch it points at.
+#
+# Known tradeoff, chosen deliberately: since develop is later promoted into
+# main via its own PR, and that promotion is itself a merge to main, a
+# release cut from a develop merge gets a SECOND, near-duplicate release
+# cut again when develop's changes reach main. Nothing here de-duplicates
+# that — every merge to either branch is its own release, by design.
 #
 # Requires the repo's "Allow auto-merge" setting to be on (Settings →
 # General → Pull Requests) — without it, `gh pr merge --auto` below is
@@ -24,6 +32,7 @@ on:
   push:
     branches:
       - main
+      - develop
   workflow_dispatch:
     inputs:
       bump_type:
@@ -45,12 +54,18 @@ jobs:
   cut-release:
     runs-on: ubuntu-latest
     steps:
+      # github.ref_name is the branch that triggered this run — the pushed
+      # branch for a push event, or whichever branch was picked in
+      # workflow_dispatch's "Use workflow from" dropdown for a manual run.
+      # Every later step targets this same branch, never a hardcoded one,
+      # so the exact same job body handles a main release and a develop
+      # release without duplicating the workflow.
       - uses: actions/checkout@v7
         with:
-          ref: main
+          ref: ${{ github.ref_name }}
 
-      # A push-triggered run fires for EVERY commit that lands on main —
-      # including the release-bump PR's own squash-merge commit (opened by
+      # A push-triggered run fires for EVERY commit that lands on main or
+      # develop — including the release-bump PR's own squash-merge commit (opened by
       # this very workflow, below). Without this guard, that merge would
       # itself trigger another run, which would cut another release, whose
       # merge would trigger another run — an infinite release loop. The
@@ -86,9 +101,9 @@ jobs:
       # source PR through this API) stands in for it, same one-line style
       # most hand-written entries already use. Falls back to the commit
       # message's own subject line only if no associated PR is found at
-      # all (a direct push to main, bypassing the PR flow, which branch
-      # protection shouldn't normally allow — cheap insurance, not the
-      # expected path).
+      # all (a direct push to main or develop, bypassing the PR flow, which
+      # branch protection shouldn't normally allow — cheap insurance, not
+      # the expected path).
       - name: Determine changelog entry from the merged PR (push-triggered runs only)
         id: pr_info
         if: steps.guard.outputs.skip != 'true' && github.event_name == 'push'
@@ -131,7 +146,8 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.bump.outputs.version }}"
-          BRANCH="release/v$VERSION"
+          TARGET_BRANCH="${{ github.ref_name }}"
+          BRANCH="release/$TARGET_BRANCH/v$VERSION"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -140,16 +156,16 @@ jobs:
           git commit -m "chore: bump version to $VERSION for release"
           git push origin "$BRANCH"
 
-          PR_URL=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+          PR_URL=$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$TARGET_BRANCH" --head "$BRANCH" \
             --title "Release v$VERSION" \
             --body "Automated release PR from the Cut Release workflow. Bumps package.json to v$VERSION and adds its CHANGELOG.md entry. Auto-merges once CI passes; merging pushes the \`v$VERSION\` tag, which triggers the real build/publish (release.yml).")
           echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
 
-          # required_approving_review_count is 0 on this repo's main branch
-          # protection, so the only real gate left is the "test" status
-          # check — --auto waits for that (and any other required check)
-          # to pass before merging, same as a human clicking "Merge" would
-          # have to.
+          # required_approving_review_count is 0 on both main's and
+          # develop's branch protection, so the only real gate left is the
+          # "test" status check — --auto waits for that (and any other
+          # required check) to pass before merging, same as a human
+          # clicking "Merge" would have to, on whichever branch this is.
           gh pr merge "$PR_URL" --auto --squash --delete-branch
 
       - name: Wait for the release PR to merge, then tag it
@@ -159,10 +175,11 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.bump.outputs.version }}"
+          TARGET_BRANCH="${{ github.ref_name }}"
           PR_URL="${{ steps.pr.outputs.pr_url }}"
 
-          # CI (the "test" job, triggered by this PR against main) has to
-          # actually run and finish before auto-merge can fire — polling
+          # CI (the "test" job, triggered by this PR against $TARGET_BRANCH)
+          # has to actually run and finish before auto-merge can fire — polling
           # rather than assuming it's instant. 40 tries * 15s = 10 minutes,
           # comfortably above this project's Node-only suite runtime; a
           # genuine CI failure leaves the PR open (auto-merge never fires)
@@ -188,7 +205,7 @@ jobs:
             exit 1
           fi
 
-          git fetch origin main
-          git tag "v$VERSION" origin/main
+          git fetch origin "$TARGET_BRANCH"
+          git tag "v$VERSION" "origin/$TARGET_BRANCH"
           git push origin "v$VERSION"
           echo "Pushed tag v$VERSION — release.yml will build and publish it now."
