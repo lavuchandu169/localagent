@@ -1222,6 +1222,44 @@ await (async () => {
   check("exactly one error event fires, not a hang or a loop", events.filter((e) => e.type === "error").length === 1);
 })();
 
+console.log("\nA fallback switch does not persist into the session's next task:");
+await (async () => {
+  const primaryScript: MockScriptEntry[] = [
+    { throws: new ProviderChatError("rate limited", { status: 429, retryable: true }) },
+    { turn: { type: "final", content: "second task done on primary" } },
+  ];
+  const fallbackScript: ChatResponse[] = [{ turn: { type: "final", content: "done via fallback" } }];
+  const primaryProvider = new MockProvider(primaryScript);
+  const fallbackProvider = new MockProvider(fallbackScript);
+
+  const session = new AgentSession({
+    workspaceRoot: os.tmpdir(),
+    model: "primary-model",
+    provider: primaryProvider,
+    providerLabel: "Primary (Anthropic)",
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN",
+    fallbackProviders: [{ provider: fallbackProvider, model: "fallback-model", label: "Fallback (Gemini)" }],
+  });
+
+  for await (const _event of session.run("say hi")) {
+    // drain task 1 — expected to fall back
+  }
+  check("task 1 falls back as usual", fallbackProvider.receivedRequests.length === 1);
+
+  const secondTaskEvents: AgentEvent[] = [];
+  for await (const event of session.run("say hi again")) {
+    secondTaskEvents.push(event);
+  }
+
+  check(
+    "task 2 is asked of the original primary provider, not the fallback",
+    primaryProvider.receivedRequests.length === 2
+  );
+  check("task 2 does not re-use the already-consumed fallback provider", fallbackProvider.receivedRequests.length === 1);
+  check("task 2 completes successfully on the restored primary", secondTaskEvents.some((e) => e.type === "done" && e.success === true));
+})();
+
 console.log("\nPlan first — a task's first turn held for approval before anything runs:");
 await (async () => {
   const __filename = fileURLToPath(import.meta.url);

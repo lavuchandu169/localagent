@@ -52,5 +52,18 @@ console.log("resolveFallbackOrder:");
   check("excluding the only configured provider leaves nothing to fall back to", order.length === 0);
 }
 
+{
+  // A key saved by a version of the app that predates addedAt (or written
+  // directly, bypassing saveAnthropicSettings) has no addedAt field at all
+  // — loadAnthropicSettings reads that back as apiKey set, addedAt: null.
+  // Such a key must still be usable as a fallback candidate, not silently
+  // dropped just because it predates the ordering field.
+  const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-fallback-test-"));
+  await fs.writeFile(path.join(settingsDir, "geminiSettings.json"), JSON.stringify({ apiKey: "legacy-gk-1" }));
+  const order = await resolveFallbackOrder(settingsDir, undefined, "anthropic");
+  check("a key with no addedAt at all (pre-dates the field) still becomes a fallback candidate", order.length === 1);
+  check("its real saved API key is carried through", order[0]?.apiKey === "legacy-gk-1");
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

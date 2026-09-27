@@ -165,8 +165,28 @@ export class AgentSession {
   /** Whether THIS task's first-turn plan has already been proposed — reset at the start of every run() call. Gates only turn 1; once a task's plan has been shown (and approved), later turns in that same task run normally. */
   private planProposedThisTask = false;
 
+  /**
+   * The session's real primary — provider/model/label/fallbackProviders as
+   * originally configured, captured once here and never touched again. A
+   * mid-task fallback switch mutates this.opts directly (see run()'s catch
+   * block) so the rest of THAT task keeps using the fallback, but the spec
+   * only promises the switch "for the remainder of the task" — restored
+   * from these at the top of every run() so a later task in the same
+   * session starts back on the real primary, with the full fallback list
+   * available again, rather than staying pinned to whatever provider the
+   * previous task happened to end on.
+   */
+  private readonly originalProvider: ModelProvider;
+  private readonly originalModel: string;
+  private readonly originalProviderLabel: string | undefined;
+  private readonly originalFallbackProviders: { provider: ModelProvider; model: string; label: string }[] | undefined;
+
   constructor(private opts: AgentSessionOptions) {
     this.permissions = new PermissionEngine(opts.permissionMode);
+    this.originalProvider = opts.provider;
+    this.originalModel = opts.model;
+    this.originalProviderLabel = opts.providerLabel;
+    this.originalFallbackProviders = opts.fallbackProviders;
     if (opts.initialMessages && opts.initialMessages.length > 0) {
       this.messages = [...opts.initialMessages];
     } else {
@@ -353,6 +373,10 @@ export class AgentSession {
     attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }
   ): AsyncGenerator<AgentEvent> {
     this.messages.push({ role: "user", content: task, ...attachments });
+    this.opts.provider = this.originalProvider;
+    this.opts.model = this.originalModel;
+    this.opts.providerLabel = this.originalProviderLabel;
+    this.opts.fallbackProviders = this.originalFallbackProviders ? [...this.originalFallbackProviders] : this.originalFallbackProviders;
     this.state = "THINKING";
     this.checkpointAttemptedThisTask = false;
     this.wroteThisTask = false;

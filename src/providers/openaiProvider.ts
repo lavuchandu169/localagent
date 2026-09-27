@@ -42,6 +42,17 @@ export class OpenAIProvider implements ModelProvider {
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const body = buildChatBody({ ...request, model: request.model || this.model });
+    // buildChatBody's max_tokens is right for arbitrary self-hosted
+    // OpenAI-COMPATIBLE servers (OpenAICompatibleProvider's own use of it),
+    // but the real, hosted OpenAI API rejects max_tokens outright on its
+    // current model line with a non-retryable 400 telling callers to use
+    // max_completion_tokens instead — only this class talks to the real
+    // API, so only here is the field renamed, leaving the shared
+    // buildChatBody (and every custom-server caller) untouched.
+    if ("max_tokens" in body) {
+      body.max_completion_tokens = body.max_tokens;
+      delete body.max_tokens;
+    }
 
     const res = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
       method: "POST",

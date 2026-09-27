@@ -239,16 +239,29 @@ await (async () => {
 
   console.log("\nstartSession does NOT build fallbackProviders when the primary is embedded or a custom server:");
   await (async () => {
+    // Config-aware, deliberately the mirror image of the "builds
+    // fallbackProviders" test above: if the exclusion guard were ever
+    // removed or narrowed, this factory would hand back a SUCCEEDING
+    // provider for the would-be fallback candidates, so the task would
+    // complete successfully via the fallback — the same false-negative
+    // this test exists to catch. A factory that returns a fresh throwing
+    // mock for every kind (the bug this replaced) can't tell "the guard
+    // held" apart from "the guard failed but the fallback also happened to
+    // fail" — this one can.
     const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));
     await saveOpenAISettings(path.join(settingsDir, "openaiSettings.json"), { apiKey: "sk-fallback" });
     await saveAnthropicSettings(path.join(settingsDir, "anthropicSettings.json"), { apiKey: "ak-fallback" });
 
+    const wouldBeFallback = new MockProvider([{ turn: { type: "final", content: "should never run" } }]);
     const registry = createSessionRegistry(sessionsDir);
-    const script = [{ throws: new ProviderChatError("simulated crash", { retryable: true }) }, { turn: { type: "final", content: "should never run" } }];
+    const script = [{ throws: new ProviderChatError("simulated crash", { retryable: true }) }];
     const { sessionId } = await startSession(
       registry,
       { workspaceRoot, provider: { kind: "openai-compatible", baseUrl: "http://localhost:1234/v1", model: "local-model" }, mode: "DEFAULT" },
-      { providerFactory: () => new MockProvider(script as any), settingsDir }
+      {
+        providerFactory: (c) => (c.kind === "openai-compatible" ? new MockProvider(script as any) : wouldBeFallback),
+        settingsDir,
+      }
     );
     const events: AgentEvent[] = [];
     await runTask(registry, sessionId, "say hi", (e) => events.push(e));
@@ -256,6 +269,41 @@ await (async () => {
       "a custom-server primary's error fails the task instead of falling back to a cloud provider it never asked for",
       events.some((e) => e.type === "done" && e.success === false)
     );
+    check(
+      "no fallback switch was ever attempted",
+      !events.some((e) => e.type === "status" && e.message.includes("hit a rate limit"))
+    );
+    check("the would-be fallback provider was never even constructed/called", wouldBeFallback.receivedRequests.length === 0);
+  })();
+
+  console.log("\nstartSession does NOT build fallbackProviders when the primary is the embedded local model:");
+  await (async () => {
+    const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));
+    await saveOpenAISettings(path.join(settingsDir, "openaiSettings.json"), { apiKey: "sk-fallback" });
+    await saveAnthropicSettings(path.join(settingsDir, "anthropicSettings.json"), { apiKey: "ak-fallback" });
+
+    const wouldBeFallback = new MockProvider([{ turn: { type: "final", content: "should never run" } }]);
+    const registry = createSessionRegistry(sessionsDir);
+    const script = [{ throws: new ProviderChatError("simulated crash", { retryable: true }) }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      {
+        providerFactory: (c) => (c.kind === "embedded" ? new MockProvider(script as any) : wouldBeFallback),
+        settingsDir,
+      }
+    );
+    const events: AgentEvent[] = [];
+    await runTask(registry, sessionId, "say hi", (e) => events.push(e));
+    check(
+      "an embedded-model primary's error fails the task instead of silently switching to a cloud provider",
+      events.some((e) => e.type === "done" && e.success === false)
+    );
+    check(
+      "no fallback switch was ever attempted",
+      !events.some((e) => e.type === "status" && e.message.includes("hit a rate limit"))
+    );
+    check("the would-be fallback provider was never even constructed/called", wouldBeFallback.receivedRequests.length === 0);
   })();
 
   {

@@ -93,5 +93,30 @@ console.log("\nOpenAI provider parses a successful tool-call response:");
   }
 }
 
+console.log("\nOpenAI provider sends max_completion_tokens, not max_tokens:");
+{
+  // OpenAI's real Chat Completions API rejects the classic max_tokens
+  // field outright (a non-retryable 400, "Unsupported parameter: 'max_tokens'
+  // ... use 'max_completion_tokens' instead") on its current reasoning-
+  // capable model line, unlike the generic OpenAI-COMPATIBLE path (custom
+  // self-hosted servers) which this provider's buildChatBody reuse would
+  // otherwise inherit unmodified. A real OpenAIProvider request must use
+  // the field the real, hosted API actually accepts.
+  const realFetch = globalThis.fetch;
+  let capturedBody: any = null;
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    capturedBody = JSON.parse(init?.body as string);
+    return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider({ apiKey: "sk-test" });
+    await provider.chat({ model: "gpt-5.5", messages: [{ role: "user", content: "hi" }] });
+    check("the sent body does NOT include max_tokens", !("max_tokens" in capturedBody));
+    check("the sent body includes max_completion_tokens instead", typeof capturedBody.max_completion_tokens === "number");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

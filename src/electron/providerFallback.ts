@@ -55,8 +55,13 @@ export async function resolveFallbackOrder(
   ];
 
   return candidates
-    .filter((c): c is { kind: CloudProviderKind; apiKey: string; addedAt: number } => c.apiKey !== null && c.addedAt !== null)
+    .filter((c): c is { kind: CloudProviderKind; apiKey: string; addedAt: number | null } => c.apiKey !== null)
     .filter((c) => c.kind !== excludeKind)
-    .sort((a, b) => a.addedAt - b.addedAt)
+    // A key saved before addedAt existed (or written directly, bypassing
+    // save*Settings) loads back with addedAt: null. Treating that as the
+    // oldest possible value (rather than dropping the candidate) means a
+    // pre-existing key still participates in fallback — it just sorts
+    // first, same as if it had really been added on day one.
+    .sort((a, b) => (a.addedAt ?? 0) - (b.addedAt ?? 0))
     .map((c) => ({ kind: c.kind, apiKey: c.apiKey, model: DEFAULT_MODEL_BY_KIND[c.kind] }));
 }

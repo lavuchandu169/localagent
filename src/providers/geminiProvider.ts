@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, ToolCall } from "../types.js";
 import { ProviderChatError } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
@@ -40,21 +41,52 @@ export function toGeminiContents(messages: ChatMessage[]): { systemInstruction?:
       }
       contents.push({ role: "model", parts });
     } else if (m.role === "tool") {
-      contents.push({
-        role: "user",
-        parts: [{ functionResponse: { name: m.name ?? "unknown", response: { content: m.content } } }],
-      });
+      // A model turn that calls several tools in parallel produces several
+      // consecutive role:"tool" messages in the history. Gemini's API
+      // requires every functionResponse answering ONE model turn to arrive
+      // together in a single content entry — one content per call is a
+      // real 400 ("number of function response parts should be equal to
+      // number of function call parts"). The previous content is reused
+      // (its parts array extended) whenever it's already the matching
+      // user/functionResponse entry this tool result belongs with.
+      const last = contents[contents.length - 1];
+      const responsePart: GeminiPart = { functionResponse: { name: m.name ?? "unknown", response: { content: m.content } } };
+      if (last && last.role === "user" && last.parts.every((p) => p.functionResponse)) {
+        last.parts.push(responsePart);
+      } else {
+        contents.push({ role: "user", parts: [responsePart] });
+      }
     }
   }
 
   return { systemInstruction: systemText ? { parts: [{ text: systemText }] } : undefined, contents };
 }
 
+// Gemini's function-calling API accepts only a restricted OpenAPI 3.0
+// subset for `parameters`, not arbitrary JSON Schema — standard JSON
+// Schema keywords real MCP server tool schemas commonly include ($schema,
+// additionalProperties) are unknown fields to it and cause a hard 400,
+// not a warning. Stripped recursively since either keyword can appear at
+// any nesting level (a nested object property with its own
+// additionalProperties: false, for instance).
+const GEMINI_UNSUPPORTED_SCHEMA_KEYS = new Set(["$schema", "additionalProperties"]);
+
+function stripUnsupportedSchemaKeys(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(stripUnsupportedSchemaKeys);
+  if (schema === null || typeof schema !== "object") return schema;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (GEMINI_UNSUPPORTED_SCHEMA_KEYS.has(key)) continue;
+    result[key] = stripUnsupportedSchemaKeys(value);
+  }
+  return result;
+}
+
 export function toGeminiTools(tools: ChatRequest["tools"]): { functionDeclarations: object[] }[] | undefined {
   if (!tools || tools.length === 0) return undefined;
   return [
     {
-      functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.inputSchema })),
+      functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: stripUnsupportedSchemaKeys(t.inputSchema) })),
     },
   ];
 }
@@ -65,10 +97,18 @@ export function fromGeminiResult(raw: any): ChatResponse {
   const toolCalls: ToolCall[] = [];
   let text = "";
 
-  parts.forEach((part, i) => {
+  parts.forEach((part) => {
     if (part.text) text += part.text;
     else if (part.functionCall) {
-      toolCalls.push({ id: `call_${i}`, name: part.functionCall.name, arguments: part.functionCall.args ?? {} });
+      // Gemini's API gives function calls no id of its own — this is
+      // entirely synthetic. A plain per-response index (call_0, call_1, ...)
+      // would repeat across separate turns, and after a mid-task fallback
+      // from Gemini to another provider (e.g. Anthropic, whose tool_use ids
+      // must be unique across the WHOLE conversation), a repeated id in the
+      // carried-over history is a real 400 on the fallback provider, not
+      // just a cosmetic collision. crypto.randomUUID() keeps every id
+      // globally unique regardless of which turn or provider produced it.
+      toolCalls.push({ id: `call_${crypto.randomUUID()}`, name: part.functionCall.name, arguments: part.functionCall.args ?? {} });
     }
   });
 
