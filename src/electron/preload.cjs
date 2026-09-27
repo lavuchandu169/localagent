@@ -73,4 +73,8 @@ contextBridge.exposeInMainWorld("agent", {
   saveGoogleSettings: (settings) => ipcRenderer.invoke("agent:save-google-settings", settings),
   getAnthropicSettings: () => ipcRenderer.invoke("agent:get-anthropic-settings"),
   saveAnthropicSettings: (settings) => ipcRenderer.invoke("agent:save-anthropic-settings", settings),
+  getOpenAISettings: () => ipcRenderer.invoke("agent:get-openai-settings"),
+  saveOpenAISettings: (settings) => ipcRenderer.invoke("agent:save-openai-settings", settings),
+  getGeminiSettings: () => ipcRenderer.invoke("agent:get-gemini-settings"),
+  saveGeminiSettings: (settings) => ipcRenderer.invoke("agent:save-gemini-settings", settings),
 });

@@ -78,6 +78,25 @@ export interface ChatResponse {
 /** healthCheck's result: `ok:false` always carries the real failure reason — the underlying error message, not a bare boolean — so a caller can show the user something more useful than "health check failed". */
 export type HealthCheckResult = { ok: true } | { ok: false; error: string };
 
+/**
+ * Every provider's chat() throws this for an HTTP-shaped failure instead
+ * of a bare Error, so agent.ts's fallback layer has one reliable signal
+ * to act on instead of parsing status codes out of message strings.
+ * `retryable` is true exactly for a rate-limit/quota-exhausted response —
+ * anything else (bad key, 500, network down) is `false` and behaves
+ * exactly like today's unconditional task failure.
+ */
+export class ProviderChatError extends Error {
+  readonly status?: number;
+  readonly retryable: boolean;
+  constructor(message: string, opts: { status?: number; retryable: boolean }) {
+    super(message);
+    this.name = "ProviderChatError";
+    this.status = opts.status;
+    this.retryable = opts.retryable;
+  }
+}
+
 export interface ModelProvider {
   id: string;
   listModels(): Promise<ModelInfo[]>;

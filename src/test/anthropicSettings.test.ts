@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { loadAnthropicSettings, saveAnthropicSettings, resolveAnthropicApiKey, type AnthropicSettings } from "../electron/anthropicSettings.js";
+import { loadAnthropicSettings, saveAnthropicSettings, resolveAnthropicApiKey } from "../electron/anthropicSettings.js";
 import type { StorageCrypto } from "../electron/googleAuth.js";
 
 let failures = 0;
@@ -29,10 +29,10 @@ async function runStorageTests() {
   check("loading a nonexistent file returns null apiKey", missing.apiKey === null);
 
   const settingsFile = path.join(dir, "anthropicSettings.json");
-  const settings: AnthropicSettings = { apiKey: "sk-ant-fake-key" };
+  const settings = { apiKey: "sk-ant-fake-key" };
   await saveAnthropicSettings(settingsFile, settings);
   const loaded = await loadAnthropicSettings(settingsFile);
-  check("saved settings round-trip through load (no crypto)", JSON.stringify(loaded) === JSON.stringify(settings));
+  check("saved settings round-trip through load (no crypto)", loaded.apiKey === settings.apiKey);
 
   const cryptoFile = path.join(dir, "anthropicSettingsCrypto.json");
   await saveAnthropicSettings(cryptoFile, settings, fakeStorageCrypto);
@@ -45,7 +45,7 @@ async function runStorageTests() {
   }
   check("with a storageCrypto, the on-disk content is not plain JSON (it was actually transformed)", !onDiskIsPlainJson);
   const loadedWithCrypto = await loadAnthropicSettings(cryptoFile, fakeStorageCrypto);
-  check("saved-with-crypto settings round-trip through load with the same crypto", JSON.stringify(loadedWithCrypto) === JSON.stringify(settings));
+  check("saved-with-crypto settings round-trip through load with the same crypto", loadedWithCrypto.apiKey === settings.apiKey);
   const loadedWithoutCrypto = await loadAnthropicSettings(cryptoFile);
   check("an encrypted file read back without a storageCrypto returns null, not a crash", loadedWithoutCrypto.apiKey === null);
 
@@ -85,6 +85,32 @@ async function runPrecedenceTests() {
 }
 
 await runPrecedenceTests();
+
+console.log("\naddedAt is set once on first save, and never overwritten:");
+{
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-anthropic-settings-test-"));
+  const settingsFile = path.join(tmpDir, "anthropic-settings.json");
+
+  await saveAnthropicSettings(settingsFile, { apiKey: "key-1" });
+  const first = await loadAnthropicSettings(settingsFile);
+  check("addedAt is set on the first save with a real key", typeof first.addedAt === "number");
+
+  const firstAddedAt = first.addedAt;
+  await new Promise((r) => setTimeout(r, 5));
+  await saveAnthropicSettings(settingsFile, { apiKey: "key-2" });
+  const second = await loadAnthropicSettings(settingsFile);
+  check("addedAt is NOT overwritten on a later save (rotating the key doesn't reshuffle fallback priority)", second.addedAt === firstAddedAt);
+  check("the rotated key itself IS saved", second.apiKey === "key-2");
+}
+
+console.log("\naddedAt stays null until a real key is ever saved:");
+{
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-anthropic-settings-test-"));
+  const settingsFile = path.join(tmpDir, "anthropic-settings.json");
+  await saveAnthropicSettings(settingsFile, { apiKey: null });
+  const loaded = await loadAnthropicSettings(settingsFile);
+  check("addedAt stays null when the saved key is null", loaded.addedAt === null);
+}
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

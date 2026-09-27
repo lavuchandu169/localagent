@@ -24,6 +24,9 @@ import { loadSessionRecord } from "../sessionStore.js";
 import { DriveScopeError } from "../cloudSync.js";
 import { groupDiffIntoSegments } from "../diffUtil.js";
 import type { AgentEvent, ChatResponse } from "../types.js";
+import { ProviderChatError } from "../types.js";
+import { saveOpenAISettings } from "../electron/openaiSettings.js";
+import { saveAnthropicSettings } from "../electron/anthropicSettings.js";
 
 // A fixed sleep-then-check ("wait 50ms, assume the ASK prompt arrived by
 // now") is exactly how the partial-hunk-approval test above flaked: a
@@ -196,6 +199,112 @@ await (async () => {
       }
     })());
   }
+
+  console.log("\nbuildProvider handles the new openai/gemini kinds:");
+  {
+    const openai = buildProvider({ kind: "openai", apiKey: "sk-test" });
+    check("buildProvider returns an OpenAIProvider for kind 'openai'", openai.id === "openai");
+    const gemini = buildProvider({ kind: "gemini", apiKey: "gk-test" });
+    check("buildProvider returns a GeminiProvider for kind 'gemini'", gemini.id === "gemini");
+  }
+
+  console.log("\nstartSession builds fallbackProviders from saved settings when the primary is a cloud provider:");
+  await (async () => {
+    const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));
+    await saveOpenAISettings(path.join(settingsDir, "openaiSettings.json"), { apiKey: "sk-fallback" });
+
+    const registry = createSessionRegistry(sessionsDir);
+    const failingScript = [{ throws: new ProviderChatError("rate limited", { status: 429, retryable: true }) }];
+    const fallbackScript: ChatResponse[] = [{ turn: { type: "final", content: "done via fallback" } }];
+    // Config-aware, so the primary (anthropic) gets the failing script and
+    // the fallback candidate built from the saved OpenAI key gets a fresh,
+    // succeeding one — proving the real fallback provider (not a copy of
+    // the failing one) is what actually answers the retried turn.
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "anthropic", apiKey: "ak-primary" }, mode: "DEFAULT" },
+      {
+        providerFactory: (c) => (c.kind === "anthropic" ? new MockProvider(failingScript as any) : new MockProvider(fallbackScript)),
+        settingsDir,
+      }
+    );
+    const events: AgentEvent[] = [];
+    await runTask(registry, sessionId, "say hi", (e) => events.push(e));
+    check(
+      "a session started with Anthropic as primary falls back to the saved OpenAI key on a retryable error",
+      events.some((e) => e.type === "status" && e.message.includes("hit a rate limit"))
+    );
+    check("the task completes successfully via the fallback", events.some((e) => e.type === "done" && e.success === true));
+  })();
+
+  console.log("\nstartSession does NOT build fallbackProviders when the primary is embedded or a custom server:");
+  await (async () => {
+    // Config-aware, deliberately the mirror image of the "builds
+    // fallbackProviders" test above: if the exclusion guard were ever
+    // removed or narrowed, this factory would hand back a SUCCEEDING
+    // provider for the would-be fallback candidates, so the task would
+    // complete successfully via the fallback — the same false-negative
+    // this test exists to catch. A factory that returns a fresh throwing
+    // mock for every kind (the bug this replaced) can't tell "the guard
+    // held" apart from "the guard failed but the fallback also happened to
+    // fail" — this one can.
+    const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));
+    await saveOpenAISettings(path.join(settingsDir, "openaiSettings.json"), { apiKey: "sk-fallback" });
+    await saveAnthropicSettings(path.join(settingsDir, "anthropicSettings.json"), { apiKey: "ak-fallback" });
+
+    const wouldBeFallback = new MockProvider([{ turn: { type: "final", content: "should never run" } }]);
+    const registry = createSessionRegistry(sessionsDir);
+    const script = [{ throws: new ProviderChatError("simulated crash", { retryable: true }) }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "openai-compatible", baseUrl: "http://localhost:1234/v1", model: "local-model" }, mode: "DEFAULT" },
+      {
+        providerFactory: (c) => (c.kind === "openai-compatible" ? new MockProvider(script as any) : wouldBeFallback),
+        settingsDir,
+      }
+    );
+    const events: AgentEvent[] = [];
+    await runTask(registry, sessionId, "say hi", (e) => events.push(e));
+    check(
+      "a custom-server primary's error fails the task instead of falling back to a cloud provider it never asked for",
+      events.some((e) => e.type === "done" && e.success === false)
+    );
+    check(
+      "no fallback switch was ever attempted",
+      !events.some((e) => e.type === "status" && e.message.includes("hit a rate limit"))
+    );
+    check("the would-be fallback provider was never even constructed/called", wouldBeFallback.receivedRequests.length === 0);
+  })();
+
+  console.log("\nstartSession does NOT build fallbackProviders when the primary is the embedded local model:");
+  await (async () => {
+    const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));
+    await saveOpenAISettings(path.join(settingsDir, "openaiSettings.json"), { apiKey: "sk-fallback" });
+    await saveAnthropicSettings(path.join(settingsDir, "anthropicSettings.json"), { apiKey: "ak-fallback" });
+
+    const wouldBeFallback = new MockProvider([{ turn: { type: "final", content: "should never run" } }]);
+    const registry = createSessionRegistry(sessionsDir);
+    const script = [{ throws: new ProviderChatError("simulated crash", { retryable: true }) }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      {
+        providerFactory: (c) => (c.kind === "embedded" ? new MockProvider(script as any) : wouldBeFallback),
+        settingsDir,
+      }
+    );
+    const events: AgentEvent[] = [];
+    await runTask(registry, sessionId, "say hi", (e) => events.push(e));
+    check(
+      "an embedded-model primary's error fails the task instead of silently switching to a cloud provider",
+      events.some((e) => e.type === "done" && e.success === false)
+    );
+    check(
+      "no fallback switch was ever attempted",
+      !events.some((e) => e.type === "status" && e.message.includes("hit a rate limit"))
+    );
+    check("the would-be fallback provider was never even constructed/called", wouldBeFallback.receivedRequests.length === 0);
+  })();
 
   {
     const registry = createSessionRegistry(sessionsDir);

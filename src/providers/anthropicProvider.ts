@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import { ProviderChatError } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
 
 const DEFAULT_MODEL_ID = "claude-sonnet-5";
@@ -157,13 +158,22 @@ export class AnthropicProvider implements ModelProvider {
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const { system, messages } = toAnthropicMessages(request.messages);
-    const response = await this.client.messages.create({
-      model: this.model,
-      max_tokens: request.maxTokens ?? 8192,
-      system,
-      messages,
-      tools: toAnthropicTools(request.tools),
-    });
-    return fromAnthropicResponse(response);
+    try {
+      const response = await this.client.messages.create({
+        model: this.model,
+        max_tokens: request.maxTokens ?? 8192,
+        system,
+        messages,
+        tools: toAnthropicTools(request.tools),
+      });
+      return fromAnthropicResponse(response);
+    } catch (err: any) {
+      if (err instanceof ProviderChatError) throw err;
+      const status = typeof err?.status === "number" ? err.status : undefined;
+      throw new ProviderChatError(err instanceof Error ? err.message : String(err), {
+        status,
+        retryable: status === 429,
+      });
+    }
   }
 }

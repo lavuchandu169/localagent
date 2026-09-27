@@ -5,17 +5,29 @@ import { defaultToolRegistry } from "../toolRegistry.js";
 import { OpenAICompatibleProvider } from "../providers/openaiCompatible.js";
 import { EmbeddedLlamaProvider } from "../providers/embeddedLlama.js";
 import { AnthropicProvider } from "../providers/anthropicProvider.js";
+import { OpenAIProvider } from "../providers/openaiProvider.js";
+import { GeminiProvider } from "../providers/geminiProvider.js";
 import { isEmbeddedModelId } from "../models.js";
 import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode, PermissionResponse, Tool } from "../types.js";
 import { revertToCheckpoint } from "../checkpoints.js";
 import { getChanges, type FileChangeWithDiff } from "../changesSince.js";
+import { resolveFallbackOrder, DEFAULT_MODEL_BY_KIND as DEFAULT_MODEL_BY_CLOUD_KIND, type CloudProviderKind } from "./providerFallback.js";
+import type { StorageCrypto } from "./googleAuth.js";
 
 export type ProviderConfig =
   | { kind: "openai-compatible"; baseUrl: string; model: string }
   | { kind: "embedded"; size: string }
-  | { kind: "anthropic"; apiKey?: string; model?: string };
+  | { kind: "anthropic"; apiKey?: string; model?: string }
+  | { kind: "openai"; apiKey?: string; model?: string }
+  | { kind: "gemini"; apiKey?: string; model?: string };
+
+const CLOUD_LABEL_BY_KIND: Record<CloudProviderKind, string> = {
+  anthropic: "Claude",
+  openai: "OpenAI",
+  gemini: "Gemini",
+};
 
 export interface SessionConfig {
   /** Omit to chat without file access — defaults to the home directory. */
@@ -86,6 +98,12 @@ export function buildProvider(
   if (config.kind === "anthropic") {
     return new AnthropicProvider({ apiKey: config.apiKey, model: config.model });
   }
+  if (config.kind === "openai") {
+    return new OpenAIProvider({ apiKey: config.apiKey ?? "", model: config.model });
+  }
+  if (config.kind === "gemini") {
+    return new GeminiProvider({ apiKey: config.apiKey ?? "", model: config.model });
+  }
   if (!isEmbeddedModelId(config.size) && !config.size.startsWith("hf:")) {
     throw new Error(`Invalid embedded model size: ${config.size}`);
   }
@@ -103,6 +121,9 @@ export async function startSession(
     resume?: ResumePayload;
     /** Currently-connected MCP servers' tools, supplied by main.ts — see mcpClient.ts/mcpToolAdapter.ts. Defaults to none, so every existing caller/test is unaffected. */
     extraTools?: Tool[];
+    /** Directory holding anthropic-settings.json/openai-settings.json/gemini-settings.json — passed so startSession can resolve fallback candidates via providerFallback.ts. Undefined (every existing caller/test that doesn't care about fallback) means no fallback is ever configured, exactly like today's behavior. */
+    settingsDir?: string;
+    storageCrypto?: StorageCrypto;
   } = {}
 ): Promise<{ sessionId: string; workspaceRoot: string }> {
   const provider = (deps.providerFactory ?? buildProvider)(config.provider, deps.onDownloadProgress, deps.signal);
@@ -124,13 +145,32 @@ export async function startSession(
     await finalizeEntry(existing);
   }
 
+  const CLOUD_KINDS: CloudProviderKind[] = ["anthropic", "openai", "gemini"];
+  let fallbackProviders: { provider: ModelProvider; model: string; label: string }[] | undefined;
+  if (deps.settingsDir && (CLOUD_KINDS as string[]).includes(config.provider.kind)) {
+    const candidates = await resolveFallbackOrder(deps.settingsDir, deps.storageCrypto, config.provider.kind as CloudProviderKind);
+    // Goes through the same providerFactory injection point the primary
+    // provider does (not a bare buildProvider() call) — a fallback
+    // candidate is still a provider a caller/test may need to substitute,
+    // and building it any other way would make fallback behavior
+    // impossible to exercise without a real network call.
+    fallbackProviders = candidates.map((c) => ({
+      provider: (deps.providerFactory ?? buildProvider)({ kind: c.kind, apiKey: c.apiKey, model: c.model } as ProviderConfig),
+      model: c.model,
+      label: CLOUD_LABEL_BY_KIND[c.kind],
+    }));
+  }
+  const providerLabel = (CLOUD_KINDS as string[]).includes(config.provider.kind)
+    ? CLOUD_LABEL_BY_KIND[config.provider.kind as CloudProviderKind]
+    : undefined;
+
   const session = new AgentSession({
     workspaceRoot,
     model:
       config.provider.kind === "openai-compatible"
         ? config.provider.model
-        : config.provider.kind === "anthropic"
-          ? (config.provider.model ?? "claude-sonnet-5")
+        : config.provider.kind === "anthropic" || config.provider.kind === "openai" || config.provider.kind === "gemini"
+          ? (config.provider.model ?? DEFAULT_MODEL_BY_CLOUD_KIND[config.provider.kind])
           : config.provider.size,
     provider,
     tools: defaultToolRegistry(deps.extraTools ?? []),
@@ -145,6 +185,8 @@ export async function startSession(
       new Promise<boolean>((resolve) => {
         pendingPlanApproval.resolve = resolve;
       }),
+    fallbackProviders,
+    providerLabel,
   });
 
   // Fixed once here: a resumed session keeps its original owner regardless
