@@ -9,8 +9,10 @@ import { PermissionEngine, classifyCommand } from "../permissions.js";
 import { AgentSession, DEFAULT_SYSTEM_PROMPT } from "../agent.js";
 import { defaultToolRegistry, ToolRegistry } from "../toolRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
+import type { MockScriptEntry } from "../providers/mockProvider.js";
 import { toLlamaHistory, toLlamaFunctions, fromLlamaResult } from "../providers/embeddedLlama.js";
 import type { AgentEvent, ChatResponse, PermissionResponse, Tool, ToolCall } from "../types.js";
+import { ProviderChatError } from "../types.js";
 import { groupDiffIntoSegments } from "../diffUtil.js";
 import { computeFileDiff } from "../diffCompute.js";
 
@@ -1143,6 +1145,81 @@ await (async () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
+})();
+
+console.log("\nFallback to another configured provider on a retryable error:");
+await (async () => {
+  const failingScript: MockScriptEntry[] = [{ throws: new ProviderChatError("rate limited", { status: 429, retryable: true }) }];
+  const fallbackScript: ChatResponse[] = [{ turn: { type: "final", content: "done via fallback" } }];
+  const failingProvider = new MockProvider(failingScript);
+  const fallbackProvider = new MockProvider(fallbackScript);
+
+  const session = new AgentSession({
+    workspaceRoot: os.tmpdir(),
+    model: "primary-model",
+    provider: failingProvider,
+    providerLabel: "Primary (Anthropic)",
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN",
+    fallbackProviders: [{ provider: fallbackProvider, model: "fallback-model", label: "Fallback (Gemini)" }],
+  });
+
+  const events: AgentEvent[] = [];
+  for await (const event of session.run("say hi")) {
+    events.push(event);
+  }
+
+  const switchEvent = events.find((e) => e.type === "status" && e.message.includes("Fallback (Gemini)"));
+  check("a status event announces the switch to the fallback provider", switchEvent !== undefined);
+  check("the task completes successfully after falling back", events.some((e) => e.type === "done" && e.success === true));
+  check("the fallback provider is the one that actually produced the final answer", fallbackProvider.receivedRequests.length === 1);
+})();
+
+console.log("\nA non-retryable error does NOT trigger fallback:");
+await (async () => {
+  const script: MockScriptEntry[] = [{ throws: new ProviderChatError("bad api key", { status: 401, retryable: false }) }];
+  const failingProvider = new MockProvider(script);
+  const fallbackProvider = new MockProvider([{ turn: { type: "final", content: "should never be reached" } }]);
+
+  const session = new AgentSession({
+    workspaceRoot: os.tmpdir(),
+    model: "primary-model",
+    provider: failingProvider,
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN",
+    fallbackProviders: [{ provider: fallbackProvider, model: "fallback-model", label: "Fallback (Gemini)" }],
+  });
+
+  const events: AgentEvent[] = [];
+  for await (const event of session.run("say hi")) {
+    events.push(event);
+  }
+
+  check("the task fails instead of falling back", events.some((e) => e.type === "done" && e.success === false));
+  check("the fallback provider was never called for a non-retryable error", fallbackProvider.receivedRequests.length === 0);
+})();
+
+console.log("\nFallback exhaustion fails cleanly instead of looping:");
+await (async () => {
+  const script: MockScriptEntry[] = [{ throws: new ProviderChatError("rate limited", { status: 429, retryable: true }) }];
+  const onlyProvider = new MockProvider(script);
+
+  const session = new AgentSession({
+    workspaceRoot: os.tmpdir(),
+    model: "primary-model",
+    provider: onlyProvider,
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN",
+    fallbackProviders: [],
+  });
+
+  const events: AgentEvent[] = [];
+  for await (const event of session.run("say hi")) {
+    events.push(event);
+  }
+
+  check("the task fails cleanly when there's no fallback left", events.some((e) => e.type === "done" && e.success === false));
+  check("exactly one error event fires, not a hang or a loop", events.filter((e) => e.type === "error").length === 1);
 })();
 
 console.log("\nPlan first — a task's first turn held for approval before anything runs:");
