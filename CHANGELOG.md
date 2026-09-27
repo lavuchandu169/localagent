@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.46 — 2026-09-27
+
+- Manual verification run: confirms the Cut Release automation completes end-to-end now that GitHub Actions is allowed to open pull requests.
+
 ## v0.1.0-beta.45 — 2026-09-15
 
 - Honest messaging update, no behavior change: the onboarding modal and
