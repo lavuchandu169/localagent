@@ -498,11 +498,11 @@ reconcile) against a fake `fetch` — real behavior, not framework mocks.
 
 ## Contributing
 
-Development happens on a `develop` branch, merged into `main` (protected,
-always releasable) to cut a release tag from. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the branch strategy, workflow, and
-how CI is wired up. Found a security issue? See
-[SECURITY.md](SECURITY.md) instead of opening a public issue.
+Development happens directly on short-lived branches merged into `main`
+(protected, always releasable) — every merge cuts a release automatically.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and how CI is
+wired up. Found a security issue? See [SECURITY.md](SECURITY.md) instead
+of opening a public issue.
 
 ## Project structure
 

@@ -2,41 +2,40 @@
 
 ## Branch strategy
 
-- **`main`** — always releasable. Every commit on `main` is something that
-  could be tagged and shipped. Protected: changes land via pull request,
-  and the CI workflow must pass before merging.
-- **`develop`** — integration/testing branch. New work lands here first,
-  via pull request, gated by the same CI workflow. Once `develop` is in a
-  good state, it's merged into `main` to cut the next release from.
-- **`feature/<short-description>`** — short-lived branches for a single
-  piece of work, branched from `develop`, merged back into `develop` via
-  pull request.
-- **Releases** are cut by running the `Cut Release` GitHub Actions
-  workflow (Actions tab → Cut Release → Run workflow) from `main`, which
-  bumps `package.json`'s version, adds a `CHANGELOG.md` entry from the
-  text you give it, opens a PR into `main`, and auto-merges it once CI
-  passes. Merging pushes the matching `vX.Y.Z` tag automatically, which
-  triggers `.github/workflows/release.yml` (test → create the GitHub
-  Release → build and publish Mac/Windows installers). No manual version
-  bump, changelog edit, or tag push required.
+One branch: **`main`**. Always releasable — every commit on it is
+something that could be tagged and shipped. Protected: changes land via
+pull request, and CI must pass before merging (0 required approvals, so a
+solo maintainer isn't blocked waiting on a review — the status check is
+the real gate).
+
+All work — features, fixes, chores — happens on a short-lived branch off
+`main` (any name), merged back into `main` via pull request. There's no
+separate integration branch to promote through first.
+
+**Releases cut themselves.** Every merge to `main` automatically bumps
+`package.json`'s version, adds a `CHANGELOG.md` entry (from the merged
+PR's own title — nothing to type), opens a version-bump PR, auto-merges
+it once CI passes, pushes the matching `vX.Y.Z` tag, and starts
+`.github/workflows/release.yml` (build and publish signed Mac/Windows
+installers to a GitHub Release). No manual version bump, changelog edit,
+or tag push required — see `.github/workflows/cut-release.yml`.
+
+A non-`beta` bump (`patch`/`minor`/`major`, for whenever this project
+eventually leaves beta) or a hand-written multi-line changelog entry can
+still be triggered manually: Actions tab → Cut Release → Run workflow.
 
 ```
-feature/*  →  develop  →  main  →  Cut Release workflow  →  vX.Y.Z tag  →  release.yml
+any-branch  →  main  →  (automatic) Cut Release  →  vX.Y.Z tag  →  release.yml
 ```
 
 ## Workflow
 
-1. Branch from `develop`: `git checkout -b feature/my-change develop`
+1. Branch from `main`: `git checkout -b my-change main`
 2. Make the change, with tests (`npm test` must pass locally).
-3. Open a pull request into `develop`. CI (`.github/workflows/ci.yml`)
-   runs the build and full test suite automatically.
-4. Once `develop` is stable, open a pull request from `develop` into
-   `main`.
-5. Once that's merged, run the `Cut Release` workflow from the Actions
-   tab, choosing a bump type (almost always `beta`, until this project
-   leaves beta) and writing the changelog entry — everything from there
-   (version bump, changelog, release PR, tag, signed installers) is
-   automatic.
+3. Open a pull request into `main`. CI (`.github/workflows/ci.yml`) runs
+   the build and full test suite automatically.
+4. Merge once CI is green. That's it — the release is cut automatically
+   from there.
 
 ## Commit messages
 

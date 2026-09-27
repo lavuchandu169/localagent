@@ -21,6 +21,4 @@
 
 ## Checklist
 
-- [ ] Targets `develop` (not `main`, unless this is a `develop` → `main`
-      release PR)
 - [ ] No unrelated changes bundled in
