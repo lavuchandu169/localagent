@@ -1746,7 +1746,11 @@ function renderActiveModelBadge(provider: ProviderConfig): void {
             const modelId = provider.model ?? DEFAULT_ANTHROPIC_MODEL;
             return `${ANTHROPIC_MODELS[modelId]?.name ?? modelId} (Anthropic API)`;
           })()
-        : `${provider.model} (${provider.baseUrl})`;
+        : provider.kind === "openai"
+          ? `${provider.model ?? "gpt-5.5"} (OpenAI API)`
+          : provider.kind === "gemini"
+            ? `${provider.model ?? "gemini-2.5-flash"} (Gemini API)`
+            : `${provider.model} (${provider.baseUrl})`;
   const gpuText = provider.kind === "embedded" && hardwareInfo?.gpu ? ` · ${hardwareInfo.gpu} GPU` : "";
   // Provider identity color, at a glance, alongside the always-present text
   // label — kept as a lookup rather than a growing ternary chain so a future
@@ -1755,6 +1759,8 @@ function renderActiveModelBadge(provider: ProviderConfig): void {
     embedded: "signal-dot-embedded",
     anthropic: "signal-dot-anthropic",
     "openai-compatible": "signal-dot-custom",
+    openai: "signal-dot-openai",
+    gemini: "signal-dot-gemini",
   };
   activeModelBadge.innerHTML = "";
   const dot = document.createElement("span");
@@ -2138,6 +2144,10 @@ function syncFormFromTab(tab: TabState): void {
     }
   } else if (formProvider.kind === "anthropic") {
     modelSelect.value = formProvider.model ?? DEFAULT_ANTHROPIC_MODEL;
+  } else if (formProvider.kind === "openai") {
+    modelSelect.value = formProvider.model ?? "gpt-5.5";
+  } else if (formProvider.kind === "gemini") {
+    modelSelect.value = formProvider.model ?? "gemini-2.5-flash";
   } else {
     modelSelect.value = CUSTOM_SERVER_VALUE;
     baseUrlInput.value = formProvider.baseUrl;

@@ -24,6 +24,9 @@ import { loadSessionRecord } from "../sessionStore.js";
 import { DriveScopeError } from "../cloudSync.js";
 import { groupDiffIntoSegments } from "../diffUtil.js";
 import type { AgentEvent, ChatResponse } from "../types.js";
+import { ProviderChatError } from "../types.js";
+import { saveOpenAISettings } from "../electron/openaiSettings.js";
+import { saveAnthropicSettings } from "../electron/anthropicSettings.js";
 
 // A fixed sleep-then-check ("wait 50ms, assume the ASK prompt arrived by
 // now") is exactly how the partial-hunk-approval test above flaked: a
@@ -196,6 +199,64 @@ await (async () => {
       }
     })());
   }
+
+  console.log("\nbuildProvider handles the new openai/gemini kinds:");
+  {
+    const openai = buildProvider({ kind: "openai", apiKey: "sk-test" });
+    check("buildProvider returns an OpenAIProvider for kind 'openai'", openai.id === "openai");
+    const gemini = buildProvider({ kind: "gemini", apiKey: "gk-test" });
+    check("buildProvider returns a GeminiProvider for kind 'gemini'", gemini.id === "gemini");
+  }
+
+  console.log("\nstartSession builds fallbackProviders from saved settings when the primary is a cloud provider:");
+  await (async () => {
+    const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));
+    await saveOpenAISettings(path.join(settingsDir, "openai-settings.json"), { apiKey: "sk-fallback" });
+
+    const registry = createSessionRegistry(sessionsDir);
+    const failingScript = [{ throws: new ProviderChatError("rate limited", { status: 429, retryable: true }) }];
+    const fallbackScript: ChatResponse[] = [{ turn: { type: "final", content: "done via fallback" } }];
+    // Config-aware, so the primary (anthropic) gets the failing script and
+    // the fallback candidate built from the saved OpenAI key gets a fresh,
+    // succeeding one — proving the real fallback provider (not a copy of
+    // the failing one) is what actually answers the retried turn.
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "anthropic", apiKey: "ak-primary" }, mode: "DEFAULT" },
+      {
+        providerFactory: (c) => (c.kind === "anthropic" ? new MockProvider(failingScript as any) : new MockProvider(fallbackScript)),
+        settingsDir,
+      }
+    );
+    const events: AgentEvent[] = [];
+    await runTask(registry, sessionId, "say hi", (e) => events.push(e));
+    check(
+      "a session started with Anthropic as primary falls back to the saved OpenAI key on a retryable error",
+      events.some((e) => e.type === "status" && e.message.includes("hit a rate limit"))
+    );
+    check("the task completes successfully via the fallback", events.some((e) => e.type === "done" && e.success === true));
+  })();
+
+  console.log("\nstartSession does NOT build fallbackProviders when the primary is embedded or a custom server:");
+  await (async () => {
+    const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));
+    await saveOpenAISettings(path.join(settingsDir, "openai-settings.json"), { apiKey: "sk-fallback" });
+    await saveAnthropicSettings(path.join(settingsDir, "anthropic-settings.json"), { apiKey: "ak-fallback" });
+
+    const registry = createSessionRegistry(sessionsDir);
+    const script = [{ throws: new ProviderChatError("simulated crash", { retryable: true }) }, { turn: { type: "final", content: "should never run" } }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "openai-compatible", baseUrl: "http://localhost:1234/v1", model: "local-model" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider(script as any), settingsDir }
+    );
+    const events: AgentEvent[] = [];
+    await runTask(registry, sessionId, "say hi", (e) => events.push(e));
+    check(
+      "a custom-server primary's error fails the task instead of falling back to a cloud provider it never asked for",
+      events.some((e) => e.type === "done" && e.success === false)
+    );
+  })();
 
   {
     const registry = createSessionRegistry(sessionsDir);

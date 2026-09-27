@@ -12,7 +12,7 @@ export interface ConfiguredCloudProvider {
   model: string;
 }
 
-const DEFAULT_MODEL_BY_KIND: Record<CloudProviderKind, string> = {
+export const DEFAULT_MODEL_BY_KIND: Record<CloudProviderKind, string> = {
   anthropic: "claude-sonnet-5",
   openai: "gpt-5.5",
   gemini: "gemini-2.5-flash",
