@@ -11,12 +11,17 @@
 - **`feature/<short-description>`** — short-lived branches for a single
   piece of work, branched from `develop`, merged back into `develop` via
   pull request.
-- **Releases** are cut from `main` by pushing a `vX.Y.Z` tag, which
+- **Releases** are cut by running the `Cut Release` GitHub Actions
+  workflow (Actions tab → Cut Release → Run workflow) from `main`, which
+  bumps `package.json`'s version, adds a `CHANGELOG.md` entry from the
+  text you give it, opens a PR into `main`, and auto-merges it once CI
+  passes. Merging pushes the matching `vX.Y.Z` tag automatically, which
   triggers `.github/workflows/release.yml` (test → create the GitHub
-  Release → build and publish signed Mac/Windows installers).
+  Release → build and publish Mac/Windows installers). No manual version
+  bump, changelog edit, or tag push required.
 
 ```
-feature/*  →  develop  →  main  →  tag (vX.Y.Z)  →  release.yml
+feature/*  →  develop  →  main  →  Cut Release workflow  →  vX.Y.Z tag  →  release.yml
 ```
 
 ## Workflow
@@ -27,8 +32,11 @@ feature/*  →  develop  →  main  →  tag (vX.Y.Z)  →  release.yml
    runs the build and full test suite automatically.
 4. Once `develop` is stable, open a pull request from `develop` into
    `main`.
-5. On `main`, bump `package.json`'s `version`, update `CHANGELOG.md`, and
-   push a matching `vX.Y.Z` tag to trigger the release build.
+5. Once that's merged, run the `Cut Release` workflow from the Actions
+   tab, choosing a bump type (almost always `beta`, until this project
+   leaves beta) and writing the changelog entry — everything from there
+   (version bump, changelog, release PR, tag, signed installers) is
+   automatic.
 
 ## Commit messages
 
