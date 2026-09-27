@@ -23,6 +23,8 @@ import { detectHardware, recommendModel } from "./hardwareInfo.js";
 import { signInWithGoogle, signOut, getAuthStatus, getFreshAccessToken, getStoredEmail } from "./googleAuth.js";
 import { loadGoogleSettings, saveGoogleSettings, resolveGoogleCredentials } from "./googleSettings.js";
 import { loadAnthropicSettings, saveAnthropicSettings, resolveAnthropicApiKey } from "./anthropicSettings.js";
+import { loadOpenAISettings, saveOpenAISettings, resolveOpenAIApiKey } from "./openaiSettings.js";
+import { loadGeminiSettings, saveGeminiSettings, resolveGeminiApiKey } from "./geminiSettings.js";
 import { loadMcpSettings, saveMcpSettings, type McpServerConfig } from "./mcpSettings.js";
 import { connectMcpServer, disconnectMcpServer, type McpConnection, type McpServerStatus } from "./mcpClient.js";
 import { adaptMcpTools, sanitizeMcpServerName, type McpToolCaller } from "../mcpToolAdapter.js";
@@ -108,6 +110,8 @@ app.whenReady().then(async () => {
   const authFilePath = path.join(app.getPath("userData"), "auth.json");
   const settingsFilePath = path.join(app.getPath("userData"), "googleSettings.json");
   const anthropicSettingsFilePath = path.join(app.getPath("userData"), "anthropicSettings.json");
+  const openaiSettingsFilePath = path.join(app.getPath("userData"), "openaiSettings.json");
+  const geminiSettingsFilePath = path.join(app.getPath("userData"), "geminiSettings.json");
   const mcpSettingsFilePath = path.join(app.getPath("userData"), "mcpServers.json");
   const sessionsDir = path.join(app.getPath("userData"), "sessions");
   const win = createWindow();
@@ -282,9 +286,9 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent:start-session", async (event, config: SessionConfig, resume?: ResumePayload) => {
     const controller = new AbortController();
     currentStartAbortController = controller;
-    // The renderer only ever sends { kind: "anthropic", model } — it has no
-    // access to the saved key (agent:get-anthropic-settings never sends the
-    // real value back). Resolved here, the same place Google credentials
+    // The renderer only ever sends { kind: "anthropic"/"openai"/"gemini", model }
+    // — it has no access to the saved key (agent:get-*-settings never sends
+    // the real value back). Resolved here, the same place Google credentials
     // are resolved, right before the config reaches startSession. `model`
     // is carried through unchanged — only apiKey is ever added here.
     const resolvedConfig: SessionConfig =
@@ -297,13 +301,33 @@ app.whenReady().then(async () => {
               apiKey: await resolveAnthropicApiKey(anthropicSettingsFilePath, storageCrypto),
             },
           }
-        : config;
+        : config.provider.kind === "openai"
+          ? {
+              ...config,
+              provider: {
+                kind: "openai",
+                model: config.provider.model,
+                apiKey: await resolveOpenAIApiKey(openaiSettingsFilePath, storageCrypto),
+              },
+            }
+          : config.provider.kind === "gemini"
+            ? {
+                ...config,
+                provider: {
+                  kind: "gemini",
+                  model: config.provider.model,
+                  apiKey: await resolveGeminiApiKey(geminiSettingsFilePath, storageCrypto),
+                },
+              }
+            : config;
     try {
       return await startSession(registry, resolvedConfig, {
         onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
         signal: controller.signal,
         resume,
         extraTools: currentMcpTools(),
+        settingsDir: app.getPath("userData"),
+        storageCrypto,
       });
     } catch (err) {
       // healthCheck's real error message now reaches here (see
@@ -493,6 +517,30 @@ app.whenReady().then(async () => {
     const current = await loadAnthropicSettings(anthropicSettingsFilePath, storageCrypto);
     await saveAnthropicSettings(
       anthropicSettingsFilePath,
+      { apiKey: input.apiKey !== undefined ? input.apiKey || null : current.apiKey },
+      storageCrypto
+    );
+  });
+  ipcMain.handle("agent:get-openai-settings", async () => {
+    const settings = await loadOpenAISettings(openaiSettingsFilePath, storageCrypto);
+    return { hasKey: !!settings.apiKey, envOverride: !!process.env.OPENAI_API_KEY };
+  });
+  ipcMain.handle("agent:save-openai-settings", async (_event, input: { apiKey?: string }) => {
+    const current = await loadOpenAISettings(openaiSettingsFilePath, storageCrypto);
+    await saveOpenAISettings(
+      openaiSettingsFilePath,
+      { apiKey: input.apiKey !== undefined ? input.apiKey || null : current.apiKey },
+      storageCrypto
+    );
+  });
+  ipcMain.handle("agent:get-gemini-settings", async () => {
+    const settings = await loadGeminiSettings(geminiSettingsFilePath, storageCrypto);
+    return { hasKey: !!settings.apiKey, envOverride: !!process.env.GEMINI_API_KEY };
+  });
+  ipcMain.handle("agent:save-gemini-settings", async (_event, input: { apiKey?: string }) => {
+    const current = await loadGeminiSettings(geminiSettingsFilePath, storageCrypto);
+    await saveGeminiSettings(
+      geminiSettingsFilePath,
       { apiKey: input.apiKey !== undefined ? input.apiKey || null : current.apiKey },
       storageCrypto
     );

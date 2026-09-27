@@ -1,5 +1,6 @@
 import { toAnthropicMessages, toAnthropicTools, fromAnthropicResponse, AnthropicProvider } from "../providers/anthropicProvider.js";
 import type { ChatMessage } from "../types.js";
+import { ProviderChatError } from "../types.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -200,6 +201,44 @@ console.log("\nAttachments in toAnthropicMessages:");
   const messages: ChatMessage[] = [{ role: "user", content: "plain question" }];
   const { messages: out } = toAnthropicMessages(messages);
   check("a message with no attachments still has plain string content", out[0]?.content === "plain question");
+}
+
+console.log("\nAnthropic rate-limit errors become a retryable ProviderChatError:");
+{
+  const provider = new AnthropicProvider({ apiKey: "test-key" });
+  // @ts-expect-error -- reaching into the private client to force a 429 without a real network call
+  provider["client"].messages.create = async () => {
+    const err: any = new Error("rate limited");
+    err.status = 429;
+    err.name = "RateLimitError";
+    throw err;
+  };
+  try {
+    await provider.chat({ model: "claude-sonnet-5", messages: [{ role: "user", content: "hi" }] });
+    check("a 429 from the Anthropic client throws", false);
+  } catch (err) {
+    check("a 429 from the Anthropic client throws a ProviderChatError", err instanceof ProviderChatError);
+    check("that error is marked retryable", err instanceof ProviderChatError && err.retryable === true);
+    check("that error carries the 429 status", err instanceof ProviderChatError && err.status === 429);
+  }
+}
+
+console.log("\nA non-rate-limit Anthropic error is NOT retryable:");
+{
+  const provider = new AnthropicProvider({ apiKey: "test-key" });
+  // @ts-expect-error -- same reach-in, this time simulating a bad API key
+  provider["client"].messages.create = async () => {
+    const err: any = new Error("invalid x-api-key");
+    err.status = 401;
+    throw err;
+  };
+  try {
+    await provider.chat({ model: "claude-sonnet-5", messages: [{ role: "user", content: "hi" }] });
+    check("a 401 from the Anthropic client throws", false);
+  } catch (err) {
+    check("a 401 from the Anthropic client throws a ProviderChatError", err instanceof ProviderChatError);
+    check("that error is NOT marked retryable", err instanceof ProviderChatError && err.retryable === false);
+  }
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

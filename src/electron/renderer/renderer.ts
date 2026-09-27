@@ -131,6 +131,10 @@ interface AgentBridge {
   saveGoogleSettings(settings: { clientId: string; clientSecret?: string }): Promise<void>;
   getAnthropicSettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
   saveAnthropicSettings(settings: { apiKey?: string }): Promise<void>;
+  getOpenAISettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
+  saveOpenAISettings(settings: { apiKey?: string }): Promise<void>;
+  getGeminiSettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
+  saveGeminiSettings(settings: { apiKey?: string }): Promise<void>;
 }
 
 declare global {
@@ -206,6 +210,18 @@ const ANTHROPIC_MODELS: Record<string, { name: string; note: string }> = {
   "claude-haiku-4-5": { name: "Claude Haiku 4.5", note: "fastest, lowest cost" },
 };
 const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
+const OPENAI_MODELS: Record<string, { name: string; note: string }> = {
+  "gpt-5.5": { name: "GPT-5.5", note: "balanced quality and cost — default" },
+  "gpt-5.6-sol": { name: "GPT-5.6 Sol", note: "most capable, higher cost" },
+  "gpt-5-nano": { name: "GPT-5 Nano", note: "fastest, lowest cost" },
+};
+const DEFAULT_OPENAI_MODEL = "gpt-5.5";
+const GEMINI_MODELS: Record<string, { name: string; note: string }> = {
+  "gemini-2.5-flash": { name: "Gemini 2.5 Flash", note: "free tier available, balanced — default" },
+  "gemini-2.5-pro": { name: "Gemini 2.5 Pro", note: "free tier available, most capable" },
+  "gemini-2.5-flash-lite": { name: "Gemini 2.5 Flash-Lite", note: "free tier available, highest free daily quota" },
+};
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 const CUSTOM_SERVER_VALUE = "custom-server";
 const CUSTOM_EMBEDDED_VALUE = "custom-embedded";
 const modeSelect = byId<HTMLSelectElement>("mode");
@@ -278,6 +294,16 @@ const anthropicEnvOverrideNotice = byId<HTMLDivElement>("anthropic-env-override"
 const anthropicSettingsError = byId<HTMLDivElement>("anthropic-settings-error");
 const anthropicSettingsSaved = byId<HTMLDivElement>("anthropic-settings-saved");
 const anthropicSettingsSaveBtn = byId<HTMLButtonElement>("anthropic-settings-save");
+const openaiApiKeyInput = byId<HTMLInputElement>("openai-api-key");
+const openaiEnvOverrideNotice = byId<HTMLDivElement>("openai-env-override");
+const openaiSettingsError = byId<HTMLDivElement>("openai-settings-error");
+const openaiSettingsSaved = byId<HTMLDivElement>("openai-settings-saved");
+const openaiSettingsSaveBtn = byId<HTMLButtonElement>("openai-settings-save");
+const geminiApiKeyInput = byId<HTMLInputElement>("gemini-api-key");
+const geminiEnvOverrideNotice = byId<HTMLDivElement>("gemini-env-override");
+const geminiSettingsError = byId<HTMLDivElement>("gemini-settings-error");
+const geminiSettingsSaved = byId<HTMLDivElement>("gemini-settings-saved");
+const geminiSettingsSaveBtn = byId<HTMLButtonElement>("gemini-settings-save");
 const googleSignInBtn = byId<HTMLButtonElement>("google-sign-in");
 const signOutBtn = byId<HTMLButtonElement>("sign-out-btn");
 const authSignedOut = byId<HTMLDivElement>("auth-signed-out");
@@ -513,6 +539,18 @@ for (const [id, info] of Object.entries(ANTHROPIC_MODELS)) {
   const option = document.createElement("option");
   option.value = id;
   option.textContent = `${info.name} (Anthropic API) — ${info.note}`;
+  cloudGroup.appendChild(option);
+}
+for (const [id, info] of Object.entries(OPENAI_MODELS)) {
+  const option = document.createElement("option");
+  option.value = id;
+  option.textContent = `${info.name} (OpenAI API) — ${info.note}`;
+  cloudGroup.appendChild(option);
+}
+for (const [id, info] of Object.entries(GEMINI_MODELS)) {
+  const option = document.createElement("option");
+  option.value = id;
+  option.textContent = `${info.name} (Gemini API) — ${info.note}`;
   cloudGroup.appendChild(option);
 }
 modelSelect.appendChild(cloudGroup);
@@ -913,6 +951,14 @@ let anthropicApiKeyTouched = false;
 anthropicApiKeyInput.addEventListener("input", () => {
   anthropicApiKeyTouched = true;
 });
+let openaiApiKeyTouched = false;
+openaiApiKeyInput.addEventListener("input", () => {
+  openaiApiKeyTouched = true;
+});
+let geminiApiKeyTouched = false;
+geminiApiKeyInput.addEventListener("input", () => {
+  geminiApiKeyTouched = true;
+});
 
 async function openSettingsPanel(): Promise<void> {
   settingsError.textContent = "";
@@ -931,6 +977,22 @@ async function openSettingsPanel(): Promise<void> {
   anthropicApiKeyInput.value = "";
   anthropicApiKeyInput.placeholder = currentAnthropic.hasKey ? "•••• saved" : "";
   anthropicEnvOverrideNotice.hidden = !currentAnthropic.envOverride;
+
+  openaiSettingsError.textContent = "";
+  openaiSettingsSaved.hidden = true;
+  openaiApiKeyTouched = false;
+  const currentOpenAI = await window.agent.getOpenAISettings();
+  openaiApiKeyInput.value = "";
+  openaiApiKeyInput.placeholder = currentOpenAI.hasKey ? "•••• saved" : "";
+  openaiEnvOverrideNotice.hidden = !currentOpenAI.envOverride;
+
+  geminiSettingsError.textContent = "";
+  geminiSettingsSaved.hidden = true;
+  geminiApiKeyTouched = false;
+  const currentGemini = await window.agent.getGeminiSettings();
+  geminiApiKeyInput.value = "";
+  geminiApiKeyInput.placeholder = currentGemini.hasKey ? "•••• saved" : "";
+  geminiEnvOverrideNotice.hidden = !currentGemini.envOverride;
 
   await refreshDownloadedModelsList();
 }
@@ -1337,6 +1399,44 @@ anthropicSettingsSaveBtn.addEventListener("click", () => {
   });
 });
 
+openaiSettingsSaveBtn.addEventListener("click", () => {
+  openaiSettingsError.textContent = "";
+  openaiSettingsSaved.hidden = true;
+  void withBusyLabel(openaiSettingsSaveBtn, "Saving…", async () => {
+    try {
+      const keyValueSent = openaiApiKeyTouched ? openaiApiKeyInput.value.trim() : undefined;
+      await window.agent.saveOpenAISettings({ apiKey: keyValueSent });
+      openaiApiKeyTouched = false;
+      if (keyValueSent !== undefined) {
+        openaiApiKeyInput.value = "";
+        openaiApiKeyInput.placeholder = keyValueSent ? "•••• saved" : "";
+      }
+      showSavedToast(openaiSettingsSaved);
+    } catch (err) {
+      openaiSettingsError.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
+});
+
+geminiSettingsSaveBtn.addEventListener("click", () => {
+  geminiSettingsError.textContent = "";
+  geminiSettingsSaved.hidden = true;
+  void withBusyLabel(geminiSettingsSaveBtn, "Saving…", async () => {
+    try {
+      const keyValueSent = geminiApiKeyTouched ? geminiApiKeyInput.value.trim() : undefined;
+      await window.agent.saveGeminiSettings({ apiKey: keyValueSent });
+      geminiApiKeyTouched = false;
+      if (keyValueSent !== undefined) {
+        geminiApiKeyInput.value = "";
+        geminiApiKeyInput.placeholder = keyValueSent ? "•••• saved" : "";
+      }
+      showSavedToast(geminiSettingsSaved);
+    } catch (err) {
+      geminiSettingsError.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
+});
+
 chooseWorkspaceBtn.addEventListener("click", async () => {
   const picked = await window.agent.pickWorkspace();
   if (picked) {
@@ -1690,6 +1790,8 @@ window.agent.onDownloadProgress((status) => {
 /** Reads the provider config the Model select (plus its dependent fields) currently describes — shared by beginSession and applySessionEdits, which needs it BEFORE deciding whether beginSession's tear-down-and-rebuild path is even safe to take. */
 function deriveProviderConfigFromForm(): ProviderConfig {
   if (modelSelect.value in ANTHROPIC_MODELS) return { kind: "anthropic", model: modelSelect.value };
+  if (modelSelect.value in OPENAI_MODELS) return { kind: "openai", model: modelSelect.value };
+  if (modelSelect.value in GEMINI_MODELS) return { kind: "gemini", model: modelSelect.value };
   if (modelSelect.value === CUSTOM_SERVER_VALUE) {
     return { kind: "openai-compatible", baseUrl: baseUrlInput.value.trim(), model: externalModelInput.value.trim() };
   }
@@ -1746,7 +1848,17 @@ function renderActiveModelBadge(provider: ProviderConfig): void {
             const modelId = provider.model ?? DEFAULT_ANTHROPIC_MODEL;
             return `${ANTHROPIC_MODELS[modelId]?.name ?? modelId} (Anthropic API)`;
           })()
-        : `${provider.model} (${provider.baseUrl})`;
+        : provider.kind === "openai"
+          ? (() => {
+              const modelId = provider.model ?? DEFAULT_OPENAI_MODEL;
+              return `${OPENAI_MODELS[modelId]?.name ?? modelId} (OpenAI API)`;
+            })()
+          : provider.kind === "gemini"
+            ? (() => {
+                const modelId = provider.model ?? DEFAULT_GEMINI_MODEL;
+                return `${GEMINI_MODELS[modelId]?.name ?? modelId} (Gemini API)`;
+              })()
+            : `${provider.model} (${provider.baseUrl})`;
   const gpuText = provider.kind === "embedded" && hardwareInfo?.gpu ? ` · ${hardwareInfo.gpu} GPU` : "";
   // Provider identity color, at a glance, alongside the always-present text
   // label — kept as a lookup rather than a growing ternary chain so a future
@@ -1755,6 +1867,8 @@ function renderActiveModelBadge(provider: ProviderConfig): void {
     embedded: "signal-dot-embedded",
     anthropic: "signal-dot-anthropic",
     "openai-compatible": "signal-dot-custom",
+    openai: "signal-dot-openai",
+    gemini: "signal-dot-gemini",
   };
   activeModelBadge.innerHTML = "";
   const dot = document.createElement("span");
@@ -2138,6 +2252,10 @@ function syncFormFromTab(tab: TabState): void {
     }
   } else if (formProvider.kind === "anthropic") {
     modelSelect.value = formProvider.model ?? DEFAULT_ANTHROPIC_MODEL;
+  } else if (formProvider.kind === "openai") {
+    modelSelect.value = formProvider.model ?? DEFAULT_OPENAI_MODEL;
+  } else if (formProvider.kind === "gemini") {
+    modelSelect.value = formProvider.model ?? DEFAULT_GEMINI_MODEL;
   } else {
     modelSelect.value = CUSTOM_SERVER_VALUE;
     baseUrlInput.value = formProvider.baseUrl;
