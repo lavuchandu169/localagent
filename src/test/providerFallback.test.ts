@@ -28,11 +28,11 @@ console.log("resolveFallbackOrder:");
   const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-fallback-test-"));
   // Saved out of alphabetical/kind order on purpose — Gemini first, then
   // Anthropic, then OpenAI — to prove sort-by-addedAt, not a fixed kind order.
-  await saveGeminiSettings(path.join(settingsDir, "gemini-settings.json"), { apiKey: "gk-1" });
+  await saveGeminiSettings(path.join(settingsDir, "geminiSettings.json"), { apiKey: "gk-1" });
   await new Promise((r) => setTimeout(r, 5));
-  await saveAnthropicSettings(path.join(settingsDir, "anthropic-settings.json"), { apiKey: "ak-1" });
+  await saveAnthropicSettings(path.join(settingsDir, "anthropicSettings.json"), { apiKey: "ak-1" });
   await new Promise((r) => setTimeout(r, 5));
-  await saveOpenAISettings(path.join(settingsDir, "openai-settings.json"), { apiKey: "ok-1" });
+  await saveOpenAISettings(path.join(settingsDir, "openaiSettings.json"), { apiKey: "ok-1" });
 
   const order = await resolveFallbackOrder(settingsDir, undefined, "anthropic");
   check("excludes the active kind (anthropic)", !order.some((p) => p.kind === "anthropic"));
@@ -47,7 +47,7 @@ console.log("resolveFallbackOrder:");
 
 {
   const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-fallback-test-"));
-  await saveAnthropicSettings(path.join(settingsDir, "anthropic-settings.json"), { apiKey: "ak-1" });
+  await saveAnthropicSettings(path.join(settingsDir, "anthropicSettings.json"), { apiKey: "ak-1" });
   const order = await resolveFallbackOrder(settingsDir, undefined, "anthropic");
   check("excluding the only configured provider leaves nothing to fall back to", order.length === 0);
 }

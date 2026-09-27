@@ -214,6 +214,28 @@
             <div id="anthropic-settings-error" class="error-text"></div>
             <div id="anthropic-settings-saved" class="hint-text saved-toast" hidden>Saved.</div>
             <button id="anthropic-settings-save">Save</button>
+
+            <hr />
+            <p>OpenAI API key — to use a GPT model (Model dropdown → Cloud), from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>. Saved locally, sent only to OpenAI.</p>
+            <div id="openai-env-override" class="hint-text" hidden>An environment variable (OPENAI_API_KEY) is currently active and overrides this saved value.</div>
+            <label>
+              API Key
+              <input id="openai-api-key" type="password" placeholder="" />
+            </label>
+            <div id="openai-settings-error" class="error-text"></div>
+            <div id="openai-settings-saved" class="hint-text saved-toast" hidden>Saved.</div>
+            <button id="openai-settings-save">Save</button>
+
+            <hr />
+            <p>Gemini API key — to use a Gemini model (Model dropdown → Cloud), from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>. Gemini's free tier needs no payment method. Saved locally, sent only to Google.</p>
+            <div id="gemini-env-override" class="hint-text" hidden>An environment variable (GEMINI_API_KEY) is currently active and overrides this saved value.</div>
+            <label>
+              API Key
+              <input id="gemini-api-key" type="password" placeholder="" />
+            </label>
+            <div id="gemini-settings-error" class="error-text"></div>
+            <div id="gemini-settings-saved" class="hint-text saved-toast" hidden>Saved.</div>
+            <button id="gemini-settings-save">Save</button>
           </div>
         </div>
 

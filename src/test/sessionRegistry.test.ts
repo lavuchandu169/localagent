@@ -211,7 +211,7 @@ await (async () => {
   console.log("\nstartSession builds fallbackProviders from saved settings when the primary is a cloud provider:");
   await (async () => {
     const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));
-    await saveOpenAISettings(path.join(settingsDir, "openai-settings.json"), { apiKey: "sk-fallback" });
+    await saveOpenAISettings(path.join(settingsDir, "openaiSettings.json"), { apiKey: "sk-fallback" });
 
     const registry = createSessionRegistry(sessionsDir);
     const failingScript = [{ throws: new ProviderChatError("rate limited", { status: 429, retryable: true }) }];
@@ -240,8 +240,8 @@ await (async () => {
   console.log("\nstartSession does NOT build fallbackProviders when the primary is embedded or a custom server:");
   await (async () => {
     const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));
-    await saveOpenAISettings(path.join(settingsDir, "openai-settings.json"), { apiKey: "sk-fallback" });
-    await saveAnthropicSettings(path.join(settingsDir, "anthropic-settings.json"), { apiKey: "ak-fallback" });
+    await saveOpenAISettings(path.join(settingsDir, "openaiSettings.json"), { apiKey: "sk-fallback" });
+    await saveAnthropicSettings(path.join(settingsDir, "anthropicSettings.json"), { apiKey: "ak-fallback" });
 
     const registry = createSessionRegistry(sessionsDir);
     const script = [{ throws: new ProviderChatError("simulated crash", { retryable: true }) }, { turn: { type: "final", content: "should never run" } }];

@@ -18,10 +18,16 @@ export const DEFAULT_MODEL_BY_KIND: Record<CloudProviderKind, string> = {
   gemini: "gemini-2.5-flash",
 };
 
+// Matches main.ts's real, already-shipped file naming exactly
+// (path.join(app.getPath("userData"), "anthropicSettings.json")) — these
+// are NOT a new convention; getting this wrong would mean this function
+// silently never finds a real user's saved settings in production, only
+// ever working against test fixtures that happen to use whatever name
+// this file itself expects.
 const SETTINGS_FILENAME_BY_KIND: Record<CloudProviderKind, string> = {
-  anthropic: "anthropic-settings.json",
-  openai: "openai-settings.json",
-  gemini: "gemini-settings.json",
+  anthropic: "anthropicSettings.json",
+  openai: "openaiSettings.json",
+  gemini: "geminiSettings.json",
 };
 
 /**
