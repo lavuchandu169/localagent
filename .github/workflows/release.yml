@@ -7,6 +7,15 @@ on:
   push:
     tags:
       - "v*"
+  # GitHub does not fire a push/tag-triggered workflow when the tag was
+  # itself pushed using GITHUB_TOKEN (the anti-recursion rule that stops
+  # workflows from endlessly triggering each other) — but workflow_dispatch
+  # is explicitly exempt from that rule. Cut Release pushes its tag using
+  # GITHUB_TOKEN and then calls `gh workflow run Release --ref vX.Y.Z`
+  # right after, which is what actually starts this workflow for an
+  # automated release; a human pushing a tag by hand still triggers it the
+  # normal way, via the push trigger above.
+  workflow_dispatch:
 
 jobs:
   # Blocks the entire release — including create-release's empty shell — on
