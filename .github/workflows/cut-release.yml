@@ -1,0 +1,134 @@
+name: Cut Release
+
+# The one manual step CONTRIBUTING.md's release process used to require by
+# hand: bump package.json's version, add a matching CHANGELOG.md entry,
+# push a vX.Y.Z tag. This workflow does all three from a single manual
+# trigger (a maintainer clicking "Run workflow" and typing the changelog
+# text) — everything after that is automatic: open the version-bump PR,
+# let it auto-merge once CI passes (main's branch protection still gates
+# it — nothing here bypasses that), then push the tag once merged, which
+# fires release.yml exactly like a hand-pushed tag always has.
+#
+# Requires the repo's "Allow auto-merge" setting to be on (Settings →
+# General → Pull Requests) — without it, `gh pr merge --auto` below is
+# rejected outright and this workflow fails at that step with a clear
+# error, rather than silently merging some other way.
+
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Version segment to bump"
+        required: true
+        default: "beta"
+        type: choice
+        options:
+          - beta
+          - patch
+          - minor
+          - major
+      changelog_entry:
+        description: "CHANGELOG.md entry — one bullet per line"
+        required: true
+        type: string
+
+jobs:
+  cut-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Bump version and update CHANGELOG.md
+        id: bump
+        env:
+          CHANGELOG_ENTRY: ${{ inputs.changelog_entry }}
+        run: node scripts/bump-version.mjs "${{ inputs.bump_type }}"
+
+      # Validates the bump before anything is committed or pushed —
+      # generate-whats-new.mjs (part of `npm run build`) throws if
+      # CHANGELOG.md's newest entry and package.json's version don't
+      # match, and the full suite catches anything else. A failure here
+      # stops the workflow with nothing committed, nothing pushed, and no
+      # PR opened — the working tree just has an uncommitted version bump
+      # that the next run of this workflow starts over from main anyway.
+      - run: npm run build
+      - run: npm test
+
+      - name: Open the release PR and enable auto-merge
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.bump.outputs.version }}"
+          BRANCH="release/v$VERSION"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add package.json CHANGELOG.md
+          git commit -m "chore: bump version to $VERSION for release"
+          git push origin "$BRANCH"
+
+          PR_URL=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+            --title "Release v$VERSION" \
+            --body "Automated release PR from the Cut Release workflow. Bumps package.json to v$VERSION and adds its CHANGELOG.md entry. Auto-merges once CI passes; merging pushes the \`v$VERSION\` tag, which triggers the real build/publish (release.yml).")
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+          # required_approving_review_count is 0 on this repo's main branch
+          # protection, so the only real gate left is the "test" status
+          # check — --auto waits for that (and any other required check)
+          # to pass before merging, same as a human clicking "Merge" would
+          # have to.
+          gh pr merge "$PR_URL" --auto --squash --delete-branch
+
+      - name: Wait for the release PR to merge, then tag it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.bump.outputs.version }}"
+          PR_URL="${{ steps.pr.outputs.pr_url }}"
+
+          # CI (the "test" job, triggered by this PR against main) has to
+          # actually run and finish before auto-merge can fire — polling
+          # rather than assuming it's instant. 40 tries * 15s = 10 minutes,
+          # comfortably above this project's Node-only suite runtime; a
+          # genuine CI failure leaves the PR open (auto-merge never fires)
+          # and this loop times out with a clear message instead of
+          # hanging forever or tagging a version that was never merged.
+          for i in $(seq 1 40); do
+            STATE=$(gh pr view "$PR_URL" --json state,mergedAt --jq '.state')
+            if [ "$STATE" = "MERGED" ]; then
+              echo "Release PR merged."
+              break
+            fi
+            if [ "$STATE" = "CLOSED" ]; then
+              echo "Release PR was closed without merging — aborting, no tag pushed." >&2
+              exit 1
+            fi
+            echo "Waiting for the release PR to merge (attempt $i/40, state: $STATE)..."
+            sleep 15
+          done
+
+          FINAL_STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
+          if [ "$FINAL_STATE" != "MERGED" ]; then
+            echo "Release PR did not merge within the timeout — aborting, no tag pushed. Check $PR_URL." >&2
+            exit 1
+          fi
+
+          git fetch origin main
+          git tag "v$VERSION" origin/main
+          git push origin "v$VERSION"
+          echo "Pushed tag v$VERSION — release.yml will build and publish it now."
