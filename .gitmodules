@@ -1,0 +1,3 @@
+[submodule "vendor/freellmapi"]
+	path = vendor/freellmapi
+	url = https://github.com/tashfeenahmed/freellmapi.git

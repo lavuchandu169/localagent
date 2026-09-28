@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import { ProviderChatError } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
 
 /**
@@ -114,7 +115,16 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`Provider error ${res.status}: ${text}`);
+      // A typed ProviderChatError (not a bare Error) so callers like the
+      // freellmapi free-tier router — which delegates all its real HTTP
+      // work to this class, see providers/freellmapiProxy.ts — can trigger
+      // agent.ts's fallback-to-cloud-provider path when the whole router
+      // comes back rate-limit-exhausted. Matches the same retryable-iff-429
+      // convention used by every other provider (openaiProvider.ts,
+      // anthropicProvider.ts, geminiProvider.ts). A local server
+      // (openai-compatible kind) never has fallbackProviders configured, so
+      // this is a no-op behavior change for that existing caller.
+      throw new ProviderChatError(`Provider error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
     }
 
     const data: any = await res.json();

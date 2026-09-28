@@ -135,6 +135,7 @@ interface AgentBridge {
   saveOpenAISettings(settings: { apiKey?: string }): Promise<void>;
   getGeminiSettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
   saveGeminiSettings(settings: { apiKey?: string }): Promise<void>;
+  openFreellmapiDashboard(): Promise<void>;
 }
 
 declare global {
@@ -191,6 +192,11 @@ const workspacePathEl = byId<HTMLSpanElement>("workspace-path");
 const chooseWorkspaceBtn = byId<HTMLButtonElement>("choose-workspace");
 const externalFields = byId<HTMLDivElement>("external-fields");
 const anthropicFields = byId<HTMLDivElement>("anthropic-fields");
+const freellmapiFields = byId<HTMLDivElement>("freellmapi-fields");
+const openFreellmapiDashboardBtn = byId<HTMLButtonElement>("open-freellmapi-dashboard");
+openFreellmapiDashboardBtn.addEventListener("click", () => {
+  window.agent.openFreellmapiDashboard();
+});
 const baseUrlInput = byId<HTMLInputElement>("base-url");
 const externalModelInput = byId<HTMLInputElement>("external-model");
 const customEmbeddedFields = byId<HTMLDivElement>("custom-embedded-fields");
@@ -224,6 +230,7 @@ const GEMINI_MODELS: Record<string, { name: string; note: string }> = {
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 const CUSTOM_SERVER_VALUE = "custom-server";
 const CUSTOM_EMBEDDED_VALUE = "custom-embedded";
+const FREELLMAPI_VALUE = "freellmapi-auto";
 const modeSelect = byId<HTMLSelectElement>("mode");
 const planFirstCheckbox = byId<HTMLInputElement>("plan-first");
 const modeDescription = byId<HTMLSpanElement>("mode-description");
@@ -553,6 +560,12 @@ for (const [id, info] of Object.entries(GEMINI_MODELS)) {
   option.textContent = `${info.name} (Gemini API) — ${info.note}`;
   cloudGroup.appendChild(option);
 }
+{
+  const option = document.createElement("option");
+  option.value = FREELLMAPI_VALUE;
+  option.textContent = "Free-tier router (34 providers, auto-fallback)";
+  cloudGroup.appendChild(option);
+}
 modelSelect.appendChild(cloudGroup);
 
 const customGroup = document.createElement("optgroup");
@@ -588,6 +601,7 @@ function updateModelDependentFields() {
   externalFields.hidden = modelSelect.value !== CUSTOM_SERVER_VALUE;
   customEmbeddedFields.hidden = modelSelect.value !== CUSTOM_EMBEDDED_VALUE;
   anthropicFields.hidden = !(modelSelect.value in ANTHROPIC_MODELS);
+  freellmapiFields.hidden = modelSelect.value !== FREELLMAPI_VALUE;
 }
 modelSelect.addEventListener("change", () => {
   updateModelDependentFields();
@@ -1792,6 +1806,7 @@ function deriveProviderConfigFromForm(): ProviderConfig {
   if (modelSelect.value in ANTHROPIC_MODELS) return { kind: "anthropic", model: modelSelect.value };
   if (modelSelect.value in OPENAI_MODELS) return { kind: "openai", model: modelSelect.value };
   if (modelSelect.value in GEMINI_MODELS) return { kind: "gemini", model: modelSelect.value };
+  if (modelSelect.value === FREELLMAPI_VALUE) return { kind: "freellmapi" };
   if (modelSelect.value === CUSTOM_SERVER_VALUE) {
     return { kind: "openai-compatible", baseUrl: baseUrlInput.value.trim(), model: externalModelInput.value.trim() };
   }
@@ -1858,7 +1873,9 @@ function renderActiveModelBadge(provider: ProviderConfig): void {
                 const modelId = provider.model ?? DEFAULT_GEMINI_MODEL;
                 return `${GEMINI_MODELS[modelId]?.name ?? modelId} (Gemini API)`;
               })()
-            : `${provider.model} (${provider.baseUrl})`;
+            : provider.kind === "freellmapi"
+              ? "Free-tier router (34 providers)"
+              : `${provider.model} (${provider.baseUrl})`;
   const gpuText = provider.kind === "embedded" && hardwareInfo?.gpu ? ` · ${hardwareInfo.gpu} GPU` : "";
   // Provider identity color, at a glance, alongside the always-present text
   // label — kept as a lookup rather than a growing ternary chain so a future
@@ -1869,6 +1886,7 @@ function renderActiveModelBadge(provider: ProviderConfig): void {
     "openai-compatible": "signal-dot-custom",
     openai: "signal-dot-openai",
     gemini: "signal-dot-gemini",
+    freellmapi: "signal-dot-freellmapi",
   };
   activeModelBadge.innerHTML = "";
   const dot = document.createElement("span");
@@ -2256,6 +2274,8 @@ function syncFormFromTab(tab: TabState): void {
     modelSelect.value = formProvider.model ?? DEFAULT_OPENAI_MODEL;
   } else if (formProvider.kind === "gemini") {
     modelSelect.value = formProvider.model ?? DEFAULT_GEMINI_MODEL;
+  } else if (formProvider.kind === "freellmapi") {
+    modelSelect.value = FREELLMAPI_VALUE;
   } else {
     modelSelect.value = CUSTOM_SERVER_VALUE;
     baseUrlInput.value = formProvider.baseUrl;

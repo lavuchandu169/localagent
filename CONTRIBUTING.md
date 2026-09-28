@@ -28,6 +28,22 @@ still be triggered manually: Actions tab → Cut Release → Run workflow.
 any-branch  →  main  →  (automatic) Cut Release  →  vX.Y.Z tag  →  release.yml
 ```
 
+## First-time setup
+
+This repo vendors [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)
+(the bundled free-tier provider) as a git submodule. A plain `git clone`
+leaves `vendor/freellmapi/` empty — `npm run build` fails immediately
+against an empty submodule otherwise, so run this once after cloning:
+
+```bash
+git submodule update --init --recursive
+```
+
+`scripts/verify-freellmapi-submodule.mjs` runs automatically as the first
+step of `npm run build` and fails loudly with this exact command if the
+submodule is missing, rather than failing confusingly deep inside
+`scripts/build-freellmapi.mjs`.
+
 ## Workflow
 
 1. Branch from `main`: `git checkout -b my-change main`
@@ -51,7 +67,17 @@ npm test
 ```
 
 The suite is plain Node scripts against `MockProvider`/fake resolvers —
-no Electron launch or real model download required to run it.
+no Electron launch or real model download required to run it. Nothing in
+`npm test` loads the real bundled FreeLLMAPI server or `better-sqlite3`
+(every test against it uses a fake bundle), so this stays fast and
+network-free.
+
+**Trying the bundled free-tier provider itself under `npm run electron`**
+is different: `better-sqlite3` needs Electron's native ABI, not plain
+Node's, to actually load. Run `npm run rebuild:native` once before
+`npm run electron` to try it — and `npm rebuild better-sqlite3` afterward
+to switch back to plain Node (needed again before `npm test`/`node
+dist/...`, which use plain Node's ABI).
 
 ## Code of conduct / security
 

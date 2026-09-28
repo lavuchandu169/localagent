@@ -94,6 +94,58 @@ await fs.writeFile(realLicensePath, "MIT License text goes here.", "utf-8");
   check("entries are sorted alphabetically by package name", md.indexOf("aaa-first") < md.indexOf("zzz-last"));
 }
 
+console.log("\nbuildNoticesMarkdown includes a vendored submodule's own license:");
+{
+  const md = await buildNoticesMarkdown(
+    { "some-pkg@1.2.3": { licenses: "MIT", repository: "https://example.com/some-pkg", licenseFile: realLicensePath } },
+    [{ name: "FreeLLMAPI", repository: "https://github.com/tashfeenahmed/freellmapi", licenseFile: realLicensePath }]
+  );
+  check("includes the vendored project's heading", md.includes("## FreeLLMAPI (vendored)"));
+  check("includes its repository link", md.includes("https://github.com/tashfeenahmed/freellmapi"));
+  check("includes its real license text", md.includes("MIT License text goes here."));
+}
+
+console.log("\nbuildNoticesMarkdown includes a vendored project's OWN sub-dependencies:");
+{
+  // FreeLLMAPI's own client (React etc.) and server dependencies get
+  // bundled into the shipped output (Vite/esbuild) exactly like a direct
+  // localagent dependency would — they need the same attribution, just
+  // clearly scoped as "these ship because of the vendored feature", not
+  // merged anonymously into the top-level list.
+  const md = await buildNoticesMarkdown(
+    { "some-pkg@1.2.3": { licenses: "MIT", repository: "https://example.com/some-pkg", licenseFile: realLicensePath } },
+    [
+      {
+        name: "FreeLLMAPI",
+        repository: "https://github.com/tashfeenahmed/freellmapi",
+        licenseFile: realLicensePath,
+        dependencies: {
+          "react@18.2.0": { licenses: "MIT", repository: "https://github.com/facebook/react", licenseFile: realLicensePath },
+        },
+      },
+    ]
+  );
+  check("includes a sub-section for the vendored project's own dependencies", md.includes("### FreeLLMAPI's own dependencies"));
+  check("includes the sub-dependency's name and version", md.includes("react@18.2.0"));
+  // 3 occurrences, not 2: the main entry (some-pkg), FreeLLMAPI's own
+  // top-level license, AND the sub-dependency's license text all reuse the
+  // same fixture file/text in this test — a weaker "at least 1" or "== 2"
+  // assertion here would pass even if the sub-dependency's license text
+  // were never rendered at all, since the first two already account for 2.
+  check(
+    "includes the sub-dependency's real license text as its own distinct block",
+    (md.match(/MIT License text goes here\./g) ?? []).length === 3
+  );
+}
+
+console.log("\nbuildNoticesMarkdown omits the sub-dependency section when a vendored project has none:");
+{
+  const md = await buildNoticesMarkdown({}, [
+    { name: "FreeLLMAPI", repository: "https://github.com/tashfeenahmed/freellmapi", licenseFile: realLicensePath },
+  ]);
+  check("no empty sub-section is printed when dependencies is omitted", !md.includes("own dependencies"));
+}
+
 await fs.rm(tmpDir, { recursive: true, force: true });
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

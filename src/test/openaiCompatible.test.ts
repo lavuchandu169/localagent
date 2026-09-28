@@ -1,5 +1,6 @@
-import { buildChatBody } from "../providers/openaiCompatible.js";
+import { buildChatBody, OpenAICompatibleProvider } from "../providers/openaiCompatible.js";
 import type { ChatMessage } from "../types.js";
+import { ProviderChatError } from "../types.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -70,6 +71,51 @@ console.log("buildChatBody:");
     JSON.stringify(body.messages[0].tool_calls) === JSON.stringify([{ id: "c1", type: "function", function: { name: "read_file", arguments: '{"path":"a.js"}' } }])
   );
   check("tool_call_id and name still pass through on a tool message", body.messages[1].tool_call_id === "c1" && body.messages[1].name === "read_file");
+}
+
+console.log("\nOpenAICompatibleProvider classifies a 429 as retryable:");
+{
+  // The freellmapi free-tier router (which delegates all real HTTP work to
+  // THIS class — see providers/freellmapiProxy.ts) needs a real,
+  // classified 429 to trigger the spec's required fallback-to-cloud-provider
+  // behavior when the whole router comes back exhausted. Matches the exact
+  // convention already used in openaiProvider.ts/anthropicProvider.ts/
+  // geminiProvider.ts: retryable iff status === 429.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("rate limit exceeded", { status: 429, statusText: "Too Many Requests" })) as typeof fetch;
+  try {
+    const provider = new OpenAICompatibleProvider({ baseUrl: "http://127.0.0.1:8687/v1", local: false });
+    try {
+      await provider.chat({ model: "auto", messages: [{ role: "user", content: "hi" }] });
+      check("a 429 response throws", false);
+    } catch (err) {
+      check("a 429 response throws a ProviderChatError", err instanceof ProviderChatError);
+      check("that error is retryable", err instanceof ProviderChatError && err.retryable === true);
+      check("that error carries status 429", err instanceof ProviderChatError && err.status === 429);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+console.log("\nOpenAICompatibleProvider does NOT mark a 500 as retryable:");
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("internal error", { status: 500, statusText: "Internal Server Error" })) as typeof fetch;
+  try {
+    const provider = new OpenAICompatibleProvider({ baseUrl: "http://127.0.0.1:8687/v1", local: false });
+    try {
+      await provider.chat({ model: "auto", messages: [{ role: "user", content: "hi" }] });
+      check("a 500 response throws", false);
+    } catch (err) {
+      check("a 500 response throws a ProviderChatError", err instanceof ProviderChatError);
+      check("that error is NOT retryable", err instanceof ProviderChatError && err.retryable === false);
+      check("that error carries status 500", err instanceof ProviderChatError && err.status === 500);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

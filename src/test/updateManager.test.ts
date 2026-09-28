@@ -99,6 +99,30 @@ console.log("wireAutoUpdater — state machine:");
   let prevented = false;
   if (beforeQuitHandlerRef.current) beforeQuitHandlerRef.current({ preventDefault: () => (prevented = true) });
   check("before-quit does NOT prevent default once installUpdate() already started installing", !prevented);
+
+  check("isInstalling() is true once installUpdate() has started quitAndInstall()", manager.isInstalling());
+}
+
+console.log("\nwireAutoUpdater — isInstalling() reflects state:");
+{
+  const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
+
+  const manager = wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: () => {},
+    onBeforeQuit: () => {},
+    openPath,
+    setIntervalFn: () => 0,
+  });
+
+  check("isInstalling() is false before any update is even downloaded", !manager.isInstalling());
+
+  fakeUpdater.emit("update-downloaded", { version: "2.0.0" });
+  check("isInstalling() is still false once merely downloaded (not yet installing)", !manager.isInstalling());
+
+  manager.installUpdate();
+  check("isInstalling() becomes true once installUpdate() has started quitAndInstall()", manager.isInstalling());
 }
 
 console.log("\nwireAutoUpdater — natural quit before Restart Now is clicked:");

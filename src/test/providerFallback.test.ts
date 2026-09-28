@@ -65,5 +65,21 @@ console.log("resolveFallbackOrder:");
   check("its real saved API key is carried through", order[0]?.apiKey === "legacy-gk-1");
 }
 
+{
+  // The freellmapi free-tier router is never itself a CloudProviderKind
+  // (it has no per-provider settings file, and cloud providers must never
+  // be offered as a fallback FOR it — only the other direction), so when
+  // IT is the one that just failed there is no kind to exclude. Every
+  // configured cloud provider is a valid fallback candidate.
+  const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-fallback-test-"));
+  await saveAnthropicSettings(path.join(settingsDir, "anthropicSettings.json"), { apiKey: "ak-1" });
+  await new Promise((r) => setTimeout(r, 5));
+  await saveOpenAISettings(path.join(settingsDir, "openaiSettings.json"), { apiKey: "ok-1" });
+
+  const order = await resolveFallbackOrder(settingsDir, undefined, undefined);
+  check("with no excludeKind, every configured cloud provider is a candidate", order.length === 2);
+  check("still ordered by addedAt ascending", order[0]?.kind === "anthropic" && order[1]?.kind === "openai");
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
