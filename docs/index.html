@@ -1,9 +1,3 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="A local-first autonomous coding agent for macOS and Windows. Bring your own model — embedded GGUF, Ollama/LM Studio/vLLM, or Claude — with a real agent loop, permission engine, MCP tools, and multi-session desktop UI.">
 <title>localagent</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -385,8 +379,6 @@
     .reveal, .reveal-media { opacity: 1 !important; transform: none !important; filter: none !important; }
   }
 </style>
-</head>
-<body>
 
 <nav id="site-nav">
   <span class="brand">localagent</span>
@@ -403,7 +395,7 @@
     <div class="hero-content reveal">
       <span class="eyebrow">// Local-first coding agent</span>
       <h1>A local-first coding agent that actually gets things done.</h1>
-      <p class="subtitle">Bring your own model — an embedded GGUF file, any Ollama / LM&nbsp;Studio / vLLM server, or Claude — and get a real agent loop with a permission engine, checkpoints, and MCP tools. Nothing has to leave your machine unless you tell it to.</p>
+      <p class="subtitle">Bring your own model — an embedded GGUF file, any Ollama / LM&nbsp;Studio / vLLM server, or Claude, OpenAI, and Gemini with your own API keys — and get a real agent loop with a permission engine, checkpoints, and MCP tools. Nothing has to leave your machine unless you tell it to.</p>
       <div class="hero-actions">
         <a class="btn" href="#download">Download for Mac / Windows</a>
         <a class="btn-secondary" href="https://github.com/lavuchandu169/localagent">View on GitHub</a>
@@ -514,6 +506,10 @@ node dist/cli.js "explain how add() works in math.js" \
         <h3>File attachments</h3>
         <p>Attach text and image files to a task, up to 5 at a time — stays local unless your chosen provider is a cloud model.</p>
       </div>
+      <div class="feature reveal">
+        <h3>Claude, OpenAI, or Gemini — with automatic fallback</h3>
+        <p>Add your own API key for any of the three. If the one you're using hits a rate limit or quota error mid-task, localagent automatically retries on another provider you've configured, in the order you added them — no manual switching, no lost progress.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -522,7 +518,7 @@ node dist/cli.js "explain how add() works in math.js" \
   <div class="container">
     <span class="eyebrow reveal">// Download</span>
     <h2 class="reveal">Free, and complete</h2>
-    <p class="subtitle reveal">Every embedded model, the custom-server option, and your own Claude API key — no feature is gated behind a paywall.</p>
+    <p class="subtitle reveal">Every embedded model, the custom-server option, and your own Claude, OpenAI, or Gemini API key — no feature is gated behind a paywall.</p>
     <div class="download-actions reveal">
       <a class="btn" href="https://github.com/lavuchandu169/localagent/releases/latest">Download for Mac (Apple Silicon)</a>
       <a class="btn" href="https://github.com/lavuchandu169/localagent/releases/latest">Download for Windows (x64)</a>
@@ -544,11 +540,11 @@ node dist/cli.js "explain how add() works in math.js" \
     <div class="faq-list">
       <details class="faq-item reveal">
         <summary>Is localagent really free?</summary>
-        <p>Yes. Every embedded model, custom Hugging Face models, the custom-server option, and your own Claude API key are all included — nothing is gated behind a paywall. The optional one-time "Support the project" payment unlocks no feature; it's just a way to say thanks.</p>
+        <p>Yes. Every embedded model, custom Hugging Face models, the custom-server option, and your own Claude, OpenAI, or Gemini API key are all included — nothing is gated behind a paywall. The optional one-time "Support the project" payment unlocks no feature; it's just a way to say thanks.</p>
       </details>
       <details class="faq-item reveal">
         <summary>Does my code ever leave my machine?</summary>
-        <p>Not by default. The embedded and custom Hugging Face models run entirely in-process — zero backend, zero telemetry. Your code only leaves your machine if you explicitly choose Claude (sends task context to Anthropic's API with your own key) or point it at a custom OpenAI-compatible server.</p>
+        <p>Not by default. The embedded and custom Hugging Face models run entirely in-process — zero backend, zero telemetry. Your code only leaves your machine if you explicitly choose a cloud provider — Claude, OpenAI, or Gemini, each sending task context to that provider's own API with your own key — or point it at a custom OpenAI-compatible server.</p>
       </details>
       <details class="faq-item reveal">
         <summary>What platforms does it support?</summary>
@@ -573,7 +569,7 @@ node dist/cli.js "explain how add() works in math.js" \
     <h2 class="reveal">Privacy Policy</h2>
     <p class="disclaimer">Last reviewed: September 2026. Written to accurately describe what the app does — not a substitute for professional legal advice. Treat it as an honest draft, not a finished legal document.</p>
     <p>There is no backend for this project — no server we operate, no analytics, no telemetry, nothing phoning home. Everything below happens directly between your machine and whichever service you've explicitly configured.</p>
-    <p><strong>Your code and files</strong> stay on your machine unless you choose a provider that sends them elsewhere: Claude sends task context to Anthropic's API (needs your own API key); a custom server sends it to whatever OpenAI-compatible endpoint you point at. The default embedded mode — curated or a custom Hugging Face model — sends nothing anywhere once downloaded.</p>
+    <p><strong>Your code and files</strong> stay on your machine unless you choose a provider that sends them elsewhere: Claude, OpenAI, and Gemini each send task context to that provider's own API, using your own API key — nothing is sent to us. A custom server sends it to whatever OpenAI-compatible endpoint you point at. If you've configured more than one cloud provider and the active one hits a rate limit or quota error mid-task, the same task's context is automatically sent to the next configured provider instead — never to one you haven't added a key for. The default embedded mode — curated or a custom Hugging Face model — sends nothing anywhere once downloaded.</p>
     <p><strong>Session history</strong> is saved locally on your machine. It only leaves your machine if you sign in with Google, in which case it's backed up to a hidden, app-private folder in your own Google Drive — not visible in your normal Drive UI, not accessible to any other app or person.</p>
     <p><strong>Google sign-in</strong> is optional and gates nothing. If used, your email, name, and profile picture URL are requested from Google's own identity endpoint and stored locally; the refresh token is encrypted at rest via your OS's native credential store, never written to disk as plain text.</p>
     <p><strong>Crash and error logs</strong> are written locally and never uploaded anywhere — no external crash-reporting service, no account, no telemetry.</p>
@@ -647,6 +643,3 @@ node dist/cli.js "explain how add() works in math.js" \
   });
 })();
 </script>
-
-</body>
-</html>
