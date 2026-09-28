@@ -77,4 +77,5 @@ contextBridge.exposeInMainWorld("agent", {
   saveOpenAISettings: (settings) => ipcRenderer.invoke("agent:save-openai-settings", settings),
   getGeminiSettings: () => ipcRenderer.invoke("agent:get-gemini-settings"),
   saveGeminiSettings: (settings) => ipcRenderer.invoke("agent:save-gemini-settings", settings),
+  openFreellmapiDashboard: () => ipcRenderer.invoke("agent:open-freellmapi-dashboard"),
 });
