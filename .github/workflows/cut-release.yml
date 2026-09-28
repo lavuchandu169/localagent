@@ -18,12 +18,26 @@ name: Cut Release
 # error, rather than silently merging some other way.
 #
 # Also requires "Allow GitHub Actions to create and approve pull requests"
-# (Settings → Actions → General → Workflow permissions) to be on, and
-# "Approval for running fork pull request workflows from contributors" to
-# be set to its narrowest tier ("...who are new to GitHub") so the release
-# PR's own CI run isn't stuck waiting on a manual approval that never
-# comes — github-actions[bot] otherwise gets treated like an unvetted
-# contributor on the PR it opens itself.
+# (Settings → Actions → General → Workflow permissions) to be on — without
+# it, `gh pr create` below is rejected outright. Separately, the release
+# PR's own CI run has repeatedly come up "action_required" (queued, not
+# run, needing a human/API approval) even with "Approval for running fork
+# pull request workflows from contributors" set to its narrowest tier —
+# that tier change looked like it fixed things once, but recurred on every
+# release since, so it evidently isn't the deciding factor. Until the real
+# cause is found, expect to approve that one CI run by hand occasionally
+# (`gh api -X POST repos/OWNER/REPO/actions/runs/RUN_ID/approve`) — nothing
+# else in this workflow depends on it succeeding automatically.
+
+# Two merges landing close together each independently compute the same
+# "next version" from the same starting package.json and race to push a
+# same-named branch — confirmed live (v0.1.0-beta.52's own release PR:
+# the loser's `git push` was rejected as non-fast-forward). This group
+# serializes runs of this workflow so the second one always starts from
+# the first one's already-bumped main, never from a stale snapshot.
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
