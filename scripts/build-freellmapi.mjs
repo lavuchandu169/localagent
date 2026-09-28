@@ -8,7 +8,7 @@ import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export async function buildFreellmapiBundle(repoRoot) {
   const vendorDir = path.join(repoRoot, "vendor", "freellmapi");
@@ -68,7 +68,17 @@ export async function buildFreellmapiBundle(repoRoot) {
   });
 }
 
-if (import.meta.url === new URL(process.argv[1], "file:").href) {
+// pathToFileURL(process.argv[1]).href, not a raw `new URL(process.argv[1],
+// "file:")` - the latter mishandles a Windows absolute path (its drive
+// letter's colon confuses the URL parser, backslashes aren't forward
+// slashes), so this comparison silently evaluates false on Windows and the
+// whole block below never runs - no error, no output, just a silent no-op
+// that leaves vendor/freellmapi/node_modules never installed and
+// dist/freellmapi never written. Confirmed as the real cause of a Windows
+// release build failure (generate-third-party-notices.mjs's later scan of
+// vendor/freellmapi hit "No packages found" - the actual symptom of this
+// script having done nothing - not a bug in that later script itself).
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
   await buildFreellmapiBundle(repoRoot);
   console.log("[build] wrote dist/freellmapi/server.mjs and dist/freellmapi/client-dist/");
