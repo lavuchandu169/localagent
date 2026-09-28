@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.51 — 2026-09-28
+
+- Verifies the full pipeline after simplifying to a single main branch and fixing release.yml so it actually builds (GitHub doesn't fire a tag-push trigger for a tag pushed via GITHUB_TOKEN).
+
 ## v0.1.0-beta.50 — 2026-09-27
 
 - Simplify to a single main branch; fix release.yml never building
