@@ -5,6 +5,7 @@
 // silently working. This is the one place that fails loudly and early.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const EXPECTED_RELATIVE_PATHS = [
   "vendor/freellmapi/LICENSE",
@@ -23,8 +24,18 @@ export function checkSubmoduleFiles(repoRoot) {
   return { checked, missing };
 }
 
-if (import.meta.url === new URL(process.argv[1], "file:").href) {
-  const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), "..");
+// Both lines below use fileURLToPath/pathToFileURL, not raw new URL(...)
+// construction - a Windows absolute path's drive-letter colon and
+// backslashes aren't valid URL syntax verbatim, so new URL(process.argv[1],
+// "file:") silently compares false on Windows (this whole block, including
+// the actual submodule check, never runs) and new URL(import.meta.url)
+// .pathname keeps a leading "/" before the drive letter ("/D:/...") that
+// breaks as a filesystem path. Confirmed as the real cause of a Windows
+// release build failure - this script's own success log never appeared in
+// that build's output at all, meaning the guard below was false the whole
+// time, not that the check itself failed.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
   const { missing } = checkSubmoduleFiles(repoRoot);
   if (missing.length > 0) {
     console.error(
