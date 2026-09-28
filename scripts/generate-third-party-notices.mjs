@@ -40,7 +40,7 @@ function packageNameFrom(key) {
   return key.slice(0, at);
 }
 
-export async function buildNoticesMarkdown(packages) {
+export async function buildNoticesMarkdown(packages, vendoredProjects = []) {
   // Exclude this project's own root entry - license-checker's tree walk
   // includes it, but it isn't a third-party dependency of itself.
   const entries = Object.entries(packages)
@@ -51,7 +51,7 @@ export async function buildNoticesMarkdown(packages) {
     "# Third-Party Notices",
     "",
     "localagent is proprietary software (see [LICENSE](LICENSE)), but it is built on",
-    `${entries.length} open-source packages, listed below with their license text. All are`,
+    `${entries.length} open-source packages plus ${vendoredProjects.length} vendored project(s), listed below with their license text. All are`,
     "permissively licensed (MIT, BSD, Apache-2.0, ISC, Unlicense, BlueOak-1.0.0, or the",
     "SIL Open Font License for the three bundled fonts) - none require this project's",
     "own source to be disclosed or relicensed. This file exists to satisfy each",
@@ -64,6 +64,20 @@ export async function buildNoticesMarkdown(packages) {
     "---",
     "",
   ];
+
+  // Vendored (git-submodule) projects never appear in a node_modules walk
+  // at all - license-checker only ever sees real npm dependencies - so
+  // they're listed separately, up front, from whatever the caller passes
+  // in (see the CLI block below for the real FreeLLMAPI entry).
+  for (const project of vendoredProjects) {
+    lines.push(`## ${project.name} (vendored)`, "", `**Repository:** ${project.repository}`, "");
+    try {
+      const text = (await fs.readFile(project.licenseFile, "utf-8")).trim();
+      lines.push("```", text, "```", "");
+    } catch {
+      lines.push(`_Could not read the license file at ${project.licenseFile}._`, "");
+    }
+  }
 
   for (const [key, info] of entries) {
     const name = packageNameFrom(key);
@@ -115,7 +129,13 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     });
   });
 
-  const markdown = await buildNoticesMarkdown(packages);
+  const markdown = await buildNoticesMarkdown(packages, [
+    {
+      name: "FreeLLMAPI",
+      repository: "https://github.com/tashfeenahmed/freellmapi",
+      licenseFile: path.join(rootDir, "vendor", "freellmapi", "LICENSE"),
+    },
+  ]);
   const outPath = path.join(rootDir, "THIRD-PARTY-NOTICES.md");
   await fs.writeFile(outPath, markdown, "utf-8");
   console.log(`[build] wrote THIRD-PARTY-NOTICES.md (${Object.keys(packages).length - 1} third-party packages)`);

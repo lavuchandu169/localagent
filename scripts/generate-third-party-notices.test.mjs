@@ -94,6 +94,17 @@ await fs.writeFile(realLicensePath, "MIT License text goes here.", "utf-8");
   check("entries are sorted alphabetically by package name", md.indexOf("aaa-first") < md.indexOf("zzz-last"));
 }
 
+console.log("\nbuildNoticesMarkdown includes a vendored submodule's own license:");
+{
+  const md = await buildNoticesMarkdown(
+    { "some-pkg@1.2.3": { licenses: "MIT", repository: "https://example.com/some-pkg", licenseFile: realLicensePath } },
+    [{ name: "FreeLLMAPI", repository: "https://github.com/tashfeenahmed/freellmapi", licenseFile: realLicensePath }]
+  );
+  check("includes the vendored project's heading", md.includes("## FreeLLMAPI (vendored)"));
+  check("includes its repository link", md.includes("https://github.com/tashfeenahmed/freellmapi"));
+  check("includes its real license text", md.includes("MIT License text goes here."));
+}
+
 await fs.rm(tmpDir, { recursive: true, force: true });
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
