@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.50 — 2026-09-27
+
+- Simplify to a single main branch; fix release.yml never building
+
 ## v0.1.0-beta.49 — 2026-09-27
 
 - Release: bring main up to date with develop (v0.1.0-beta.47)
