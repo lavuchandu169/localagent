@@ -208,6 +208,22 @@ await (async () => {
     check("buildProvider returns a GeminiProvider for kind 'gemini'", gemini.id === "gemini");
   }
 
+  console.log("\nbuildProvider handles the freellmapi kind:");
+  {
+    const freellmapi = buildProvider({ kind: "freellmapi", userDataDir: "/tmp/does-not-matter" });
+    check("buildProvider returns a FreellmapiProxyProvider for kind 'freellmapi'", freellmapi.id === "freellmapi");
+  }
+  {
+    check("buildProvider throws a clear error if userDataDir was never resolved", (() => {
+      try {
+        buildProvider({ kind: "freellmapi" });
+        return false;
+      } catch (err) {
+        return err instanceof Error && err.message.includes("userDataDir");
+      }
+    })());
+  }
+
   console.log("\nstartSession builds fallbackProviders from saved settings when the primary is a cloud provider:");
   await (async () => {
     const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));

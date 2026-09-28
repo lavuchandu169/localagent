@@ -1858,7 +1858,9 @@ function renderActiveModelBadge(provider: ProviderConfig): void {
                 const modelId = provider.model ?? DEFAULT_GEMINI_MODEL;
                 return `${GEMINI_MODELS[modelId]?.name ?? modelId} (Gemini API)`;
               })()
-            : `${provider.model} (${provider.baseUrl})`;
+            : provider.kind === "freellmapi"
+              ? "Free-tier router (34 providers)"
+              : `${provider.model} (${provider.baseUrl})`;
   const gpuText = provider.kind === "embedded" && hardwareInfo?.gpu ? ` · ${hardwareInfo.gpu} GPU` : "";
   // Provider identity color, at a glance, alongside the always-present text
   // label — kept as a lookup rather than a growing ternary chain so a future
@@ -1869,6 +1871,7 @@ function renderActiveModelBadge(provider: ProviderConfig): void {
     "openai-compatible": "signal-dot-custom",
     openai: "signal-dot-openai",
     gemini: "signal-dot-gemini",
+    freellmapi: "signal-dot-freellmapi",
   };
   activeModelBadge.innerHTML = "";
   const dot = document.createElement("span");
@@ -2256,6 +2259,12 @@ function syncFormFromTab(tab: TabState): void {
     modelSelect.value = formProvider.model ?? DEFAULT_OPENAI_MODEL;
   } else if (formProvider.kind === "gemini") {
     modelSelect.value = formProvider.model ?? DEFAULT_GEMINI_MODEL;
+  } else if (formProvider.kind === "freellmapi") {
+    // "freellmapi-auto" pulled forward as a literal here — Task 7 formalizes
+    // this as a named FREELLMAPI_VALUE constant alongside the actual model
+    // picker entry; required now purely so this file type-checks against
+    // ProviderConfig's new "freellmapi" kind.
+    modelSelect.value = "freellmapi-auto";
   } else {
     modelSelect.value = CUSTOM_SERVER_VALUE;
     baseUrlInput.value = formProvider.baseUrl;

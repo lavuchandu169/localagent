@@ -7,6 +7,7 @@ import { EmbeddedLlamaProvider } from "../providers/embeddedLlama.js";
 import { AnthropicProvider } from "../providers/anthropicProvider.js";
 import { OpenAIProvider } from "../providers/openaiProvider.js";
 import { GeminiProvider } from "../providers/geminiProvider.js";
+import { FreellmapiProxyProvider } from "../providers/freellmapiProxy.js";
 import { isEmbeddedModelId } from "../models.js";
 import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
@@ -21,7 +22,8 @@ export type ProviderConfig =
   | { kind: "embedded"; size: string }
   | { kind: "anthropic"; apiKey?: string; model?: string }
   | { kind: "openai"; apiKey?: string; model?: string }
-  | { kind: "gemini"; apiKey?: string; model?: string };
+  | { kind: "gemini"; apiKey?: string; model?: string }
+  | { kind: "freellmapi"; userDataDir?: string };
 
 const CLOUD_LABEL_BY_KIND: Record<CloudProviderKind, string> = {
   anthropic: "Claude",
@@ -104,6 +106,19 @@ export function buildProvider(
   if (config.kind === "gemini") {
     return new GeminiProvider({ apiKey: config.apiKey ?? "", model: config.model });
   }
+  if (config.kind === "freellmapi") {
+    // Always provided by main.ts's resolvedConfig ternary before a real
+    // session starts — this only fires if some other future caller (a
+    // test, a hypothetical CLI path) constructs this config directly
+    // without going through that resolution step. Silently falling back
+    // to "" the way apiKey does for openai/gemini would be actively
+    // wrong here: it'd point the vendored server at a nonsensical DB
+    // path instead of just running with no key configured.
+    if (!config.userDataDir) {
+      throw new Error("freellmapi provider config is missing userDataDir — main.ts must resolve it before starting a session.");
+    }
+    return new FreellmapiProxyProvider({ userDataDir: config.userDataDir });
+  }
   if (!isEmbeddedModelId(config.size) && !config.size.startsWith("hf:")) {
     throw new Error(`Invalid embedded model size: ${config.size}`);
   }
@@ -171,7 +186,9 @@ export async function startSession(
         ? config.provider.model
         : config.provider.kind === "anthropic" || config.provider.kind === "openai" || config.provider.kind === "gemini"
           ? (config.provider.model ?? DEFAULT_MODEL_BY_CLOUD_KIND[config.provider.kind])
-          : config.provider.size,
+          : config.provider.kind === "freellmapi"
+            ? "auto"
+            : config.provider.size,
     provider,
     tools: defaultToolRegistry(deps.extraTools ?? []),
     permissionMode: config.mode,
