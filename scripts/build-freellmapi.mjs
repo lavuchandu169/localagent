@@ -46,6 +46,20 @@ export async function buildFreellmapiBundle(repoRoot) {
     },
     logLevel: "info",
   });
+
+  // The dashboard window's preload (Task 6) - built the same way
+  // vendor/freellmapi/desktop's own build:preload script does
+  // (esbuild, CJS, electron external), from their vendored source.
+  await build({
+    entryPoints: [path.join(vendorDir, "desktop", "src", "preload.ts")],
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node20",
+    outfile: path.join(outDir, "dashboard-preload.cjs"),
+    external: ["electron"],
+    logLevel: "info",
+  });
 }
 
 if (import.meta.url === new URL(process.argv[1], "file:").href) {

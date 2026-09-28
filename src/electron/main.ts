@@ -113,6 +113,7 @@ app.whenReady().then(async () => {
   const openaiSettingsFilePath = path.join(app.getPath("userData"), "openaiSettings.json");
   const geminiSettingsFilePath = path.join(app.getPath("userData"), "geminiSettings.json");
   const mcpSettingsFilePath = path.join(app.getPath("userData"), "mcpServers.json");
+  const freellmapiUserDataDir = app.getPath("userData");
   const sessionsDir = path.join(app.getPath("userData"), "sessions");
   const win = createWindow();
 
@@ -319,7 +320,9 @@ app.whenReady().then(async () => {
                   apiKey: await resolveGeminiApiKey(geminiSettingsFilePath, storageCrypto),
                 },
               }
-            : config;
+            : config.provider.kind === "freellmapi"
+              ? { ...config, provider: { kind: "freellmapi" as const, userDataDir: freellmapiUserDataDir } }
+              : config;
     try {
       return await startSession(registry, resolvedConfig, {
         onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
@@ -545,6 +548,13 @@ app.whenReady().then(async () => {
       storageCrypto
     );
   });
+  ipcMain.handle("agent:open-freellmapi-dashboard", async () => {
+    const { startFreellmapiServer, ensureFreellmapiSessionToken } = await import("./freellmapiHost.js");
+    const { openFreellmapiDashboard } = await import("./freellmapiDashboardWindow.js");
+    const { port } = await startFreellmapiServer({ userDataDir: freellmapiUserDataDir });
+    const token = ensureFreellmapiSessionToken();
+    openFreellmapiDashboard(port, token);
+  });
   // Session history is gated by the signed-in account: signed out (or no
   // account ever stored) shows nothing, matching the app's per-account
   // model rather than exposing every local session unconditionally.
@@ -603,6 +613,24 @@ app.whenReady().then(async () => {
   // time this app quits.
   app.on("before-quit", () => {
     for (const connection of mcpConnections) void disconnectMcpServer(connection);
+  });
+
+  // A second, independent before-quit listener (Electron dispatches
+  // "before-quit" to every registered listener, not just the first — this
+  // composes safely with the MCP cleanup listener above and the updater's
+  // own onBeforeQuit registration, neither of which calls
+  // preventDefault()). Only this one defers the actual exit: the bundled
+  // server's SQLite handle needs to close cleanly before the process
+  // really goes away, not just a best-effort fire-and-forget like the MCP
+  // disconnects above.
+  app.on("before-quit", (event) => {
+    event.preventDefault();
+    import("./freellmapiHost.js")
+      .then(({ stopFreellmapiServer }) => stopFreellmapiServer())
+      .catch((err) => console.error("[freellmapi] shutdown error:", err))
+      .finally(() => {
+        app.exit();
+      });
   });
 
   app.on("activate", () => {

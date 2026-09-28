@@ -141,5 +141,46 @@ console.log("freellmapiHost:");
   await fs.rm(dir, { recursive: true, force: true });
 }
 
+console.log("\nstopFreellmapiServer while a request is in flight:");
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const file = path.join(dir, "server.mjs");
+  await fs.writeFile(
+    file,
+    `
+    export async function startServer(opts) {
+      let closed = false;
+      return {
+        server: {
+          close(cb) {
+            closed = true;
+            // Simulate a request that was mid-flight when shutdown was
+            // requested still finishing its own work after close() is
+            // called - close() itself must not throw or hang either way.
+            setTimeout(() => cb && cb(), 5);
+          },
+        },
+        port: opts.preferredPort,
+      };
+    }
+    export function getUnifiedApiKey() { return "k"; }
+    export function ensureSessionToken() { return "t"; }
+    `,
+    "utf-8"
+  );
+  resetFreellmapiHostForTests();
+  await startFreellmapiServer({ userDataDir: dir, bundlePath: file, clientDistPath: dir, preferredPort: 19996 });
+
+  let threw = false;
+  try {
+    await stopFreellmapiServer();
+  } catch {
+    threw = true;
+  }
+  check("stopping while a request is conceptually in flight resolves cleanly, never throws", !threw);
+
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
