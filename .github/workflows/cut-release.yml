@@ -75,6 +75,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: main
+          submodules: recursive
 
       # A push-triggered run fires for EVERY commit that lands on main —
       # including the release-bump PR's own squash-merge commit (opened by
