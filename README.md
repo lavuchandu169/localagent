@@ -554,3 +554,9 @@ viewing, but no license to use, copy, modify, or redistribute it is
 granted. Prebuilt installers on the [Releases
 page](https://github.com/lavuchandu169/localagent/releases) are provided
 for personal use of the app as distributed.
+
+localagent is built on top of open-source packages, all permissively
+licensed (MIT, BSD, Apache-2.0, ISC, Unlicense, or OFL for the bundled
+fonts) — see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for the
+full list and their license text. Regenerated automatically at build
+time (`scripts/generate-third-party-notices.mjs`), never hand-edited.
