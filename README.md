@@ -3,9 +3,11 @@
 **A local-first autonomous coding agent for macOS and Windows.** Bring your
 own model — a GGUF file running entirely in-process, any Hugging Face GGUF
 repo by search or path, any OpenAI-compatible server (Ollama, LM Studio,
-vLLM, llama.cpp server), or Claude — and get a real agent loop with a
-permission engine, file/search/edit/shell/MCP tools, checkpoints and diff
-review, multi-session tabs, and a polished desktop app on top, with nothing
+vLLM, llama.cpp server), Claude, OpenAI, Google Gemini, or a bundled
+free-tier router aggregating ~34 free providers — and get a real agent loop
+with a permission engine, file/search/edit/shell/MCP tools, checkpoints and
+diff review, automatic fallback across cloud providers on a rate limit,
+multi-session tabs, and a polished desktop app on top, with nothing
 required to leave your machine unless you explicitly choose a cloud model.
 
 [![Latest release](https://img.shields.io/github/v/release/lavuchandu169/localagent?include_prereleases&label=release)](https://github.com/lavuchandu169/localagent/releases)
@@ -38,7 +40,9 @@ remaining gaps, instead of burying them.
   - [Auto-updates](#auto-updates)
   - [Download the beta](#download-the-beta)
   - [Google sign-in and cloud backup](#google-sign-in-and-cloud-backup)
-  - [Using Claude (Anthropic API)](#using-claude-anthropic-api)
+  - [Using cloud providers (Anthropic / OpenAI / Gemini)](#using-cloud-providers-anthropic--openai--gemini)
+  - [Free-tier router (FreeLLMAPI)](#free-tier-router-freellmapi)
+  - [Automatic fallback on rate limits](#automatic-fallback-on-rate-limits)
   - [Running inside a sandboxed agent CLI](#running-inside-a-sandboxed-agent-cli)
 - [Privacy](#privacy)
 - [Testing](#testing)
@@ -82,8 +86,20 @@ remaining gaps, instead of burying them.
 - **`AnthropicProvider`** — the real Claude API (Sonnet 5, Opus 5, Haiku
   4.5), when you want frontier quality and don't mind code leaving the
   machine. Live token/cost estimate in the status bar while it runs.
+- **`OpenAIProvider`** — the real OpenAI API (GPT-5.5, GPT-5.6 Sol, GPT-5
+  Nano), desktop app only.
+- **`GeminiProvider`** — the real Google Gemini API (2.5 Flash, 2.5 Pro,
+  2.5 Flash-Lite — all with a free tier), desktop app only.
+- **`FreellmapiProxyProvider`** — a bundled, in-process free-tier router
+  (desktop app only) — see
+  [Free-tier router](#free-tier-router-freellmapi).
 - **`MockProvider`** — a scripted provider for zero-network tests and the
   demo.
+- **Automatic fallback** — when a configured cloud provider (Anthropic,
+  OpenAI, Gemini) or the free-tier router hits a rate limit mid-task, the
+  session automatically retries on the next configured cloud provider
+  instead of just failing — see
+  [Automatic fallback on rate limits](#automatic-fallback-on-rate-limits).
 
 **Tools & safety, not vibes**
 - `read_file`, `list_directory`, `grep` (ripgrep with a pure-JS fallback),
@@ -403,23 +419,58 @@ is shared with anyone else's):
 account and a registered web domain, neither of which exists for this
 project yet.
 
-### Using Claude (Anthropic API)
+### Using cloud providers (Anthropic / OpenAI / Gemini)
 
-Cloud → Claude Sonnet 5 / Opus 5 / Haiku 4.5 sends file contents and task
-context to Anthropic over the network — needs an API key from
-[console.anthropic.com](https://console.anthropic.com/settings/keys),
-pay-as-you-go. This is a separate product from a claude.ai Pro/Max
-subscription: Anthropic's terms reserve that subscription's sign-in for
-Claude Code and claude.ai itself, so it can't be used from this (or any
-other third-party) app — an API key is the only supported way in. The
-status bar shows a running token/cost estimate while a Claude session is
-active, at Anthropic's standard API rates.
+Cloud → any of Claude (Sonnet 5 / Opus 5 / Haiku 4.5), OpenAI (GPT-5.5 /
+GPT-5.6 Sol / GPT-5 Nano), or Google Gemini (2.5 Flash / 2.5 Pro / 2.5
+Flash-Lite, each with a free tier) sends file contents and task context to
+that provider over the network — needs your own API key, pay-as-you-go
+(Gemini's free tier aside). Claude is a separate product from a claude.ai
+Pro/Max subscription: Anthropic's terms reserve that subscription's
+sign-in for Claude Code and claude.ai itself, so it can't be used from
+this (or any other third-party) app — an API key is the only supported
+way in. The status bar shows a running token/cost estimate while an
+Anthropic session is active, at Anthropic's standard API rates.
 
-Set `ANTHROPIC_API_KEY` in your environment (or a `.env` file, from
+Set the matching environment variable (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, or `GEMINI_API_KEY`; a `.env` file works too, from
 source), or add the key in the app's Settings panel (gear icon) — same
-env-var-wins-over-saved-setting precedence as Google's credentials.
-Leaving both unset falls back to the Anthropic SDK/CLI's own handling
-(`ANTHROPIC_AUTH_TOKEN`, an `ant auth login` profile), unchanged.
+env-var-wins-over-saved-setting precedence as Google sign-in's
+credentials. Leaving `ANTHROPIC_API_KEY` unset falls back to the
+Anthropic SDK/CLI's own handling (`ANTHROPIC_AUTH_TOKEN`, an
+`ant auth login` profile), unchanged.
+
+### Free-tier router (FreeLLMAPI)
+
+Cloud → **Free-tier router (34 providers, auto-fallback)** bundles
+[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) (MIT-licensed,
+vendored as a pinned git submodule in `vendor/freellmapi/`) and runs its
+server **in-process inside the app's own Electron process** — no separate
+install, no subprocess, nothing to start by hand. It aggregates ~34
+providers' own free API tiers behind one OpenAI-compatible endpoint, so
+you get real cloud model access with no API key of your own and no cost.
+
+Click **Manage free providers…** (shown once this option is selected) to
+open its own dashboard window — pre-authenticated automatically, no
+separate login — where you add or manage individual providers' free keys
+the same way you would in FreeLLMAPI's own standalone app. It stores its
+own local SQLite database under this app's user data directory and never
+talks to FreeLLMAPI's own hosted service (`freellmapi.co`) — it runs
+entirely self-hosted against whichever providers you've configured
+through the dashboard.
+
+### Automatic fallback on rate limits
+
+When the currently active cloud provider — a configured Anthropic/OpenAI/
+Gemini key, or the free-tier router itself — returns a rate-limit
+response mid-task, the session automatically switches to the next
+configured cloud provider instead of failing the task outright. You'll
+see a status line like `Claude hit a rate limit — retrying on OpenAI...`
+in the event log; the task just continues on the new provider. Fallback
+candidates are drawn from whichever cloud providers you've saved a key
+for, in the order each key was first added; the free-tier router isn't a
+fallback target — only a fallback *source*, since falling back to it
+wouldn't help against router-wide exhaustion.
 
 ### Running inside a sandboxed agent CLI
 
@@ -444,13 +495,15 @@ directly between your machine and whichever service you've explicitly
 configured.
 
 - **Your code and files** stay on your machine unless you choose a
-  provider that sends them elsewhere: Claude sends task context to
-  Anthropic's API (needs your own `ANTHROPIC_API_KEY`); a custom server
-  sends it to whatever OpenAI-compatible endpoint you point at (typically
-  a local one, e.g. Ollama). The default embedded mode — curated or a
-  custom Hugging Face model — sends nothing anywhere once downloaded;
-  inference runs entirely in-process. A connected MCP server only runs
-  when you approve a specific call to it.
+  provider that sends them elsewhere: Claude, OpenAI, and Gemini each send
+  task context to their own API (needs your own API key for that
+  provider); the free-tier router sends it to whichever of its ~34
+  providers a request routes to, but never to FreeLLMAPI's own hosted
+  service; a custom server sends it to whatever OpenAI-compatible
+  endpoint you point at (typically a local one, e.g. Ollama). The default
+  embedded mode — curated or a custom Hugging Face model — sends nothing
+  anywhere once downloaded; inference runs entirely in-process. A
+  connected MCP server only runs when you approve a specific call to it.
 - **Session history** is saved locally (`app.getPath('userData')/sessions`).
   It only leaves your machine if you sign in with Google, in which case
   it's backed up to a hidden, app-private folder in *your own* Google
@@ -493,8 +546,11 @@ token/PKCE plumbing, MCP client connection/tool-adapter/registry behavior,
 multi-session tab-state transitions, Hugging Face model search, the
 Electron session registry (start/provider selection/event
 streaming/cancellation) via `MockProvider`, local session persistence,
-diff/checkpoint computation, and Drive-backed cloud sync (CRUD +
-reconcile) against a fake `fetch` — real behavior, not framework mocks.
+diff/checkpoint computation, Drive-backed cloud sync (CRUD + reconcile)
+against a fake `fetch`, cross-provider rate-limit fallback ordering, and
+the bundled free-tier router's lifecycle (singleton startup, shutdown,
+crash-handler isolation) against a fake bundle, never the real vendored
+server — real behavior, not framework mocks.
 
 ## Contributing
 
@@ -511,7 +567,7 @@ of opening a public issue.
 | `src/agent.ts` | The agent loop itself — provider-, tool-, and UI-agnostic |
 | `src/types.ts` | The `ModelProvider` interface everything else depends on |
 | `src/models.ts` | The curated embedded-model catalog |
-| `src/providers/` | `EmbeddedLlamaProvider`, `OpenAICompatibleProvider`, `AnthropicProvider`, `MockProvider` |
+| `src/providers/` | `EmbeddedLlamaProvider`, `OpenAICompatibleProvider`, `AnthropicProvider`, `OpenAIProvider`, `GeminiProvider`, `FreellmapiProxyProvider`, `MockProvider` |
 | `src/tools/` | `read_file`, `list_directory`, `grep`, `edit_file`, `run_command` |
 | `src/permissions.ts` | `PermissionEngine` — the deterministic policy layer |
 | `src/protected.ts` | Protected-path matching and secret redaction |
@@ -520,8 +576,9 @@ of opening a public issue.
 | `src/sessionStore.ts` | Explicit-path local session persistence (file-per-session + index) |
 | `src/cloudSync.ts` | Electron-free Google Drive backup/restore (CRUD + reconcile) |
 | `src/cli.ts` | The terminal entry point |
-| `src/electron/` | The desktop app — `main.ts`, `sessionRegistry.ts`, `preload.cjs`, `mcpClient.ts`, `modelCache.ts`, `modelSearch.ts`, `hardwareInfo.ts`, `updateManager.ts`, `googleAuth.ts`, `renderer/` |
+| `src/electron/` | The desktop app — `main.ts`, `sessionRegistry.ts`, `preload.cjs`, `mcpClient.ts`, `modelCache.ts`, `modelSearch.ts`, `hardwareInfo.ts`, `updateManager.ts`, `googleAuth.ts`, `providerFallback.ts` (cloud fallback ordering), `freellmapiHost.ts` (in-process router lifecycle), `freellmapiDashboardWindow.ts`, `renderer/` |
 | `src/electron/renderer/` | `renderer.ts` (UI logic), `tabState.ts` (multi-session tab state machine), `index.html`, `styles.css` |
+| `vendor/freellmapi/` | FreeLLMAPI itself, vendored as a pinned git submodule — see [First-time setup](CONTRIBUTING.md#first-time-setup) |
 | `src/demo.ts` + `fixture-repo/` | The scripted, offline, end-to-end proof |
 | `src/test/` | The suite `npm test` runs |
 
@@ -541,7 +598,11 @@ auto-approval in `AUTO_SAFE` mode isn't wired up yet (behaves like
 Windows build is x64 only (no ARM64). Neither installer is code-signed
 yet, so both trigger a one-time OS warning on first launch (see
 [Download the beta](#download-the-beta)) and Mac auto-updates can
-download but not always apply in-place as a result.
+download but not always apply in-place as a result. The free-tier
+router's dashboard window and its automatic fallback path are covered by
+automated tests against a fake bundle, but haven't yet had a manual pass
+under a real packaged build on either platform — flagged here rather than
+silently assumed working.
 
 The architecture is intentionally the part designed to extend into all of
 that without rework — the provider interface, tool interface, permission
@@ -555,8 +616,14 @@ granted. Prebuilt installers on the [Releases
 page](https://github.com/lavuchandu169/localagent/releases) are provided
 for personal use of the app as distributed.
 
-localagent is built on top of open-source packages, all permissively
-licensed (MIT, BSD, Apache-2.0, ISC, Unlicense, or OFL for the bundled
-fonts) — see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for the
-full list and their license text. Regenerated automatically at build
-time (`scripts/generate-third-party-notices.mjs`), never hand-edited.
+localagent is built on top of open-source packages — its own dependencies
+are all permissively licensed (MIT, BSD, Apache-2.0, ISC, Unlicense,
+BlueOak-1.0.0, or OFL for the bundled fonts). It also bundles
+[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) (MIT-licensed,
+vendored as a git submodule — see [Free-tier
+router](#free-tier-router-freellmapi)), whose own dependency tree may
+include other license types. See
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for the full list,
+including the vendored project's own dependencies, and their license
+text. Regenerated automatically at build time
+(`scripts/generate-third-party-notices.mjs`), never hand-edited.
