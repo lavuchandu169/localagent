@@ -149,7 +149,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add package.json CHANGELOG.md
+          # THIRD-PARTY-NOTICES.md is regenerated fresh by the npm run
+          # build step above (from whatever the dependency tree looks like
+          # right now), so every release commits a notices file that
+          # actually matches what that release ships — never a stale one.
+          git add package.json CHANGELOG.md THIRD-PARTY-NOTICES.md
           git commit -m "chore: bump version to $VERSION for release"
           git push origin "$BRANCH"
 
