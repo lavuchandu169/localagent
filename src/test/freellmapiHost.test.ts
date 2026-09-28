@@ -7,6 +7,7 @@ import {
   ensureFreellmapiSessionToken,
   stopFreellmapiServer,
   resetFreellmapiHostForTests,
+  isFreellmapiRunning,
 } from "../electron/freellmapiHost.js";
 
 let failures = 0;
@@ -178,6 +179,227 @@ console.log("\nstopFreellmapiServer while a request is in flight:");
     threw = true;
   }
   check("stopping while a request is conceptually in flight resolves cleanly, never throws", !threw);
+
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log("\nstartFreellmapiServer neutralizes the bundle's own global process-crash handlers:");
+{
+  // Real finding, confirmed by reading vendor/freellmapi/server/src/lib/process-safety-net.ts
+  // directly: the vendored server's startServer() calls installProcessSafetyNet(),
+  // which registers GLOBAL process.on('uncaughtException'/'unhandledRejection')
+  // listeners that call process.exit(1) on anything it doesn't recognize as a
+  // transient transport error. Since this runs inside localagent's own Electron
+  // main process (not a subprocess), that would silently kill the whole app on
+  // any unrelated error, anywhere, the moment this feature is first used - and
+  // race ahead of main.ts's own uncaughtException handler's async error-log
+  // write, which is registered first but does real (slower) async work before
+  // exiting. This fake bundle simulates exactly that registration.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const file = path.join(dir, "server.mjs");
+  await fs.writeFile(
+    file,
+    `
+    export async function startServer(opts) {
+      process.on('uncaughtException', () => {});
+      process.on('unhandledRejection', () => {});
+      return { server: { close: (cb) => cb && cb() }, port: opts.preferredPort };
+    }
+    export function getUnifiedApiKey() { return "k"; }
+    export function ensureSessionToken() { return "t"; }
+    `,
+    "utf-8"
+  );
+  resetFreellmapiHostForTests();
+
+  const uncaughtBefore = process.listeners("uncaughtException").length;
+  const rejectionBefore = process.listeners("unhandledRejection").length;
+
+  await startFreellmapiServer({ userDataDir: dir, bundlePath: file, clientDistPath: dir, preferredPort: 19994 });
+
+  check(
+    "no new uncaughtException listener survives startup",
+    process.listeners("uncaughtException").length === uncaughtBefore
+  );
+  check(
+    "no new unhandledRejection listener survives startup",
+    process.listeners("unhandledRejection").length === rejectionBefore
+  );
+
+  await stopFreellmapiServer();
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log("\nstartFreellmapiServer disables the vendored server's own network call to freellmapi.co:");
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const bundlePath = await writeFakeBundle(dir);
+  resetFreellmapiHostForTests();
+  const before = process.env.CATALOG_SYNC_DISABLED;
+  delete process.env.CATALOG_SYNC_DISABLED;
+
+  await startFreellmapiServer({ userDataDir: dir, bundlePath, clientDistPath: dir, preferredPort: 19993 });
+
+  check(
+    "CATALOG_SYNC_DISABLED is set before the vendored server boots, honoring the spec's never-talks-to-freellmapi.co constraint",
+    process.env.CATALOG_SYNC_DISABLED === "1"
+  );
+
+  if (before === undefined) delete process.env.CATALOG_SYNC_DISABLED;
+  else process.env.CATALOG_SYNC_DISABLED = before;
+  await stopFreellmapiServer();
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log("\nstartFreellmapiServer works when NODE_ENV=development (a real dev-machine setting, not hypothetical):");
+{
+  // Real finding, confirmed by reading vendor/freellmapi/server/src/db/index.ts
+  // directly: when NODE_ENV === "development", the vendored DB init code
+  // expects a database that was ALREADY migrated by a separate
+  // `npm run db:migration:up` step, and calls process.exit(1) - killing the
+  // whole localagent app - if it wasn't. localagent's own bundled DB is
+  // always freshly created, never pre-migrated by any separate step, so this
+  // would crash on the very first real use whenever a developer's
+  // environment happens to have NODE_ENV=development set (common). The
+  // fake bundle here can't reproduce process.exit(1) itself (that would kill
+  // the test runner), so this instead verifies the mechanism the real fix
+  // relies on: NODE_ENV is temporarily suppressed around the startServer()
+  // call and restored afterward, regardless of success or failure.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const file = path.join(dir, "server.mjs");
+  await fs.writeFile(
+    file,
+    `
+    export async function startServer(opts) {
+      globalThis.__nodeEnvDuringStart = process.env.NODE_ENV;
+      return { server: { close: (cb) => cb && cb() }, port: opts.preferredPort };
+    }
+    export function getUnifiedApiKey() { return "k"; }
+    export function ensureSessionToken() { return "t"; }
+    `,
+    "utf-8"
+  );
+  resetFreellmapiHostForTests();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "development";
+
+  await startFreellmapiServer({ userDataDir: dir, bundlePath: file, clientDistPath: dir, preferredPort: 19992 });
+
+  check(
+    "NODE_ENV is not 'development' while the vendored server actually boots, so it runs migrations instead of expecting a pre-migrated DB",
+    (globalThis as any).__nodeEnvDuringStart !== "development"
+  );
+  check("NODE_ENV is restored to its real value afterward, for the rest of the app", process.env.NODE_ENV === "development");
+
+  process.env.NODE_ENV = originalNodeEnv;
+  await stopFreellmapiServer();
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log("\nstartFreellmapiServer restores an originally-UNSET NODE_ENV to unset, not the string 'undefined':");
+{
+  // process.env coerces `undefined` to the literal string "undefined" on
+  // assignment - a naive `process.env.NODE_ENV = originalValue` restore
+  // would leave NODE_ENV="undefined" behind for the rest of the app when it
+  // was never set in the first place. Caught this in review before it ever
+  // ran, not after a failure - this test is what actually proves the fix.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const bundlePath = await writeFakeBundle(dir);
+  resetFreellmapiHostForTests();
+  const originalNodeEnv = process.env.NODE_ENV;
+  delete process.env.NODE_ENV;
+
+  await startFreellmapiServer({ userDataDir: dir, bundlePath, clientDistPath: dir, preferredPort: 19991 });
+
+  check("an originally-unset NODE_ENV stays genuinely unset afterward, not the string 'undefined'", process.env.NODE_ENV === undefined);
+
+  if (originalNodeEnv !== undefined) process.env.NODE_ENV = originalNodeEnv;
+  await stopFreellmapiServer();
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log("\nisFreellmapiRunning:");
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const bundlePath = await writeFakeBundle(dir);
+  resetFreellmapiHostForTests();
+
+  check("false before startFreellmapiServer has ever been called", !isFreellmapiRunning());
+
+  await startFreellmapiServer({ userDataDir: dir, bundlePath, clientDistPath: dir, preferredPort: 19990 });
+  check("true once startFreellmapiServer has resolved", isFreellmapiRunning());
+
+  await stopFreellmapiServer();
+  check("false again after stopFreellmapiServer resolves", !isFreellmapiRunning());
+
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log("\nstopFreellmapiServer closes the bundle's SQLite handle:");
+{
+  // Real finding: the vendored bundle exports getDb() (server-host.ts
+  // re-exports it), and freellmapiHost.ts never called it on shutdown —
+  // the SQLite connection was simply abandoned when the HTTP server closed,
+  // relying on process exit to release the file handle rather than closing
+  // it cleanly. A clean close on quit avoids leaving the WAL file in a
+  // state that needs recovery on next launch.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const file = path.join(dir, "server.mjs");
+  await fs.writeFile(
+    file,
+    `
+    let dbClosed = false;
+    export async function startServer(opts) {
+      return { server: { close: (cb) => cb && cb() }, port: opts.preferredPort };
+    }
+    export function getUnifiedApiKey() { return "k"; }
+    export function ensureSessionToken() { return "t"; }
+    export function getDb() {
+      return {
+        close() {
+          dbClosed = true;
+          globalThis.__fakeDbClosed = true;
+        },
+      };
+    }
+    `,
+    "utf-8"
+  );
+  resetFreellmapiHostForTests();
+  (globalThis as any).__fakeDbClosed = false;
+
+  await startFreellmapiServer({ userDataDir: dir, bundlePath: file, clientDistPath: dir, preferredPort: 19989 });
+  await stopFreellmapiServer();
+
+  check("the bundle's getDb().close() was called during shutdown", (globalThis as any).__fakeDbClosed === true);
+
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log("\nstopFreellmapiServer does not hang forever if server.close() never calls back:");
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const file = path.join(dir, "server.mjs");
+  await fs.writeFile(
+    file,
+    `
+    export async function startServer(opts) {
+      return { server: { close(cb) { /* never calls cb — simulates a hung close */ } }, port: opts.preferredPort };
+    }
+    export function getUnifiedApiKey() { return "k"; }
+    export function ensureSessionToken() { return "t"; }
+    `,
+    "utf-8"
+  );
+  resetFreellmapiHostForTests();
+  await startFreellmapiServer({ userDataDir: dir, bundlePath: file, clientDistPath: dir, preferredPort: 19988 });
+
+  const started = Date.now();
+  await stopFreellmapiServer({ timeoutMs: 50 });
+  const elapsedMs = Date.now() - started;
+
+  check("stopFreellmapiServer resolves via its own timeout instead of hanging forever", elapsedMs < 2000);
+  check("isFreellmapiRunning() is false after a timed-out stop, so app exit isn't blocked", !isFreellmapiRunning());
 
   await fs.rm(dir, { recursive: true, force: true });
 }

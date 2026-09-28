@@ -36,11 +36,18 @@ const SETTINGS_FILENAME_BY_KIND: Record<CloudProviderKind, string> = {
  * Fallback only ever draws from this list — the embedded provider and
  * custom OpenAI-compatible servers never appear here, since neither has
  * a "quota" in the sense this feature addresses.
+ *
+ * `excludeKind` is `undefined` when the provider that just failed isn't
+ * itself a CloudProviderKind at all — e.g. the freellmapi free-tier router,
+ * which has no per-provider settings file of its own and is never a valid
+ * fallback TARGET (cloud providers only ever fall back to other cloud
+ * providers, or freellmapi falls back to cloud — never the reverse). In
+ * that case every configured cloud provider is a candidate.
  */
 export async function resolveFallbackOrder(
   settingsDir: string,
   storageCrypto: StorageCrypto | undefined,
-  excludeKind: CloudProviderKind
+  excludeKind: CloudProviderKind | undefined
 ): Promise<ConfiguredCloudProvider[]> {
   const [anthropic, openai, gemini] = await Promise.all([
     loadAnthropicSettings(path.join(settingsDir, SETTINGS_FILENAME_BY_KIND.anthropic), storageCrypto),
@@ -56,7 +63,7 @@ export async function resolveFallbackOrder(
 
   return candidates
     .filter((c): c is { kind: CloudProviderKind; apiKey: string; addedAt: number | null } => c.apiKey !== null)
-    .filter((c) => c.kind !== excludeKind)
+    .filter((c) => excludeKind === undefined || c.kind !== excludeKind)
     // A key saved before addedAt existed (or written directly, bypassing
     // save*Settings) loads back with addedAt: null. Treating that as the
     // oldest possible value (rather than dropping the candidate) means a

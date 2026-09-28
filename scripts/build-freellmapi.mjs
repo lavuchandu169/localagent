@@ -21,8 +21,14 @@ export async function buildFreellmapiBundle(repoRoot) {
   // reference it across a relative ../ boundary" reasoning as their own
   // desktop/scripts/stage-client.mjs, which exists specifically because a
   // reached-above-the-app-dir path broke electron-builder on Windows.
-  execFileSync("npm", ["ci"], { cwd: vendorDir, stdio: "inherit" });
-  execFileSync("npm", ["run", "build", "-w", "client"], { cwd: vendorDir, stdio: "inherit" });
+  // shell: true — on Windows, "npm" resolves to npm.cmd, which
+  // execFileSync cannot locate/execute without going through a shell
+  // (confirmed: this is the documented Node/Windows execFileSync+npm
+  // interaction, not a hypothetical). All arguments here are fixed,
+  // known-safe literals (no user input), so shell interpretation adds no
+  // injection risk.
+  execFileSync("npm", ["ci"], { cwd: vendorDir, stdio: "inherit", shell: true });
+  execFileSync("npm", ["run", "build", "-w", "client"], { cwd: vendorDir, stdio: "inherit", shell: true });
   const clientSrc = path.join(vendorDir, "client", "dist");
   const clientDest = path.join(outDir, "client-dist");
   fs.rmSync(clientDest, { recursive: true, force: true });

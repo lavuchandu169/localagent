@@ -253,6 +253,37 @@ await (async () => {
     check("the task completes successfully via the fallback", events.some((e) => e.type === "done" && e.success === true));
   })();
 
+  console.log("\nstartSession builds fallbackProviders from saved cloud settings when the primary is freellmapi (router exhausted):");
+  await (async () => {
+    // Spec requirement: when the free-tier router itself comes back
+    // rate-limit-exhausted (every one of its ~34 upstream providers out of
+    // quota), the app must fall back to a configured cloud provider — same
+    // mechanism as cloud-primary fallback above, but freellmapi is never a
+    // CloudProviderKind (no per-provider settings file, never a valid
+    // fallback TARGET), so this exercises the excludeKind:undefined path.
+    const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-session-fallback-test-"));
+    await saveOpenAISettings(path.join(settingsDir, "openaiSettings.json"), { apiKey: "sk-fallback" });
+
+    const registry = createSessionRegistry(sessionsDir);
+    const failingScript = [{ throws: new ProviderChatError("router exhausted", { status: 429, retryable: true }) }];
+    const fallbackScript: ChatResponse[] = [{ turn: { type: "final", content: "done via fallback" } }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "freellmapi", userDataDir: "/tmp/does-not-matter" }, mode: "DEFAULT" },
+      {
+        providerFactory: (c) => (c.kind === "freellmapi" ? new MockProvider(failingScript as any) : new MockProvider(fallbackScript)),
+        settingsDir,
+      }
+    );
+    const events: AgentEvent[] = [];
+    await runTask(registry, sessionId, "say hi", (e) => events.push(e));
+    check(
+      "a session started with freellmapi as primary falls back to the saved OpenAI key when the router is exhausted",
+      events.some((e) => e.type === "status" && e.message.includes("hit a rate limit"))
+    );
+    check("the task completes successfully via the fallback", events.some((e) => e.type === "done" && e.success === true));
+  })();
+
   console.log("\nstartSession does NOT build fallbackProviders when the primary is embedded or a custom server:");
   await (async () => {
     // Config-aware, deliberately the mirror image of the "builds

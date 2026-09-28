@@ -161,9 +161,22 @@ export async function startSession(
   }
 
   const CLOUD_KINDS: CloudProviderKind[] = ["anthropic", "openai", "gemini"];
+  const isCloudPrimary = (CLOUD_KINDS as string[]).includes(config.provider.kind);
+  // freellmapi is never itself a CloudProviderKind (no per-provider
+  // settings file, never a valid fallback TARGET — cloud providers don't
+  // fall back to it), but the spec requires the opposite direction: when
+  // the free-tier router comes back exhausted, fall back to whatever cloud
+  // provider the user has configured. excludeKind: undefined here means
+  // "every configured cloud provider is a candidate", not "exclude none of
+  // three minus itself" — freellmapi isn't in that set to begin with.
+  const isFreellmapiPrimary = config.provider.kind === "freellmapi";
   let fallbackProviders: { provider: ModelProvider; model: string; label: string }[] | undefined;
-  if (deps.settingsDir && (CLOUD_KINDS as string[]).includes(config.provider.kind)) {
-    const candidates = await resolveFallbackOrder(deps.settingsDir, deps.storageCrypto, config.provider.kind as CloudProviderKind);
+  if (deps.settingsDir && (isCloudPrimary || isFreellmapiPrimary)) {
+    const candidates = await resolveFallbackOrder(
+      deps.settingsDir,
+      deps.storageCrypto,
+      isCloudPrimary ? (config.provider.kind as CloudProviderKind) : undefined
+    );
     // Goes through the same providerFactory injection point the primary
     // provider does (not a bare buildProvider() call) — a fallback
     // candidate is still a provider a caller/test may need to substitute,
@@ -175,9 +188,11 @@ export async function startSession(
       label: CLOUD_LABEL_BY_KIND[c.kind],
     }));
   }
-  const providerLabel = (CLOUD_KINDS as string[]).includes(config.provider.kind)
+  const providerLabel = isCloudPrimary
     ? CLOUD_LABEL_BY_KIND[config.provider.kind as CloudProviderKind]
-    : undefined;
+    : isFreellmapiPrimary
+      ? "The free-tier router"
+      : undefined;
 
   const session = new AgentSession({
     workspaceRoot,

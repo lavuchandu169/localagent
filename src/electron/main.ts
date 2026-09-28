@@ -35,6 +35,7 @@ import { isSecureStorageAvailable, electronStorageCrypto } from "./secureStorage
 import { appendErrorLog } from "./errorLog.js";
 import { readAttachment, type PickedAttachment } from "./attachments.js";
 import { wireAutoUpdater, type UpdateManager } from "./updateManager.js";
+import { isFreellmapiRunning, stopFreellmapiServer } from "./freellmapiHost.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -555,6 +556,19 @@ app.whenReady().then(async () => {
     const token = ensureFreellmapiSessionToken();
     openFreellmapiDashboard(port, token);
   });
+  // The vendored dashboard preload (vendor/freellmapi/desktop/src/preload.ts)
+  // exposes __FREEAPI_SESSION__ as `ipcRenderer.invoke('freeapi:session-token')`
+  // — their client's AuthGate calls it whenever the seeded boot-time session
+  // is gone (expired, or a 401), so the dashboard never has to show its own
+  // login form (whose password, the hidden local account's, nobody knows).
+  // Without this handler registered, that invoke rejects and the dashboard
+  // is permanently stuck once the first token stops working — confirmed by
+  // reading vendor/freellmapi/desktop/src/main.ts's own real handler for
+  // the exact channel name and mirrored here.
+  ipcMain.handle("freeapi:session-token", async () => {
+    const { ensureFreellmapiSessionToken } = await import("./freellmapiHost.js");
+    return ensureFreellmapiSessionToken();
+  });
   // Session history is gated by the signed-in account: signed out (or no
   // account ever stored) shows nothing, matching the app's per-account
   // model rather than exposing every local session unconditionally.
@@ -617,19 +631,36 @@ app.whenReady().then(async () => {
 
   // A second, independent before-quit listener (Electron dispatches
   // "before-quit" to every registered listener, not just the first — this
-  // composes safely with the MCP cleanup listener above and the updater's
-  // own onBeforeQuit registration, neither of which calls
-  // preventDefault()). Only this one defers the actual exit: the bundled
-  // server's SQLite handle needs to close cleanly before the process
-  // really goes away, not just a best-effort fire-and-forget like the MCP
-  // disconnects above.
+  // composes safely with the MCP cleanup listener above). Only runs its
+  // cleanup when the freellmapi feature was actually started this session —
+  // isFreellmapiRunning() must be checked synchronously, before any await,
+  // since Electron only honors event.preventDefault() when it's called
+  // during the event's own synchronous dispatch. A session that never
+  // touched the feature quits exactly as fast as it always did. When it
+  // does run, it defers the actual exit: the bundled server's SQLite handle
+  // needs to close cleanly before the process really goes away, not just a
+  // best-effort fire-and-forget like the MCP disconnects above.
   app.on("before-quit", (event) => {
+    if (!isFreellmapiRunning()) return;
     event.preventDefault();
-    import("./freellmapiHost.js")
-      .then(({ stopFreellmapiServer }) => stopFreellmapiServer())
+    stopFreellmapiServer()
       .catch((err) => console.error("[freellmapi] shutdown error:", err))
       .finally(() => {
-        app.exit();
+        // The updater's own before-quit listener is registered earlier (see
+        // wireAutoUpdater above), and Electron dispatches before-quit to
+        // listeners in registration order — so by the time this .finally()
+        // runs, quitAndInstall() may already be underway. It DOES call
+        // event.preventDefault() itself while it closes windows and drives
+        // the OS-level install/relaunch (confirmed by reading
+        // updateManager.ts's onBeforeQuit handler), contrary to what an
+        // earlier version of this comment claimed. app.exit() is an
+        // immediate, no-draining process kill; calling it while an install
+        // is underway could race ahead of the installer actually launching
+        // and corrupt the update. Leave process exit to quitAndInstall()
+        // itself in that case.
+        if (!updateManager?.isInstalling()) {
+          app.exit();
+        }
       });
   });
 

@@ -47,6 +47,15 @@ export interface UpdateManager {
    * reset that path (see downloadedFilePath below).
    */
   openDownloadedFile: () => void;
+  /**
+   * True from the moment quitAndInstall() has actually been invoked (either
+   * via installUpdate() or the before-quit handler above) until the process
+   * exits. Other before-quit listeners that themselves force-exit the
+   * process (app.exit()) need this to know a real install is already
+   * underway, so they don't race it — see freellmapiHost's shutdown
+   * listener in main.ts.
+   */
+  isInstalling: () => boolean;
 }
 
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
@@ -138,5 +147,6 @@ export function wireAutoUpdater(deps: UpdateManagerDeps): UpdateManager {
         if (errorMessage) console.warn("[autoUpdater] couldn't open the downloaded update file:", errorMessage);
       });
     },
+    isInstalling: () => installingForUpdate,
   };
 }

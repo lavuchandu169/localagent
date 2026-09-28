@@ -1,4 +1,5 @@
 import { FreellmapiProxyProvider } from "../providers/freellmapiProxy.js";
+import { ProviderChatError } from "../types.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -88,6 +89,36 @@ console.log("\nFreellmapiProxyProvider.chat surfaces FreeLLMAPI's own needsKey e
       );
     }
     check("a task run with zero configured keys fails clearly instead of hanging", threw);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+console.log("\nFreellmapiProxyProvider.chat surfaces a 429 as a retryable ProviderChatError (router exhausted):");
+{
+  // Spec requirement: when the whole free-tier router comes back
+  // rate-limit-exhausted, the app must be able to fall back to a
+  // configured cloud provider — agent.ts's fallback loop only acts on
+  // ProviderChatError with retryable === true (see agent.ts's run() catch
+  // block), so this is the exact signal that path depends on.
+  const fakeDeps = {
+    startFreellmapiServer: async (_deps: any) => ({ port: 18886 }),
+    getFreellmapiUnifiedApiKey: () => "test-key",
+  };
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("rate limit exceeded", { status: 429, statusText: "Too Many Requests" })) as typeof fetch;
+
+  try {
+    const provider = new FreellmapiProxyProvider({ userDataDir: "/tmp/does-not-matter" }, fakeDeps as any);
+    await provider.healthCheck();
+    try {
+      await provider.chat({ model: "auto", messages: [{ role: "user", content: "hi" }] });
+      check("a 429 response throws", false);
+    } catch (err) {
+      check("a 429 response throws a ProviderChatError", err instanceof ProviderChatError);
+      check("that error is retryable, triggering agent.ts's fallback-to-cloud-provider path", err instanceof ProviderChatError && err.retryable === true);
+    }
   } finally {
     globalThis.fetch = realFetch;
   }
