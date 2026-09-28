@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.54 — 2026-09-28
+
+- fix: Windows entrypoint-detection bug breaking the FreeLLMAPI build
+
 ## v0.1.0-beta.53 — 2026-09-28
 
 - fix: check out submodule in Cut Release workflow
