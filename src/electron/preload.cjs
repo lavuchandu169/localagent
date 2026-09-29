@@ -91,4 +91,5 @@ contextBridge.exposeInMainWorld("agent", {
   freellmapiAddCustomProvider: (params) => ipcRenderer.invoke("agent:freellmapi-add-custom-provider", params),
   freellmapiDiscoverModels: (params) => ipcRenderer.invoke("agent:freellmapi-discover-models", params),
   freellmapiProbeCustomProvider: (params) => ipcRenderer.invoke("agent:freellmapi-probe-custom-provider", params),
+  openExternal: (url) => ipcRenderer.invoke("agent:open-external", url),
 });

@@ -239,6 +239,19 @@
           </div>
         </div>
 
+        <div id="freellmapi-panel" hidden>
+          <div class="modal-card">
+            <button id="freellmapi-panel-close-x" class="modal-close-x" type="button" aria-label="Close">×</button>
+            <div class="freellmapi-panel-header">
+              <h2 id="freellmapi-panel-title">Free-tier providers</h2>
+              <button id="freellmapi-panel-refresh" type="button">Refresh</button>
+            </div>
+            <div id="freellmapi-panel-error" class="error-text" hidden></div>
+            <div id="freellmapi-panel-loading" class="hint-text">Loading providers…</div>
+            <div id="freellmapi-provider-list"></div>
+          </div>
+        </div>
+
         <section id="setup">
           <div class="row">
             <button id="choose-workspace">Choose workspace…</button>

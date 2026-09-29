@@ -623,6 +623,13 @@ app.whenReady().then(async () => {
     const { probeCustomProvider } = await import("./freellmapiKeysApi.js");
     return probeCustomProvider(await freellmapiConn(), params);
   });
+  // Confirmed by reading preload.cjs/main.ts directly: no renderer-callable
+  // "open this URL in the system browser" primitive existed yet - the app's
+  // own main window opens external links through a setWindowOpenHandler
+  // callback, not an IPC method. The panel's "Get key ->" links need one.
+  ipcMain.handle("agent:open-external", async (_event, url: string) => {
+    await shell.openExternal(url);
+  });
   // The vendored dashboard preload (vendor/freellmapi/desktop/src/preload.ts)
   // exposes __FREEAPI_SESSION__ as `ipcRenderer.invoke('freeapi:session-token')`
   // — their client's AuthGate calls it whenever the seeded boot-time session

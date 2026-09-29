@@ -21,8 +21,10 @@ import {
   type TabState,
 } from "./tabState.js";
 import type { UpdateStatus } from "../updateManager.js";
+import type { ListProvidersResult } from "../freellmapiKeysApi.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
+import { initFreellmapiPanel } from "./freellmapiPanel.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 import type { HfSearchResult } from "../modelSearch.js";
@@ -136,6 +138,8 @@ interface AgentBridge {
   getGeminiSettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
   saveGeminiSettings(settings: { apiKey?: string }): Promise<void>;
   openFreellmapiDashboard(): Promise<void>;
+  freellmapiListProviders(): Promise<ListProvidersResult>;
+  openExternal(url: string): Promise<void>;
 }
 
 declare global {
@@ -2822,3 +2826,5 @@ window.agent.onUpdateStatus((status) => {
 });
 
 window.agent.getAuthStatus().then(renderAuthState).catch(() => {});
+
+initFreellmapiPanel();
