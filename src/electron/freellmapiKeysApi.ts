@@ -132,3 +132,85 @@ export async function clearCooldown(conn: FreellmapiKeysConn, id: number): Promi
 export async function revealKey(conn: FreellmapiKeysConn, id: number): Promise<{ key: string }> {
   return request(conn, "POST", `/${id}/reveal`);
 }
+
+export interface ImportPreviewEntry {
+  keyName: string;
+  keyValue: string;
+  detectedPlatform: string | null;
+  prefix: string;
+  baseUrl?: string;
+  models?: Array<{ id: string; supportsTools?: boolean; supportsVision?: boolean }>;
+  isDuplicate: boolean;
+}
+export interface ImportPreviewResult {
+  keys: ImportPreviewEntry[];
+  total: number;
+  skipped: string[];
+  duplicates: number;
+}
+/**
+ * Multipart upload - the server's real /preview endpoint uses multer
+ * (upload.array('files', 10)), not a JSON body (confirmed by reading
+ * keys.ts directly). This is the route the vendored dashboard's own
+ * import flow actually uses (preview -> importSelected below); the
+ * separate one-shot POST /import endpoint is legacy and was never
+ * reachable from their own UI, so it's intentionally not wrapped here.
+ */
+export async function previewImport(
+  conn: FreellmapiKeysConn,
+  files: Array<{ filename: string; content: Buffer }>
+): Promise<ImportPreviewResult> {
+  const form = new FormData();
+  for (const file of files) {
+    // Buffer's ArrayBufferLike backing (possibly a SharedArrayBuffer) isn't
+    // directly assignable to BlobPart under this project's strict TS config -
+    // Uint8Array.from() copies into a plain ArrayBuffer-backed view instead.
+    form.append("files", new Blob([Uint8Array.from(file.content)]), file.filename);
+  }
+  const res = await fetch(`http://127.0.0.1:${conn.port}/api/keys/preview`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${conn.token}` },
+    body: form,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as any)?.error?.message ?? `Request failed: ${res.status} ${res.statusText}`);
+  }
+  return data as ImportPreviewResult;
+}
+
+export interface ImportKeyEntry {
+  keyName?: string;
+  keyValue: string;
+  platform: string;
+  baseUrl?: string;
+  models?: Array<{ id: string; supportsTools?: boolean; supportsVision?: boolean }>;
+}
+export interface ImportSelectedResult {
+  imported: number;
+  skipped: string[];
+  errors: Array<{ key: string; error: string }>;
+  total: number;
+  modelsRegistered: number;
+}
+export async function importSelected(conn: FreellmapiKeysConn, keys: ImportKeyEntry[]): Promise<ImportSelectedResult> {
+  return request(conn, "POST", "/import-selected", { keys });
+}
+
+export interface ExportedKey {
+  platform: string;
+  key: string;
+  label: string;
+  baseUrl?: string;
+}
+export async function exportKeys(conn: FreellmapiKeysConn, format: "json" | "env" = "json"): Promise<ExportedKey[]> {
+  return request(conn, "GET", `/export?format=${format}`);
+}
+
+export async function updatePlatformSettings(
+  conn: FreellmapiKeysConn,
+  platform: string,
+  params: { enabled?: boolean }
+): Promise<{ success: true }> {
+  return request(conn, "PATCH", `/platform/${platform}`, params);
+}

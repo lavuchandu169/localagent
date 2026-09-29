@@ -6,6 +6,10 @@ import {
   removeKey,
   clearCooldown,
   revealKey,
+  previewImport,
+  importSelected,
+  exportKeys,
+  updatePlatformSettings,
 } from "../electron/freellmapiKeysApi.js";
 
 let failures = 0;
@@ -165,6 +169,89 @@ console.log("\nrevealKey:");
   try {
     const result = await revealKey(conn, 5);
     check("returns the real plaintext key", result.key === "gr_real_secret");
+  } finally {
+    restore();
+  }
+}
+
+console.log("\npreviewImport:");
+{
+  let capturedInit: RequestInit | undefined;
+  const restore = fakeFetch((url, init) => {
+    capturedInit = init;
+    check("POSTs multipart to /api/keys/preview", url === "http://127.0.0.1:19700/api/keys/preview");
+    return new Response(
+      JSON.stringify({ keys: [{ keyName: "GROQ_KEY", keyValue: "gr_abc", detectedPlatform: "groq", prefix: "gr_", isDuplicate: false }], total: 1, skipped: [], duplicates: 0 }),
+      { status: 200 }
+    );
+  });
+  try {
+    const result = await previewImport(conn, [{ filename: "keys.env", content: Buffer.from("GROQ_KEY=gr_abc") }]);
+    check("sends the file as multipart form data, not JSON", !(capturedInit?.headers as any)?.["Content-Type"]?.includes("application/json"));
+    check("returns the parsed preview entries", result.keys[0]!.detectedPlatform === "groq");
+    check("returns the total count", result.total === 1);
+  } finally {
+    restore();
+  }
+}
+
+console.log("\nimportSelected:");
+{
+  let sentBody: any = null;
+  const restore = fakeFetch((url, init) => {
+    sentBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ imported: 1, skipped: [], errors: [], total: 1, modelsRegistered: 0 }), { status: 200 });
+  });
+  try {
+    const result = await importSelected(conn, [{ keyName: "GROQ_KEY", keyValue: "gr_abc", platform: "groq" }]);
+    check("POSTs {keys: [...]} as JSON", Array.isArray(sentBody.keys) && sentBody.keys[0].platform === "groq");
+    check("returns the import summary", result.imported === 1);
+  } finally {
+    restore();
+  }
+}
+
+console.log("\nexportKeys:");
+{
+  const restore = fakeFetch((url) => {
+    check("GETs /api/keys/export", url === "http://127.0.0.1:19700/api/keys/export?format=json");
+    return new Response(JSON.stringify([{ platform: "groq", key: "gr_abc", label: "" }]), { status: 200 });
+  });
+  try {
+    const result = await exportKeys(conn, "json");
+    check("returns the real exported keys", result[0]!.key === "gr_abc");
+  } finally {
+    restore();
+  }
+}
+
+console.log("\nexportKeys surfaces the real 'nothing to export' error:");
+{
+  const restore = fakeFetch(() => new Response(JSON.stringify({ error: { message: "No keys to export" } }), { status: 404 }));
+  try {
+    let threw = false;
+    try {
+      await exportKeys(conn, "json");
+    } catch (err) {
+      threw = true;
+      check("surfaces the real message, not a generic one", err instanceof Error && err.message === "No keys to export");
+    }
+    check("a 404 with no keys throws", threw);
+  } finally {
+    restore();
+  }
+}
+
+console.log("\nupdatePlatformSettings:");
+{
+  let sentMethod = "";
+  const restore = fakeFetch((url, init) => {
+    sentMethod = init?.method ?? "";
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  });
+  try {
+    await updatePlatformSettings(conn, "groq", { enabled: false });
+    check("PATCHes /api/keys/platform/:platform", sentMethod === "PATCH");
   } finally {
     restore();
   }
