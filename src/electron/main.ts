@@ -653,6 +653,29 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent:open-external", async (_event, url: string) => {
     await shell.openExternal(url);
   });
+  // Native Fallback panel - second of FreeLLMAPI's vendored dashboard pages
+  // reimplemented (Keys, above, was the first). Reuses the same
+  // freellmapiConn() helper - no new lifecycle code needed.
+  ipcMain.handle("agent:freellmapi-fallback-get-routing", async () => {
+    const { getRouting } = await import("./freellmapiFallbackApi.js");
+    return getRouting(await freellmapiConn());
+  });
+  ipcMain.handle("agent:freellmapi-fallback-update-routing", async (_event, params) => {
+    const { updateRouting } = await import("./freellmapiFallbackApi.js");
+    return updateRouting(await freellmapiConn(), params);
+  });
+  ipcMain.handle("agent:freellmapi-fallback-get-models", async () => {
+    const { getModelList } = await import("./freellmapiFallbackApi.js");
+    return getModelList(await freellmapiConn());
+  });
+  ipcMain.handle("agent:freellmapi-fallback-update-models", async (_event, entries) => {
+    const { updateModelList } = await import("./freellmapiFallbackApi.js");
+    return updateModelList(await freellmapiConn(), entries);
+  });
+  ipcMain.handle("agent:freellmapi-fallback-sort-models", async (_event, preset) => {
+    const { sortModelList } = await import("./freellmapiFallbackApi.js");
+    return sortModelList(await freellmapiConn(), preset);
+  });
   // Session history is gated by the signed-in account: signed out (or no
   // account ever stored) shows nothing, matching the app's per-account
   // model rather than exposing every local session unconditionally.
