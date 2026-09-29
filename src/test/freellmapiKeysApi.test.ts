@@ -10,6 +10,9 @@ import {
   importSelected,
   exportKeys,
   updatePlatformSettings,
+  addCustomProvider,
+  discoverModels,
+  probeCustomProvider,
 } from "../electron/freellmapiKeysApi.js";
 
 let failures = 0;
@@ -252,6 +255,67 @@ console.log("\nupdatePlatformSettings:");
   try {
     await updatePlatformSettings(conn, "groq", { enabled: false });
     check("PATCHes /api/keys/platform/:platform", sentMethod === "PATCH");
+  } finally {
+    restore();
+  }
+}
+
+console.log("\naddCustomProvider:");
+{
+  let sentBody: any = null;
+  const restore = fakeFetch((url, init) => {
+    sentBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ success: true, keyId: 9 }), { status: 201 });
+  });
+  try {
+    const result = await addCustomProvider(conn, { baseUrl: "http://localhost:1234/v1", apiKey: "sk-local", model: "local-model", displayName: "My LM Studio" });
+    check("POSTs /api/keys/custom with the endpoint details", sentBody.baseUrl === "http://localhost:1234/v1" && sentBody.model === "local-model");
+    check("returns the created endpoint's key id", result.keyId === 9);
+  } finally {
+    restore();
+  }
+}
+
+console.log("\ndiscoverModels:");
+{
+  const restore = fakeFetch((url) => {
+    check("POSTs /api/keys/custom/discover-models", url === "http://127.0.0.1:19700/api/keys/custom/discover-models");
+    return new Response(JSON.stringify({ models: [{ id: "local-model", supportsTools: true, supportsVision: false }] }), { status: 200 });
+  });
+  try {
+    const result = await discoverModels(conn, { baseUrl: "http://localhost:1234/v1", apiKey: "sk-local" });
+    check("returns the discovered models", result.models[0]!.id === "local-model");
+  } finally {
+    restore();
+  }
+}
+
+console.log("\nprobeCustomProvider:");
+{
+  const restore = fakeFetch((url) => {
+    check("POSTs /api/keys/custom/probe", url === "http://127.0.0.1:19700/api/keys/custom/probe");
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+  try {
+    const result = await probeCustomProvider(conn, { baseUrl: "http://localhost:1234/v1", apiKey: "sk-local" });
+    check("returns ok:true for a reachable endpoint", result.ok === true);
+  } finally {
+    restore();
+  }
+}
+
+console.log("\nprobeCustomProvider surfaces an unreachable endpoint's real error:");
+{
+  const restore = fakeFetch(() => new Response(JSON.stringify({ error: { message: "connect ECONNREFUSED 127.0.0.1:1234" } }), { status: 502 }));
+  try {
+    let threw = false;
+    try {
+      await probeCustomProvider(conn, { baseUrl: "http://localhost:1234/v1" });
+    } catch (err) {
+      threw = true;
+      check("the real connection error reaches the caller", err instanceof Error && err.message.includes("ECONNREFUSED"));
+    }
+    check("an unreachable custom endpoint throws instead of silently returning ok", threw);
   } finally {
     restore();
   }

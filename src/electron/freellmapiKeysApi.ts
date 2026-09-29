@@ -214,3 +214,36 @@ export async function updatePlatformSettings(
 ): Promise<{ success: true }> {
   return request(conn, "PATCH", `/platform/${platform}`, params);
 }
+
+export interface AddCustomProviderParams {
+  baseUrl?: string;
+  keyId?: number;
+  model?: string;
+  models?: string[];
+  displayName?: string;
+  apiKey?: string;
+  label?: string;
+  supportsTools?: boolean;
+  supportsVision?: boolean;
+}
+export async function addCustomProvider(conn: FreellmapiKeysConn, params: AddCustomProviderParams): Promise<{ success: true; keyId: number }> {
+  return request(conn, "POST", "/custom", params);
+}
+
+export interface DiscoverModelsParams {
+  baseUrl?: string;
+  keyId?: number;
+  apiKey?: string;
+}
+export interface DiscoveredModel {
+  id: string;
+  supportsTools?: boolean;
+  supportsVision?: boolean;
+}
+export async function discoverModels(conn: FreellmapiKeysConn, params: DiscoverModelsParams): Promise<{ models: DiscoveredModel[] }> {
+  return request(conn, "POST", "/custom/discover-models", params);
+}
+
+export async function probeCustomProvider(conn: FreellmapiKeysConn, params: DiscoverModelsParams): Promise<{ ok: boolean }> {
+  return request(conn, "POST", "/custom/probe", params);
+}
