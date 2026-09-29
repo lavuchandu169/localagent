@@ -549,13 +549,6 @@ app.whenReady().then(async () => {
       storageCrypto
     );
   });
-  ipcMain.handle("agent:open-freellmapi-dashboard", async () => {
-    const { startFreellmapiServer, ensureFreellmapiSessionToken } = await import("./freellmapiHost.js");
-    const { openFreellmapiDashboard } = await import("./freellmapiDashboardWindow.js");
-    const { port } = await startFreellmapiServer({ userDataDir: freellmapiUserDataDir });
-    const token = ensureFreellmapiSessionToken();
-    openFreellmapiDashboard(port, token);
-  });
   // Native Keys panel - every handler below does the same three things:
   // lazily start the bundled server (a no-op if already running, same
   // singleton startFreellmapiServer() every provider path already uses),
