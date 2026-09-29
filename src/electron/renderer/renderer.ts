@@ -30,6 +30,9 @@ import type {
   ImportPreviewResult,
   ImportKeyEntry,
   ImportSelectedResult,
+  AddCustomProviderParams,
+  DiscoverModelsParams,
+  DiscoveredModel,
 } from "../freellmapiKeysApi.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
@@ -157,6 +160,9 @@ interface AgentBridge {
   freellmapiPreviewImport(files: Array<{ filename: string; content: string }>): Promise<ImportPreviewResult>;
   freellmapiImportSelected(keys: ImportKeyEntry[]): Promise<ImportSelectedResult>;
   freellmapiExportToFile(format: "json" | "env"): Promise<{ saved: boolean }>;
+  freellmapiAddCustomProvider(params: AddCustomProviderParams): Promise<{ success: true; keyId: number }>;
+  freellmapiDiscoverModels(params: DiscoverModelsParams): Promise<{ models: DiscoveredModel[] }>;
+  freellmapiProbeCustomProvider(params: DiscoverModelsParams): Promise<{ ok: boolean }>;
   openExternal(url: string): Promise<void>;
 }
 

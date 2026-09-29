@@ -49,6 +49,7 @@ export function initFreellmapiPanel(): void {
   });
 
   wireImportExport();
+  wireCustomProvider();
 }
 
 /** Exported so renderer.ts's other panel toggles (Settings/About/MCP
@@ -267,4 +268,91 @@ function renderImportPreview(preview: Awaited<ReturnType<typeof window.agent.fre
     }
   });
   container.appendChild(importBtn);
+}
+
+function wireCustomProvider(): void {
+  const baseUrlInput = document.getElementById("freellmapi-custom-base-url") as HTMLInputElement;
+  const apiKeyInput = document.getElementById("freellmapi-custom-api-key") as HTMLInputElement;
+  const displayNameInput = document.getElementById("freellmapi-custom-display-name") as HTMLInputElement;
+  const probeBtn = document.getElementById("freellmapi-custom-probe-btn") as HTMLButtonElement;
+  const discoverBtn = document.getElementById("freellmapi-custom-discover-btn") as HTMLButtonElement;
+  const modelsEl = document.getElementById("freellmapi-custom-models")!;
+  const statusEl = document.getElementById("freellmapi-custom-status")!;
+
+  const params = () => ({ baseUrl: baseUrlInput.value.trim(), apiKey: apiKeyInput.value.trim() || undefined });
+
+  probeBtn.addEventListener("click", async () => {
+    statusEl.textContent = "Testing…";
+    probeBtn.disabled = true;
+    discoverBtn.disabled = true;
+    try {
+      await window.agent.freellmapiProbeCustomProvider(params());
+      statusEl.textContent = "Connection OK.";
+    } catch (err) {
+      // A probe failure is expected user-input feedback, not a panel-wide
+      // error — surfaced next to the form, not in the shared error banner,
+      // per this task's Review Focus item.
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+    } finally {
+      probeBtn.disabled = false;
+      discoverBtn.disabled = false;
+    }
+  });
+
+  discoverBtn.addEventListener("click", async () => {
+    statusEl.textContent = "Discovering models…";
+    probeBtn.disabled = true;
+    discoverBtn.disabled = true;
+    modelsEl.hidden = true;
+    try {
+      const { models } = await window.agent.freellmapiDiscoverModels(params());
+      statusEl.textContent = `Found ${models.length} model(s).`;
+      renderCustomModels(models, modelsEl, baseUrlInput, apiKeyInput, displayNameInput, statusEl);
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+    } finally {
+      probeBtn.disabled = false;
+      discoverBtn.disabled = false;
+    }
+  });
+}
+
+function renderCustomModels(
+  models: Array<{ id: string }>,
+  container: HTMLElement,
+  baseUrlInput: HTMLInputElement,
+  apiKeyInput: HTMLInputElement,
+  displayNameInput: HTMLInputElement,
+  statusEl: HTMLElement
+): void {
+  container.hidden = false;
+  container.innerHTML = "";
+  for (const model of models) {
+    const row = document.createElement("div");
+    row.className = "freellmapi-provider-row";
+    const label = document.createElement("span");
+    label.textContent = model.id;
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.textContent = "Add";
+    addBtn.addEventListener("click", async () => {
+      addBtn.disabled = true;
+      try {
+        await window.agent.freellmapiAddCustomProvider({
+          baseUrl: baseUrlInput.value.trim(),
+          apiKey: apiKeyInput.value.trim() || undefined,
+          model: model.id,
+          displayName: displayNameInput.value.trim() || undefined,
+        });
+        statusEl.textContent = `Added ${model.id}.`;
+        await refreshProviders();
+      } catch (err) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        addBtn.disabled = false;
+      }
+    });
+    row.appendChild(label);
+    row.appendChild(addBtn);
+    container.appendChild(row);
+  }
 }

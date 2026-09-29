@@ -258,6 +258,20 @@
               </div>
               <div id="freellmapi-import-preview" hidden></div>
             </div>
+            <div class="freellmapi-panel-section">
+              <h3>Custom OpenAI-compatible provider</h3>
+              <div class="row">
+                <input id="freellmapi-custom-base-url" type="text" placeholder="http://localhost:1234/v1" />
+                <input id="freellmapi-custom-api-key" type="password" placeholder="API key (optional)" />
+              </div>
+              <div class="row">
+                <input id="freellmapi-custom-display-name" type="text" placeholder="Display name (optional)" />
+                <button id="freellmapi-custom-probe-btn" type="button">Test connection</button>
+                <button id="freellmapi-custom-discover-btn" type="button">Discover models</button>
+              </div>
+              <div id="freellmapi-custom-models" hidden></div>
+              <div id="freellmapi-custom-status" class="hint-text"></div>
+            </div>
           </div>
         </div>
 
