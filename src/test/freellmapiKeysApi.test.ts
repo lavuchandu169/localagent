@@ -214,15 +214,42 @@ console.log("\nimportSelected:");
   }
 }
 
-console.log("\nexportKeys:");
+console.log("\nexportKeys (json format):");
 {
+  // The real server's JSON export is {version, exportedAt, source, keys:[...]}
+  // via res.json(jsonExport) - not a bare array (confirmed by reading
+  // keys.ts's export handler directly). exportKeys() returns the raw
+  // response text unchanged for every format, rather than trying to parse
+  // and re-shape it - the server already formats each type correctly, so
+  // there's nothing for this client to get wrong.
   const restore = fakeFetch((url) => {
-    check("GETs /api/keys/export", url === "http://127.0.0.1:19700/api/keys/export?format=json");
-    return new Response(JSON.stringify([{ platform: "groq", key: "gr_abc", label: "" }]), { status: 200 });
+    check("GETs /api/keys/export with the json format", url === "http://127.0.0.1:19700/api/keys/export?format=json");
+    return new Response(
+      JSON.stringify({ version: 1, exportedAt: "2026-09-29T00:00:00.000Z", source: "freellmapi", keys: [{ platform: "groq", key: "gr_abc", label: "" }] }),
+      { status: 200, headers: { "Content-Type": "application/json; charset=utf-8" } }
+    );
   });
   try {
     const result = await exportKeys(conn, "json");
-    check("returns the real exported keys", result[0]!.key === "gr_abc");
+    check("returns the real response body as text, unmodified", JSON.parse(result).keys[0].key === "gr_abc");
+  } finally {
+    restore();
+  }
+}
+
+console.log("\nexportKeys (env format):");
+{
+  // The real server sends text/plain for format=env (res.send(content), not
+  // res.json()) - a response body that isn't JSON at all. A client that
+  // always called res.json() on this (the bug this test guards against)
+  // would silently get back {} instead of the real .env content.
+  const restore = fakeFetch((url) => {
+    check("GETs /api/keys/export with the env format", url === "http://127.0.0.1:19700/api/keys/export?format=env");
+    return new Response("GROQ_KEY=gr_abc\n\nGEMINI_KEY=gm_xyz\n", { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  });
+  try {
+    const result = await exportKeys(conn, "env");
+    check("returns the real .env text unchanged, not an empty object", result === "GROQ_KEY=gr_abc\n\nGEMINI_KEY=gm_xyz\n");
   } finally {
     restore();
   }

@@ -197,14 +197,33 @@ export async function importSelected(conn: FreellmapiKeysConn, keys: ImportKeyEn
   return request(conn, "POST", "/import-selected", { keys });
 }
 
-export interface ExportedKey {
-  platform: string;
-  key: string;
-  label: string;
-  baseUrl?: string;
-}
-export async function exportKeys(conn: FreellmapiKeysConn, format: "json" | "env" = "json"): Promise<ExportedKey[]> {
-  return request(conn, "GET", `/export?format=${format}`);
+/**
+ * Returns the real response BODY AS TEXT, unmodified - never parsed and
+ * re-shaped. Confirmed by reading the real /export handler directly: the
+ * json format sends {version, exportedAt, source, keys:[...]} via
+ * res.json() (not a bare array), while env/csv formats send plain text via
+ * res.send() (not JSON at all - calling res.json() on that response would
+ * silently resolve to {} instead of throwing). The server already formats
+ * every type correctly (including edge cases like duplicate key names and
+ * custom-endpoint base URLs - see its own inline comments), so the only
+ * correct client behavior is to write its output back out unchanged, not
+ * re-implement formatting this file has no reason to get right twice.
+ */
+export async function exportKeys(conn: FreellmapiKeysConn, format: "json" | "env" = "json"): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${conn.port}/api/keys/export?format=${format}`, {
+    headers: { Authorization: `Bearer ${conn.token}` },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let message = `Request failed: ${res.status} ${res.statusText}`;
+    try {
+      message = JSON.parse(text)?.error?.message ?? message;
+    } catch {
+      // The error body wasn't JSON either - keep the generic message.
+    }
+    throw new Error(message);
+  }
+  return text;
 }
 
 export async function updatePlatformSettings(

@@ -9,20 +9,74 @@
 // Electron runtime in this sandbox - the same limitation already flagged
 // for the rest of this feature), verified by manual testing on a real
 // machine instead.
-import type { ProviderRow } from "../freellmapiKeysApi.js";
+import type { ProviderRow, KeyRow } from "../freellmapiKeysApi.js";
 
-/** Static signup-URL map, re-derived from the vendored client's own
- * PLATFORMS constant (vendor/freellmapi/client/src/data/) rather than
- * imported across the client/server package boundary - that's a
- * separate Vite project this Node/Electron-main-adjacent file can't
- * reach into. Extend as needed; a platform missing here just shows no
- * "Get key" link, never breaks anything. */
+/** Full signup-URL map, transcribed from the vendored client's own
+ * PLATFORMS constant (vendor/freellmapi/client/src/components/keys/shared.tsx,
+ * read directly - not guessed) rather than imported across the
+ * client/server package boundary, which this Node/Electron-main-adjacent
+ * file can't reach into (separate Vite project, separate build). The
+ * platform ids here are the server's own values (e.g. "google", not
+ * "gemini") - confirmed against the same source. Extend as needed; a
+ * platform missing here just shows no "Get key" link, never breaks
+ * anything. */
 const PROVIDER_SIGNUP_URLS: Record<string, string> = {
+  aclide: "https://aclide.com/en/dashboard/api-keys",
+  speka: "https://speka.me/dashboard/keys",
+  moondream: "https://moondream.ai/c/cloud/api-keys",
+  google: "https://aistudio.google.com/apikey",
   groq: "https://console.groq.com/keys",
-  gemini: "https://aistudio.google.com/apikey",
+  cerebras: "https://cloud.cerebras.ai",
+  sail: "https://app.sailresearch.com",
+  electronhub: "https://app.electronhub.ai",
+  experiential: "https://platform.experientiallabs.ai",
+  router9: "https://www.router9.com",
+  septor: "https://septorlabs.com/dashboard",
+  clod: "https://newapp.clod.io",
+  speechify: "https://platform.speechify.ai",
+  blaze: "https://blazeapi.org/dashboard",
+  lucidity: "https://composite.lucidity.sh",
+  airforce: "https://api.airforce",
+  dreamprompting: "https://dreamprompting.com",
+  waterfall: "https://getwaterfall.org",
+  logfare: "https://logfare.ai",
+  bai: "https://b.ai",
+  radeon: "https://developer.amd.com.cn/radeon/tokenfactory",
+  nvidia: "https://build.nvidia.com/settings/api-keys",
+  mistral: "https://console.mistral.ai/api-keys/",
   openrouter: "https://openrouter.ai/keys",
-  cerebras: "https://cloud.cerebras.ai/",
+  github: "https://github.com/settings/tokens",
   cohere: "https://dashboard.cohere.com/api-keys",
+  cloudflare: "https://dash.cloudflare.com",
+  zhipu: "https://z.ai/manage-apikey/apikey-list",
+  ollama: "https://ollama.com/settings/keys",
+  kilo: "https://app.kilo.ai",
+  pollinations: "https://enter.pollinations.ai",
+  ovh: "https://endpoints.ai.cloud.ovh.net",
+  llm7: "https://llm7.io",
+  huggingface: "https://huggingface.co/settings/tokens",
+  opencode: "https://opencode.ai/auth",
+  agnes: "https://platform.agnes-ai.com",
+  reka: "https://platform.reka.ai",
+  siliconflow: "https://siliconflow.com",
+  routeway: "https://routeway.ai",
+  bazaarlink: "https://bazaarlink.ai",
+  ainative: "https://ainative.studio",
+  aion: "https://www.aionlabs.ai",
+  requesty: "https://www.requesty.ai",
+  navy: "https://api.navy",
+  nara: "https://router.bynara.id",
+  sealion: "https://sea-lion.ai",
+  orcarouter: "https://www.orcarouter.ai",
+  unorouter: "https://unorouter.com",
+  xkiro: "https://xkiro.com",
+  anyapi: "https://anyapi.ai",
+  modelscope: "https://modelscope.cn/my/myaccesstoken",
+  aihorde: "https://aihorde.net/register",
+  qianfan: "https://console.bce.baidu.com/qianfan/overview",
+  volcengine: "https://console.volcengine.com/ark",
+  longcat: "https://longcat.chat/platform",
+  xfyun: "https://console.xfyun.cn",
 };
 
 let panel: HTMLElement;
@@ -31,6 +85,7 @@ let refreshBtn: HTMLButtonElement;
 let errorEl: HTMLElement;
 let loadingEl: HTMLElement;
 let listEl: HTMLElement;
+let customEndpointsEl: HTMLElement;
 
 export function initFreellmapiPanel(): void {
   panel = document.getElementById("freellmapi-panel")!;
@@ -64,20 +119,33 @@ export function closeFreellmapiPanel(): void {
 export async function openFreellmapiPanel(): Promise<void> {
   panel.hidden = false;
   await refreshProviders();
+  await refreshCustomEndpoints(customEndpointsEl);
 }
 
+// Refresh generation counter: every refreshProviders() call (Refresh
+// button, or any action's own re-fetch after add/remove/toggle) increments
+// this and captures its own number. Two calls can be in flight at once -
+// clicking Refresh mid-action, or two different rows' actions overlapping -
+// and whichever response arrives LAST is not necessarily the one that was
+// requested last. Applying a stale response over a newer one would flash
+// the list back to old data. Only the call whose captured number still
+// matches the current one when its response lands is allowed to render.
+let refreshGeneration = 0;
+
 async function refreshProviders(): Promise<void> {
+  const generation = ++refreshGeneration;
   errorEl.hidden = true;
   loadingEl.hidden = false;
-  listEl.innerHTML = "";
   try {
     const result = await window.agent.freellmapiListProviders();
+    if (generation !== refreshGeneration) return; // a newer refresh has already started or finished
     renderProviders(result.providers);
   } catch (err) {
+    if (generation !== refreshGeneration) return;
     errorEl.hidden = false;
     errorEl.textContent = err instanceof Error ? err.message : String(err);
   } finally {
-    loadingEl.hidden = true;
+    if (generation === refreshGeneration) loadingEl.hidden = true;
   }
 }
 
@@ -178,13 +246,30 @@ async function addKeyForPlatform(platform: string, key?: string): Promise<void> 
 /** The provider list doesn't carry individual key ids - fetch the key
  * list once per action rather than keeping a second cached copy that
  * could drift from what refreshProviders() just rendered. */
-async function findFirstKeyId(platform: string): Promise<number | undefined> {
+/**
+ * Reveal/Remove/the Enable-Disable toggle each act on ONE key, but a
+ * platform can have several (import routinely creates GROQ_KEY,
+ * GROQ_KEY_2, ...). Silently picking "the first one found" would let
+ * Remove delete an arbitrary key out of several, or the toggle flip a
+ * DIFFERENT key than the one its own label describes - a real, silent
+ * data-integrity risk, not just a display quirk. Refuses instead of
+ * guessing whenever more than one key exists for a platform; managing
+ * individual keys when a provider has several is real future work this
+ * pass doesn't build (see the plan's Task 9 ledger ruling).
+ */
+async function findSoleKeyId(platform: string): Promise<number | undefined> {
   const keys = await window.agent.freellmapiListKeys();
-  return keys.find((k) => k.platform === platform)?.id;
+  const matching = keys.filter((k) => k.platform === platform);
+  if (matching.length > 1) {
+    throw new Error(
+      `${platform} has ${matching.length} keys configured - this panel can only manage a single key per provider right now. Remove the extras via Export first, or wait for per-key management.`
+    );
+  }
+  return matching[0]?.id;
 }
 
 async function revealFirstKey(platform: string, row: HTMLElement): Promise<void> {
-  const id = await findFirstKeyId(platform);
+  const id = await findSoleKeyId(platform);
   if (id === undefined) return;
   const { key } = await window.agent.freellmapiRevealKey(id);
   const existing = row.querySelector(".freellmapi-revealed-key");
@@ -196,15 +281,17 @@ async function revealFirstKey(platform: string, row: HTMLElement): Promise<void>
 }
 
 async function removeFirstKey(platform: string): Promise<void> {
-  const id = await findFirstKeyId(platform);
+  const id = await findSoleKeyId(platform);
   if (id === undefined) return;
   await window.agent.freellmapiRemoveKey(id);
   await refreshProviders();
 }
 
 async function toggleFirstKeyEnabled(platform: string): Promise<void> {
+  const id = await findSoleKeyId(platform);
+  if (id === undefined) return;
   const keys = await window.agent.freellmapiListKeys();
-  const current = keys.find((k) => k.platform === platform);
+  const current = keys.find((k) => k.id === id);
   if (!current) return;
   await window.agent.freellmapiUpdateKey(current.id, { enabled: !current.enabled });
   await refreshProviders();
@@ -247,27 +334,110 @@ function wireImportExport(): void {
 function renderImportPreview(preview: Awaited<ReturnType<typeof window.agent.freellmapiPreviewImport>>, container: HTMLElement): void {
   container.hidden = false;
   container.innerHTML = "";
+
+  // Computed once, reused for both the button's own label and the request
+  // body - the label previously counted "not a duplicate" while the actual
+  // request also dropped entries with no detected platform, so the two
+  // numbers could disagree.
+  const toImport = preview.keys
+    .filter((k) => !k.isDuplicate && k.detectedPlatform)
+    .map((k) => ({ keyName: k.keyName, keyValue: k.keyValue, platform: k.detectedPlatform!, baseUrl: k.baseUrl, models: k.models }));
+  const undetected = preview.keys.filter((k) => !k.isDuplicate && !k.detectedPlatform).length;
+
   const summary = document.createElement("p");
-  summary.textContent = `Found ${preview.total} key(s)${preview.duplicates ? `, ${preview.duplicates} duplicate(s)` : ""}.`;
+  const summaryParts = [`Found ${preview.total} key(s)`];
+  if (preview.duplicates) summaryParts.push(`${preview.duplicates} duplicate(s)`);
+  if (undetected) summaryParts.push(`${undetected} with no recognized platform`);
+  summary.textContent = summaryParts.join(", ") + ".";
   container.appendChild(summary);
+
+  if (preview.skipped.length > 0) {
+    const skippedEl = document.createElement("p");
+    skippedEl.className = "hint-text";
+    skippedEl.textContent = `Skipped: ${preview.skipped.join(", ")}`;
+    container.appendChild(skippedEl);
+  }
 
   const importBtn = document.createElement("button");
   importBtn.type = "button";
-  importBtn.textContent = `Import ${preview.keys.filter((k) => !k.isDuplicate).length} key(s)`;
+  importBtn.textContent = `Import ${toImport.length} key(s)`;
+  importBtn.disabled = toImport.length === 0;
   importBtn.addEventListener("click", async () => {
+    importBtn.disabled = true;
     try {
-      const toImport = preview.keys
-        .filter((k) => !k.isDuplicate && k.detectedPlatform)
-        .map((k) => ({ keyName: k.keyName, keyValue: k.keyValue, platform: k.detectedPlatform!, baseUrl: k.baseUrl, models: k.models }));
-      await window.agent.freellmapiImportSelected(toImport);
-      container.hidden = true;
+      const result = await window.agent.freellmapiImportSelected(toImport);
+      // A per-key failure (a duplicate that slipped through, an SSRF-
+      // rejected custom baseUrl, a platform the server itself rejects) is
+      // real, user-relevant information - reported here rather than
+      // silently closing the preview as if every key had succeeded.
+      if (result.errors.length > 0) {
+        const errorLines = result.errors.map((e) => `${e.key}: ${e.error}`).join("; ");
+        if (result.imported === 0) {
+          throw new Error(`Import failed for all keys — ${errorLines}`);
+        }
+        errorEl.hidden = false;
+        errorEl.textContent = `Imported ${result.imported} of ${toImport.length}. Failed: ${errorLines}`;
+      } else {
+        container.hidden = true;
+      }
       await refreshProviders();
     } catch (err) {
       errorEl.hidden = false;
       errorEl.textContent = err instanceof Error ? err.message : String(err);
+      importBtn.disabled = false;
     }
   });
   container.appendChild(importBtn);
+}
+
+/**
+ * GET /providers deliberately excludes platform === 'custom' (confirmed by
+ * reading keys.ts directly - it filters `.filter(p => p.platform !==
+ * 'custom')`), so a custom endpoint just added would otherwise be
+ * invisible anywhere in this panel with no way to see, reveal or remove
+ * it again. Fetches the real key list and renders only the custom rows,
+ * refreshed after every add.
+ */
+async function refreshCustomEndpoints(container: HTMLElement): Promise<void> {
+  let keys: KeyRow[];
+  try {
+    keys = await window.agent.freellmapiListKeys();
+  } catch {
+    return; // the shared error banner already reports listKeys() failures elsewhere; this section just stays empty
+  }
+  const customKeys = keys.filter((k) => k.platform === "custom");
+  container.innerHTML = "";
+  if (customKeys.length === 0) return;
+
+  const heading = document.createElement("p");
+  heading.className = "hint-text";
+  heading.textContent = "Configured custom endpoints:";
+  container.appendChild(heading);
+
+  for (const key of customKeys) {
+    const row = document.createElement("div");
+    row.className = "freellmapi-provider-row";
+    const label = document.createElement("span");
+    label.className = "freellmapi-provider-name";
+    label.textContent = key.label || key.baseUrl || `#${key.id}`;
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.textContent = "Remove";
+    removeBtn.addEventListener("click", async () => {
+      removeBtn.disabled = true;
+      try {
+        await window.agent.freellmapiRemoveKey(key.id);
+        await refreshCustomEndpoints(container);
+      } catch (err) {
+        errorEl.hidden = false;
+        errorEl.textContent = err instanceof Error ? err.message : String(err);
+        removeBtn.disabled = false;
+      }
+    });
+    row.appendChild(label);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  }
 }
 
 function wireCustomProvider(): void {
@@ -278,6 +448,8 @@ function wireCustomProvider(): void {
   const discoverBtn = document.getElementById("freellmapi-custom-discover-btn") as HTMLButtonElement;
   const modelsEl = document.getElementById("freellmapi-custom-models")!;
   const statusEl = document.getElementById("freellmapi-custom-status")!;
+  customEndpointsEl = document.getElementById("freellmapi-custom-endpoints")!;
+  void refreshCustomEndpoints(customEndpointsEl);
 
   const params = () => ({ baseUrl: baseUrlInput.value.trim(), apiKey: apiKeyInput.value.trim() || undefined });
 
@@ -307,7 +479,7 @@ function wireCustomProvider(): void {
     try {
       const { models } = await window.agent.freellmapiDiscoverModels(params());
       statusEl.textContent = `Found ${models.length} model(s).`;
-      renderCustomModels(models, modelsEl, baseUrlInput, apiKeyInput, displayNameInput, statusEl);
+      renderCustomModels(models, modelsEl, baseUrlInput, apiKeyInput, displayNameInput, statusEl, customEndpointsEl);
     } catch (err) {
       statusEl.textContent = err instanceof Error ? err.message : String(err);
     } finally {
@@ -323,7 +495,8 @@ function renderCustomModels(
   baseUrlInput: HTMLInputElement,
   apiKeyInput: HTMLInputElement,
   displayNameInput: HTMLInputElement,
-  statusEl: HTMLElement
+  statusEl: HTMLElement,
+  endpointsEl: HTMLElement
 ): void {
   container.hidden = false;
   container.innerHTML = "";
@@ -346,6 +519,7 @@ function renderCustomModels(
         });
         statusEl.textContent = `Added ${model.id}.`;
         await refreshProviders();
+        await refreshCustomEndpoints(endpointsEl);
       } catch (err) {
         statusEl.textContent = err instanceof Error ? err.message : String(err);
         addBtn.disabled = false;

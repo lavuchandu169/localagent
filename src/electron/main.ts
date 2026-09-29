@@ -631,14 +631,18 @@ app.whenReady().then(async () => {
   // no existing showSaveDialog wrapper to reuse, so the same
   // getFocusedWindow-with-fallback pattern is inlined here directly.
   ipcMain.handle("agent:freellmapi-export-to-file", async (_event, format: "json" | "env") => {
+    // exportKeys() returns the server's real response body verbatim - it
+    // already formats both types correctly (including edge cases the
+    // server's own comments document: duplicate key names, custom-endpoint
+    // base URLs), so this just writes it out unchanged rather than
+    // re-implementing formatting a second, buggier time.
     const { exportKeys } = await import("./freellmapiKeysApi.js");
-    const keys = await exportKeys(await freellmapiConn(), format);
+    const content = await exportKeys(await freellmapiConn(), format);
     const parentWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
     const result = parentWindow
       ? await dialog.showSaveDialog(parentWindow, { defaultPath: `freellmapi-keys.${format}` })
       : await dialog.showSaveDialog({ defaultPath: `freellmapi-keys.${format}` });
     if (result.canceled || !result.filePath) return { saved: false };
-    const content = format === "json" ? JSON.stringify(keys, null, 2) : keys.map((k) => `${k.platform.toUpperCase()}_KEY=${k.key}`).join("\n");
     await fsPromises.writeFile(result.filePath, content, "utf-8");
     return { saved: true };
   });
@@ -648,19 +652,6 @@ app.whenReady().then(async () => {
   // callback, not an IPC method. The panel's "Get key ->" links need one.
   ipcMain.handle("agent:open-external", async (_event, url: string) => {
     await shell.openExternal(url);
-  });
-  // The vendored dashboard preload (vendor/freellmapi/desktop/src/preload.ts)
-  // exposes __FREEAPI_SESSION__ as `ipcRenderer.invoke('freeapi:session-token')`
-  // — their client's AuthGate calls it whenever the seeded boot-time session
-  // is gone (expired, or a 401), so the dashboard never has to show its own
-  // login form (whose password, the hidden local account's, nobody knows).
-  // Without this handler registered, that invoke rejects and the dashboard
-  // is permanently stuck once the first token stops working — confirmed by
-  // reading vendor/freellmapi/desktop/src/main.ts's own real handler for
-  // the exact channel name and mirrored here.
-  ipcMain.handle("freeapi:session-token", async () => {
-    const { ensureFreellmapiSessionToken } = await import("./freellmapiHost.js");
-    return ensureFreellmapiSessionToken();
   });
   // Session history is gated by the signed-in account: signed out (or no
   // account ever stored) shows nothing, matching the app's per-account
