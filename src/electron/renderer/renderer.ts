@@ -21,8 +21,22 @@ import {
   type TabState,
 } from "./tabState.js";
 import type { UpdateStatus } from "../updateManager.js";
+import type {
+  ListProvidersResult,
+  AddKeyParams,
+  AddKeyResult,
+  KeyRow,
+  UpdateKeyParams,
+  ImportPreviewResult,
+  ImportKeyEntry,
+  ImportSelectedResult,
+  AddCustomProviderParams,
+  DiscoverModelsParams,
+  DiscoveredModel,
+} from "../freellmapiKeysApi.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
+import { initFreellmapiPanel, openFreellmapiPanel, closeFreellmapiPanel } from "./freellmapiPanel.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 import type { HfSearchResult } from "../modelSearch.js";
@@ -135,7 +149,20 @@ interface AgentBridge {
   saveOpenAISettings(settings: { apiKey?: string }): Promise<void>;
   getGeminiSettings(): Promise<{ hasKey: boolean; envOverride: boolean }>;
   saveGeminiSettings(settings: { apiKey?: string }): Promise<void>;
-  openFreellmapiDashboard(): Promise<void>;
+  freellmapiListProviders(): Promise<ListProvidersResult>;
+  freellmapiListKeys(): Promise<KeyRow[]>;
+  freellmapiAddKey(params: AddKeyParams): Promise<AddKeyResult>;
+  freellmapiUpdateKey(id: number, params: UpdateKeyParams): Promise<{ success: true }>;
+  freellmapiRemoveKey(id: number): Promise<{ success: true }>;
+  freellmapiRevealKey(id: number): Promise<{ key: string }>;
+  freellmapiPickImportFiles(): Promise<Array<{ filename: string; content: string }> | null>;
+  freellmapiPreviewImport(files: Array<{ filename: string; content: string }>): Promise<ImportPreviewResult>;
+  freellmapiImportSelected(keys: ImportKeyEntry[]): Promise<ImportSelectedResult>;
+  freellmapiExportToFile(format: "json" | "env"): Promise<{ saved: boolean }>;
+  freellmapiAddCustomProvider(params: AddCustomProviderParams): Promise<{ success: true; keyId: number }>;
+  freellmapiDiscoverModels(params: DiscoverModelsParams): Promise<{ models: DiscoveredModel[] }>;
+  freellmapiProbeCustomProvider(params: DiscoverModelsParams): Promise<{ ok: boolean }>;
+  openExternal(url: string): Promise<void>;
 }
 
 declare global {
@@ -195,7 +222,13 @@ const anthropicFields = byId<HTMLDivElement>("anthropic-fields");
 const freellmapiFields = byId<HTMLDivElement>("freellmapi-fields");
 const openFreellmapiDashboardBtn = byId<HTMLButtonElement>("open-freellmapi-dashboard");
 openFreellmapiDashboardBtn.addEventListener("click", () => {
-  window.agent.openFreellmapiDashboard();
+  // Same mutual-exclusion convention as the about/settings/MCP-servers
+  // panel toggles above (each closes the other panels before opening
+  // itself) - two modals stacked at once reads as broken, not "extra".
+  if (!aboutPanel.hidden) closeAboutPanel();
+  if (!mcpServersPanel.hidden) closeMcpServersPanel();
+  if (!settingsPanel.hidden) closeSettingsPanel();
+  void openFreellmapiPanel();
 });
 const baseUrlInput = byId<HTMLInputElement>("base-url");
 const externalModelInput = byId<HTMLInputElement>("external-model");
@@ -258,6 +291,7 @@ const commandPaletteEmpty = byId<HTMLDivElement>("command-palette-empty");
 const aboutToggle = byId<HTMLButtonElement>("about-toggle");
 const aboutPanel = byId<HTMLDivElement>("about-panel");
 const aboutClose = byId<HTMLButtonElement>("about-close");
+const freellmapiPanelEl = byId<HTMLDivElement>("freellmapi-panel");
 const aboutCloseX = byId<HTMLButtonElement>("about-close-x");
 const mcpServersToggle = byId<HTMLButtonElement>("mcp-servers-toggle");
 const mcpServersPanel = byId<HTMLDivElement>("mcp-servers-panel");
@@ -779,6 +813,7 @@ aboutToggle.addEventListener("click", () => {
     if (!settingsPanel.hidden) closeSettingsPanel();
     if (!mcpServersPanel.hidden) closeMcpServersPanel();
     if (!commandPaletteOverlay.hidden) closeCommandPalette();
+    closeFreellmapiPanel();
   }
   aboutPanel.hidden = !opening;
   aboutToggle.setAttribute("aria-expanded", String(opening));
@@ -877,6 +912,7 @@ mcpServersToggle.addEventListener("click", () => {
     if (!aboutPanel.hidden) closeAboutPanel();
     if (!settingsPanel.hidden) closeSettingsPanel();
     if (!commandPaletteOverlay.hidden) closeCommandPalette();
+    closeFreellmapiPanel();
   }
   mcpServersPanel.hidden = !opening;
   mcpServersToggle.setAttribute("aria-expanded", String(opening));
@@ -1024,6 +1060,7 @@ settingsToggle.addEventListener("click", async () => {
     if (!aboutPanel.hidden) closeAboutPanel();
     if (!mcpServersPanel.hidden) closeMcpServersPanel();
     if (!commandPaletteOverlay.hidden) closeCommandPalette();
+    closeFreellmapiPanel();
     await openSettingsPanel();
   }
   settingsPanel.hidden = !opening;
@@ -1123,6 +1160,7 @@ function openCommandPalette(): void {
   if (!aboutPanel.hidden) closeAboutPanel();
   if (!mcpServersPanel.hidden) closeMcpServersPanel();
   if (!settingsPanel.hidden) closeSettingsPanel();
+  closeFreellmapiPanel();
   commandPaletteInput.value = "";
   paletteSelectedIndex = 0;
   commandPaletteOverlay.hidden = false;
@@ -1189,6 +1227,7 @@ document.addEventListener("keydown", (e) => {
   else if (!settingsPanel.hidden) closeSettingsPanel();
   else if (!commandPaletteOverlay.hidden) closeCommandPalette();
   else if (!changesPanel.hidden) closeChangesPanel();
+  else if (!freellmapiPanelEl.hidden) closeFreellmapiPanel();
 });
 
 // A focus trap for the onboarding/what's-new modals specifically — they're
@@ -2822,3 +2861,5 @@ window.agent.onUpdateStatus((status) => {
 });
 
 window.agent.getAuthStatus().then(renderAuthState).catch(() => {});
+
+initFreellmapiPanel();

@@ -664,7 +664,8 @@ summary:focus-visible {
 #about-panel,
 #settings-panel,
 #mcp-servers-panel,
-#command-palette-overlay {
+#command-palette-overlay,
+#freellmapi-panel {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -682,8 +683,63 @@ summary:focus-visible {
 #about-panel[hidden],
 #settings-panel[hidden],
 #mcp-servers-panel[hidden],
-#command-palette-overlay[hidden] {
+#command-palette-overlay[hidden],
+#freellmapi-panel[hidden] {
   display: none;
+}
+
+.freellmapi-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.freellmapi-provider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.freellmapi-provider-row:last-child {
+  border-bottom: none;
+}
+.freellmapi-provider-name {
+  color: var(--text);
+  font-weight: 500;
+}
+.freellmapi-provider-status {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+.freellmapi-provider-status.configured {
+  color: var(--success);
+}
+.freellmapi-provider-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.freellmapi-revealed-key {
+  display: block;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  color: var(--warn);
+  word-break: break-all;
+}
+.freellmapi-panel-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.freellmapi-panel-section h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text);
 }
 
 .modal-card {

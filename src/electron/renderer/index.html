@@ -239,6 +239,43 @@
           </div>
         </div>
 
+        <div id="freellmapi-panel" hidden>
+          <div class="modal-card">
+            <button id="freellmapi-panel-close-x" class="modal-close-x" type="button" aria-label="Close">×</button>
+            <div class="freellmapi-panel-header">
+              <h2 id="freellmapi-panel-title">Free-tier providers</h2>
+              <button id="freellmapi-panel-refresh" type="button">Refresh</button>
+            </div>
+            <div id="freellmapi-panel-error" class="error-text" hidden></div>
+            <div id="freellmapi-panel-loading" class="hint-text">Loading providers…</div>
+            <div id="freellmapi-provider-list"></div>
+            <div class="freellmapi-panel-section">
+              <h3>Import / Export</h3>
+              <div class="row">
+                <button id="freellmapi-import-btn" type="button">Import from file…</button>
+                <button id="freellmapi-export-json-btn" type="button">Export (JSON)</button>
+                <button id="freellmapi-export-env-btn" type="button">Export (.env)</button>
+              </div>
+              <div id="freellmapi-import-preview" hidden></div>
+            </div>
+            <div class="freellmapi-panel-section">
+              <h3>Custom OpenAI-compatible provider</h3>
+              <div class="row">
+                <input id="freellmapi-custom-base-url" type="text" placeholder="http://localhost:1234/v1" />
+                <input id="freellmapi-custom-api-key" type="password" placeholder="API key (optional)" />
+              </div>
+              <div class="row">
+                <input id="freellmapi-custom-display-name" type="text" placeholder="Display name (optional)" />
+                <button id="freellmapi-custom-probe-btn" type="button">Test connection</button>
+                <button id="freellmapi-custom-discover-btn" type="button">Discover models</button>
+              </div>
+              <div id="freellmapi-custom-models" hidden></div>
+              <div id="freellmapi-custom-status" class="hint-text"></div>
+              <div id="freellmapi-custom-endpoints"></div>
+            </div>
+          </div>
+        </div>
+
         <section id="setup">
           <div class="row">
             <button id="choose-workspace">Choose workspace…</button>
@@ -279,7 +316,7 @@
             <span class="hint-text">Sends file contents and task context to Anthropic over the network. Needs an API key — set <code>ANTHROPIC_API_KEY</code> in your environment, or add one in Settings (gear icon).</span>
           </div>
           <div id="freellmapi-fields" class="row" hidden>
-            <span class="hint-text">Free-tier providers (Groq, Cerebras, Mistral, and 30+ more) are managed in FreeLLMAPI's own dashboard.</span>
+            <span class="hint-text">Free-tier providers (Groq, Cerebras, Mistral, and 30+ more) are managed from the "Manage free providers…" panel.</span>
             <button id="open-freellmapi-dashboard" type="button">Manage free providers…</button>
           </div>
 

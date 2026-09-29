@@ -549,25 +549,109 @@ app.whenReady().then(async () => {
       storageCrypto
     );
   });
-  ipcMain.handle("agent:open-freellmapi-dashboard", async () => {
+  // Native Keys panel - every handler below does the same three things:
+  // lazily start the bundled server (a no-op if already running, same
+  // singleton startFreellmapiServer() every provider path already uses),
+  // get the current session token, then delegate to freellmapiKeysApi.ts.
+  // Errors thrown there cross the IPC boundary as a rejected promise with
+  // the same message - freellmapiPanel.ts's own try/catch renders it.
+  async function freellmapiConn(): Promise<{ port: number; token: string }> {
     const { startFreellmapiServer, ensureFreellmapiSessionToken } = await import("./freellmapiHost.js");
-    const { openFreellmapiDashboard } = await import("./freellmapiDashboardWindow.js");
     const { port } = await startFreellmapiServer({ userDataDir: freellmapiUserDataDir });
-    const token = ensureFreellmapiSessionToken();
-    openFreellmapiDashboard(port, token);
+    return { port, token: ensureFreellmapiSessionToken() };
+  }
+
+  ipcMain.handle("agent:freellmapi-list-providers", async () => {
+    const { listProviders } = await import("./freellmapiKeysApi.js");
+    return listProviders(await freellmapiConn());
   });
-  // The vendored dashboard preload (vendor/freellmapi/desktop/src/preload.ts)
-  // exposes __FREEAPI_SESSION__ as `ipcRenderer.invoke('freeapi:session-token')`
-  // — their client's AuthGate calls it whenever the seeded boot-time session
-  // is gone (expired, or a 401), so the dashboard never has to show its own
-  // login form (whose password, the hidden local account's, nobody knows).
-  // Without this handler registered, that invoke rejects and the dashboard
-  // is permanently stuck once the first token stops working — confirmed by
-  // reading vendor/freellmapi/desktop/src/main.ts's own real handler for
-  // the exact channel name and mirrored here.
-  ipcMain.handle("freeapi:session-token", async () => {
-    const { ensureFreellmapiSessionToken } = await import("./freellmapiHost.js");
-    return ensureFreellmapiSessionToken();
+  ipcMain.handle("agent:freellmapi-list-keys", async () => {
+    const { listKeys } = await import("./freellmapiKeysApi.js");
+    return listKeys(await freellmapiConn());
+  });
+  ipcMain.handle("agent:freellmapi-add-key", async (_event, params) => {
+    const { addKey } = await import("./freellmapiKeysApi.js");
+    return addKey(await freellmapiConn(), params);
+  });
+  ipcMain.handle("agent:freellmapi-update-key", async (_event, id, params) => {
+    const { updateKey } = await import("./freellmapiKeysApi.js");
+    return updateKey(await freellmapiConn(), id, params);
+  });
+  ipcMain.handle("agent:freellmapi-remove-key", async (_event, id) => {
+    const { removeKey } = await import("./freellmapiKeysApi.js");
+    return removeKey(await freellmapiConn(), id);
+  });
+  ipcMain.handle("agent:freellmapi-clear-cooldown", async (_event, id) => {
+    const { clearCooldown } = await import("./freellmapiKeysApi.js");
+    return clearCooldown(await freellmapiConn(), id);
+  });
+  ipcMain.handle("agent:freellmapi-reveal-key", async (_event, id) => {
+    const { revealKey } = await import("./freellmapiKeysApi.js");
+    return revealKey(await freellmapiConn(), id);
+  });
+  ipcMain.handle("agent:freellmapi-preview-import", async (_event, files: Array<{ filename: string; content: string }>) => {
+    const { previewImport } = await import("./freellmapiKeysApi.js");
+    return previewImport(
+      await freellmapiConn(),
+      files.map((f) => ({ filename: f.filename, content: Buffer.from(f.content, "base64") }))
+    );
+  });
+  ipcMain.handle("agent:freellmapi-import-selected", async (_event, keys) => {
+    const { importSelected } = await import("./freellmapiKeysApi.js");
+    return importSelected(await freellmapiConn(), keys);
+  });
+  ipcMain.handle("agent:freellmapi-update-platform-settings", async (_event, platform, params) => {
+    const { updatePlatformSettings } = await import("./freellmapiKeysApi.js");
+    return updatePlatformSettings(await freellmapiConn(), platform, params);
+  });
+  ipcMain.handle("agent:freellmapi-add-custom-provider", async (_event, params) => {
+    const { addCustomProvider } = await import("./freellmapiKeysApi.js");
+    return addCustomProvider(await freellmapiConn(), params);
+  });
+  ipcMain.handle("agent:freellmapi-discover-models", async (_event, params) => {
+    const { discoverModels } = await import("./freellmapiKeysApi.js");
+    return discoverModels(await freellmapiConn(), params);
+  });
+  ipcMain.handle("agent:freellmapi-probe-custom-provider", async (_event, params) => {
+    const { probeCustomProvider } = await import("./freellmapiKeysApi.js");
+    return probeCustomProvider(await freellmapiConn(), params);
+  });
+  ipcMain.handle("agent:freellmapi-pick-import-files", async () => {
+    const result = await showOpenDialog({ properties: ["openFile", "multiSelections"] });
+    if (result.canceled) return null;
+    return Promise.all(
+      result.filePaths.map(async (filePath) => ({
+        filename: path.basename(filePath),
+        content: (await fsPromises.readFile(filePath)).toString("base64"),
+      }))
+    );
+  });
+  // Mirrors showOpenDialog's own reasoning above (a captured window
+  // reference can go stale by the time a dialog is actually requested) -
+  // no existing showSaveDialog wrapper to reuse, so the same
+  // getFocusedWindow-with-fallback pattern is inlined here directly.
+  ipcMain.handle("agent:freellmapi-export-to-file", async (_event, format: "json" | "env") => {
+    // exportKeys() returns the server's real response body verbatim - it
+    // already formats both types correctly (including edge cases the
+    // server's own comments document: duplicate key names, custom-endpoint
+    // base URLs), so this just writes it out unchanged rather than
+    // re-implementing formatting a second, buggier time.
+    const { exportKeys } = await import("./freellmapiKeysApi.js");
+    const content = await exportKeys(await freellmapiConn(), format);
+    const parentWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = parentWindow
+      ? await dialog.showSaveDialog(parentWindow, { defaultPath: `freellmapi-keys.${format}` })
+      : await dialog.showSaveDialog({ defaultPath: `freellmapi-keys.${format}` });
+    if (result.canceled || !result.filePath) return { saved: false };
+    await fsPromises.writeFile(result.filePath, content, "utf-8");
+    return { saved: true };
+  });
+  // Confirmed by reading preload.cjs/main.ts directly: no renderer-callable
+  // "open this URL in the system browser" primitive existed yet - the app's
+  // own main window opens external links through a setWindowOpenHandler
+  // callback, not an IPC method. The panel's "Get key ->" links need one.
+  ipcMain.handle("agent:open-external", async (_event, url: string) => {
+    await shell.openExternal(url);
   });
   // Session history is gated by the signed-in account: signed out (or no
   // account ever stored) shows nothing, matching the app's per-account
