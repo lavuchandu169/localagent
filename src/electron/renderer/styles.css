@@ -715,6 +715,22 @@ summary:focus-visible {
 .freellmapi-provider-status.configured {
   color: var(--success);
 }
+.freellmapi-provider-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.freellmapi-revealed-key {
+  display: block;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  color: var(--warn);
+  word-break: break-all;
+}
 
 .modal-card {
   position: relative;

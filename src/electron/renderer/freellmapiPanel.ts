@@ -87,16 +87,15 @@ function renderProviders(providers: ProviderRow[]): void {
     const name = document.createElement("span");
     name.className = "freellmapi-provider-name";
     name.textContent = provider.name;
+    row.appendChild(name);
 
     const status = document.createElement("span");
     status.className = provider.configured ? "freellmapi-provider-status configured" : "freellmapi-provider-status";
     status.textContent = provider.configured ? `Configured (${provider.enabledKeyCount} active)` : "Not configured";
-
-    row.appendChild(name);
     row.appendChild(status);
 
     const signupUrl = PROVIDER_SIGNUP_URLS[provider.platform];
-    if (signupUrl && !provider.keyless) {
+    if (signupUrl && !provider.keyless && !provider.configured) {
       const link = document.createElement("a");
       link.textContent = "Get key →";
       link.href = "#";
@@ -107,6 +106,103 @@ function renderProviders(providers: ProviderRow[]): void {
       row.appendChild(link);
     }
 
+    const controls = document.createElement("div");
+    controls.className = "freellmapi-provider-controls";
+
+    if (!provider.configured && provider.keyless) {
+      const enableBtn = document.createElement("button");
+      enableBtn.type = "button";
+      enableBtn.textContent = "Enable";
+      enableBtn.addEventListener("click", () => withRowBusy(row, () => addKeyForPlatform(provider.platform)));
+      controls.appendChild(enableBtn);
+    } else if (!provider.configured) {
+      const input = document.createElement("input");
+      input.type = "password";
+      input.placeholder = "Paste key";
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.textContent = "Save";
+      saveBtn.addEventListener("click", () =>
+        withRowBusy(row, () => addKeyForPlatform(provider.platform, input.value))
+      );
+      controls.appendChild(input);
+      controls.appendChild(saveBtn);
+    } else {
+      const toggleBtn = document.createElement("button");
+      toggleBtn.type = "button";
+      toggleBtn.textContent = provider.enabledKeyCount > 0 ? "Disable" : "Enable";
+      toggleBtn.addEventListener("click", () => withRowBusy(row, () => toggleFirstKeyEnabled(provider.platform)));
+      const revealBtn = document.createElement("button");
+      revealBtn.type = "button";
+      revealBtn.textContent = "Reveal";
+      revealBtn.addEventListener("click", () => withRowBusy(row, () => revealFirstKey(provider.platform, row)));
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.textContent = "Remove";
+      removeBtn.addEventListener("click", () => withRowBusy(row, () => removeFirstKey(provider.platform)));
+      controls.appendChild(toggleBtn);
+      controls.appendChild(revealBtn);
+      controls.appendChild(removeBtn);
+    }
+
+    row.appendChild(controls);
     listEl.appendChild(row);
   }
+}
+
+/** Disables every button in the row for the duration of an action - the
+ * concrete guard against the double-click race called out in this plan's
+ * Review Focus: a second click while the first request is still in
+ * flight is simply impossible, not merely unlikely. */
+async function withRowBusy(row: HTMLElement, action: () => Promise<void>): Promise<void> {
+  const buttons = row.querySelectorAll("button");
+  buttons.forEach((b) => (b.disabled = true));
+  try {
+    await action();
+  } catch (err) {
+    errorEl.hidden = false;
+    errorEl.textContent = err instanceof Error ? err.message : String(err);
+  } finally {
+    buttons.forEach((b) => (b.disabled = false));
+  }
+}
+
+async function addKeyForPlatform(platform: string, key?: string): Promise<void> {
+  await window.agent.freellmapiAddKey({ platform, key });
+  await refreshProviders();
+}
+
+/** The provider list doesn't carry individual key ids - fetch the key
+ * list once per action rather than keeping a second cached copy that
+ * could drift from what refreshProviders() just rendered. */
+async function findFirstKeyId(platform: string): Promise<number | undefined> {
+  const keys = await window.agent.freellmapiListKeys();
+  return keys.find((k) => k.platform === platform)?.id;
+}
+
+async function revealFirstKey(platform: string, row: HTMLElement): Promise<void> {
+  const id = await findFirstKeyId(platform);
+  if (id === undefined) return;
+  const { key } = await window.agent.freellmapiRevealKey(id);
+  const existing = row.querySelector(".freellmapi-revealed-key");
+  if (existing) existing.remove();
+  const revealed = document.createElement("code");
+  revealed.className = "freellmapi-revealed-key";
+  revealed.textContent = key;
+  row.appendChild(revealed);
+}
+
+async function removeFirstKey(platform: string): Promise<void> {
+  const id = await findFirstKeyId(platform);
+  if (id === undefined) return;
+  await window.agent.freellmapiRemoveKey(id);
+  await refreshProviders();
+}
+
+async function toggleFirstKeyEnabled(platform: string): Promise<void> {
+  const keys = await window.agent.freellmapiListKeys();
+  const current = keys.find((k) => k.platform === platform);
+  if (!current) return;
+  await window.agent.freellmapiUpdateKey(current.id, { enabled: !current.enabled });
+  await refreshProviders();
 }

@@ -21,7 +21,7 @@ import {
   type TabState,
 } from "./tabState.js";
 import type { UpdateStatus } from "../updateManager.js";
-import type { ListProvidersResult } from "../freellmapiKeysApi.js";
+import type { ListProvidersResult, AddKeyParams, AddKeyResult, KeyRow, UpdateKeyParams } from "../freellmapiKeysApi.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
 import { initFreellmapiPanel } from "./freellmapiPanel.js";
@@ -139,6 +139,11 @@ interface AgentBridge {
   saveGeminiSettings(settings: { apiKey?: string }): Promise<void>;
   openFreellmapiDashboard(): Promise<void>;
   freellmapiListProviders(): Promise<ListProvidersResult>;
+  freellmapiListKeys(): Promise<KeyRow[]>;
+  freellmapiAddKey(params: AddKeyParams): Promise<AddKeyResult>;
+  freellmapiUpdateKey(id: number, params: UpdateKeyParams): Promise<{ success: true }>;
+  freellmapiRemoveKey(id: number): Promise<{ success: true }>;
+  freellmapiRevealKey(id: number): Promise<{ key: string }>;
   openExternal(url: string): Promise<void>;
 }
 
