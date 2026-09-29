@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.56 — 2026-09-29
+
+- Native FreeLLMAPI Keys panel — replace the separate dashboard window
+
 ## v0.1.0-beta.55 — 2026-09-28
 
 - docs: update README and package.json for OpenAI, Gemini, and the free-tier router
