@@ -623,6 +623,32 @@ app.whenReady().then(async () => {
     const { probeCustomProvider } = await import("./freellmapiKeysApi.js");
     return probeCustomProvider(await freellmapiConn(), params);
   });
+  ipcMain.handle("agent:freellmapi-pick-import-files", async () => {
+    const result = await showOpenDialog({ properties: ["openFile", "multiSelections"] });
+    if (result.canceled) return null;
+    return Promise.all(
+      result.filePaths.map(async (filePath) => ({
+        filename: path.basename(filePath),
+        content: (await fsPromises.readFile(filePath)).toString("base64"),
+      }))
+    );
+  });
+  // Mirrors showOpenDialog's own reasoning above (a captured window
+  // reference can go stale by the time a dialog is actually requested) -
+  // no existing showSaveDialog wrapper to reuse, so the same
+  // getFocusedWindow-with-fallback pattern is inlined here directly.
+  ipcMain.handle("agent:freellmapi-export-to-file", async (_event, format: "json" | "env") => {
+    const { exportKeys } = await import("./freellmapiKeysApi.js");
+    const keys = await exportKeys(await freellmapiConn(), format);
+    const parentWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = parentWindow
+      ? await dialog.showSaveDialog(parentWindow, { defaultPath: `freellmapi-keys.${format}` })
+      : await dialog.showSaveDialog({ defaultPath: `freellmapi-keys.${format}` });
+    if (result.canceled || !result.filePath) return { saved: false };
+    const content = format === "json" ? JSON.stringify(keys, null, 2) : keys.map((k) => `${k.platform.toUpperCase()}_KEY=${k.key}`).join("\n");
+    await fsPromises.writeFile(result.filePath, content, "utf-8");
+    return { saved: true };
+  });
   // Confirmed by reading preload.cjs/main.ts directly: no renderer-callable
   // "open this URL in the system browser" primitive existed yet - the app's
   // own main window opens external links through a setWindowOpenHandler

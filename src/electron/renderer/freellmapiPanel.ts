@@ -47,6 +47,8 @@ export function initFreellmapiPanel(): void {
   panel.addEventListener("click", (e) => {
     if (e.target === panel) closeFreellmapiPanel();
   });
+
+  wireImportExport();
 }
 
 /** Exported so renderer.ts's other panel toggles (Settings/About/MCP
@@ -205,4 +207,64 @@ async function toggleFirstKeyEnabled(platform: string): Promise<void> {
   if (!current) return;
   await window.agent.freellmapiUpdateKey(current.id, { enabled: !current.enabled });
   await refreshProviders();
+}
+
+function wireImportExport(): void {
+  const importBtn = document.getElementById("freellmapi-import-btn") as HTMLButtonElement;
+  const exportJsonBtn = document.getElementById("freellmapi-export-json-btn") as HTMLButtonElement;
+  const exportEnvBtn = document.getElementById("freellmapi-export-env-btn") as HTMLButtonElement;
+  const previewEl = document.getElementById("freellmapi-import-preview")!;
+
+  importBtn.addEventListener("click", async () => {
+    try {
+      const files = await window.agent.freellmapiPickImportFiles();
+      if (!files) return;
+      const preview = await window.agent.freellmapiPreviewImport(files);
+      renderImportPreview(preview, previewEl);
+    } catch (err) {
+      errorEl.hidden = false;
+      errorEl.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
+
+  const doExport = (format: "json" | "env") => async () => {
+    try {
+      // exportKeys() throws the real server message (e.g. "No keys to
+      // export") on a 404 - freellmapiExportToFile mirrors that same
+      // call internally, so the same message surfaces here.
+      const result = await window.agent.freellmapiExportToFile(format);
+      if (!result.saved) return; // user cancelled the save dialog - not an error
+    } catch (err) {
+      errorEl.hidden = false;
+      errorEl.textContent = err instanceof Error ? err.message : String(err);
+    }
+  };
+  exportJsonBtn.addEventListener("click", doExport("json"));
+  exportEnvBtn.addEventListener("click", doExport("env"));
+}
+
+function renderImportPreview(preview: Awaited<ReturnType<typeof window.agent.freellmapiPreviewImport>>, container: HTMLElement): void {
+  container.hidden = false;
+  container.innerHTML = "";
+  const summary = document.createElement("p");
+  summary.textContent = `Found ${preview.total} key(s)${preview.duplicates ? `, ${preview.duplicates} duplicate(s)` : ""}.`;
+  container.appendChild(summary);
+
+  const importBtn = document.createElement("button");
+  importBtn.type = "button";
+  importBtn.textContent = `Import ${preview.keys.filter((k) => !k.isDuplicate).length} key(s)`;
+  importBtn.addEventListener("click", async () => {
+    try {
+      const toImport = preview.keys
+        .filter((k) => !k.isDuplicate && k.detectedPlatform)
+        .map((k) => ({ keyName: k.keyName, keyValue: k.keyValue, platform: k.detectedPlatform!, baseUrl: k.baseUrl, models: k.models }));
+      await window.agent.freellmapiImportSelected(toImport);
+      container.hidden = true;
+      await refreshProviders();
+    } catch (err) {
+      errorEl.hidden = false;
+      errorEl.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
+  container.appendChild(importBtn);
 }

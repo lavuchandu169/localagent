@@ -731,6 +731,16 @@ summary:focus-visible {
   color: var(--warn);
   word-break: break-all;
 }
+.freellmapi-panel-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.freellmapi-panel-section h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text);
+}
 
 .modal-card {
   position: relative;
