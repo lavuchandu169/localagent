@@ -556,6 +556,73 @@ app.whenReady().then(async () => {
     const token = ensureFreellmapiSessionToken();
     openFreellmapiDashboard(port, token);
   });
+  // Native Keys panel - every handler below does the same three things:
+  // lazily start the bundled server (a no-op if already running, same
+  // singleton startFreellmapiServer() every provider path already uses),
+  // get the current session token, then delegate to freellmapiKeysApi.ts.
+  // Errors thrown there cross the IPC boundary as a rejected promise with
+  // the same message - freellmapiPanel.ts's own try/catch renders it.
+  async function freellmapiConn(): Promise<{ port: number; token: string }> {
+    const { startFreellmapiServer, ensureFreellmapiSessionToken } = await import("./freellmapiHost.js");
+    const { port } = await startFreellmapiServer({ userDataDir: freellmapiUserDataDir });
+    return { port, token: ensureFreellmapiSessionToken() };
+  }
+
+  ipcMain.handle("agent:freellmapi-list-providers", async () => {
+    const { listProviders } = await import("./freellmapiKeysApi.js");
+    return listProviders(await freellmapiConn());
+  });
+  ipcMain.handle("agent:freellmapi-list-keys", async () => {
+    const { listKeys } = await import("./freellmapiKeysApi.js");
+    return listKeys(await freellmapiConn());
+  });
+  ipcMain.handle("agent:freellmapi-add-key", async (_event, params) => {
+    const { addKey } = await import("./freellmapiKeysApi.js");
+    return addKey(await freellmapiConn(), params);
+  });
+  ipcMain.handle("agent:freellmapi-update-key", async (_event, id, params) => {
+    const { updateKey } = await import("./freellmapiKeysApi.js");
+    return updateKey(await freellmapiConn(), id, params);
+  });
+  ipcMain.handle("agent:freellmapi-remove-key", async (_event, id) => {
+    const { removeKey } = await import("./freellmapiKeysApi.js");
+    return removeKey(await freellmapiConn(), id);
+  });
+  ipcMain.handle("agent:freellmapi-clear-cooldown", async (_event, id) => {
+    const { clearCooldown } = await import("./freellmapiKeysApi.js");
+    return clearCooldown(await freellmapiConn(), id);
+  });
+  ipcMain.handle("agent:freellmapi-reveal-key", async (_event, id) => {
+    const { revealKey } = await import("./freellmapiKeysApi.js");
+    return revealKey(await freellmapiConn(), id);
+  });
+  ipcMain.handle("agent:freellmapi-preview-import", async (_event, files: Array<{ filename: string; content: string }>) => {
+    const { previewImport } = await import("./freellmapiKeysApi.js");
+    return previewImport(
+      await freellmapiConn(),
+      files.map((f) => ({ filename: f.filename, content: Buffer.from(f.content, "base64") }))
+    );
+  });
+  ipcMain.handle("agent:freellmapi-import-selected", async (_event, keys) => {
+    const { importSelected } = await import("./freellmapiKeysApi.js");
+    return importSelected(await freellmapiConn(), keys);
+  });
+  ipcMain.handle("agent:freellmapi-update-platform-settings", async (_event, platform, params) => {
+    const { updatePlatformSettings } = await import("./freellmapiKeysApi.js");
+    return updatePlatformSettings(await freellmapiConn(), platform, params);
+  });
+  ipcMain.handle("agent:freellmapi-add-custom-provider", async (_event, params) => {
+    const { addCustomProvider } = await import("./freellmapiKeysApi.js");
+    return addCustomProvider(await freellmapiConn(), params);
+  });
+  ipcMain.handle("agent:freellmapi-discover-models", async (_event, params) => {
+    const { discoverModels } = await import("./freellmapiKeysApi.js");
+    return discoverModels(await freellmapiConn(), params);
+  });
+  ipcMain.handle("agent:freellmapi-probe-custom-provider", async (_event, params) => {
+    const { probeCustomProvider } = await import("./freellmapiKeysApi.js");
+    return probeCustomProvider(await freellmapiConn(), params);
+  });
   // The vendored dashboard preload (vendor/freellmapi/desktop/src/preload.ts)
   // exposes __FREEAPI_SESSION__ as `ipcRenderer.invoke('freeapi:session-token')`
   // — their client's AuthGate calls it whenever the seeded boot-time session
