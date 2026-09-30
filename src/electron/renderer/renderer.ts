@@ -38,6 +38,7 @@ import type { RoutingSettings, UpdateRoutingParams, UpdateRoutingResult, Fallbac
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
 import { initFreellmapiPanel, openFreellmapiPanel, closeFreellmapiPanel } from "./freellmapiPanel.js";
+import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 import { initFreellmapiFallbackPanel, openFreellmapiFallbackPanel, closeFreellmapiFallbackPanel } from "./freellmapiFallbackPanel.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
@@ -827,7 +828,7 @@ async function buildReportIssueUrl(): Promise<string> {
 
 /** Hides the panel, updates its toggle's aria-expanded, and returns focus to the toggle — the reverse of opening it, so a keyboard/screen-reader user always lands back where they started instead of on a now-hidden element. */
 function closeAboutPanel(): void {
-  aboutPanel.hidden = true;
+  closeOverlayPanel(aboutPanel);
   aboutToggle.setAttribute("aria-expanded", "false");
   aboutToggle.focus();
 }
@@ -844,7 +845,8 @@ aboutToggle.addEventListener("click", () => {
     closeFreellmapiPanel();
     if (!closeFreellmapiFallbackPanel()) return;
   }
-  aboutPanel.hidden = !opening;
+  if (opening) openOverlayPanel(aboutPanel);
+  else closeOverlayPanel(aboutPanel);
   aboutToggle.setAttribute("aria-expanded", String(opening));
   if (opening) {
     void buildReportIssueUrl().then((url) => (reportIssueLink.href = url));
@@ -861,7 +863,7 @@ aboutPanel.addEventListener("click", (e) => {
 });
 
 function closeMcpServersPanel() {
-  mcpServersPanel.hidden = true;
+  closeOverlayPanel(mcpServersPanel);
   mcpServersToggle.setAttribute("aria-expanded", "false");
   mcpServersToggle.focus();
 }
@@ -944,7 +946,8 @@ mcpServersToggle.addEventListener("click", () => {
     closeFreellmapiPanel();
     if (!closeFreellmapiFallbackPanel()) return;
   }
-  mcpServersPanel.hidden = !opening;
+  if (opening) openOverlayPanel(mcpServersPanel);
+  else closeOverlayPanel(mcpServersPanel);
   mcpServersToggle.setAttribute("aria-expanded", String(opening));
   if (opening) {
     showMcpServersListView();
@@ -1079,7 +1082,7 @@ async function openSettingsPanel(): Promise<void> {
 
 /** Same contract as closeAboutPanel — hide, update aria-expanded, return focus to the toggle. */
 function closeSettingsPanel(): void {
-  settingsPanel.hidden = true;
+  closeOverlayPanel(settingsPanel);
   settingsToggle.setAttribute("aria-expanded", "false");
   settingsToggle.focus();
 }
@@ -1094,7 +1097,8 @@ settingsToggle.addEventListener("click", async () => {
     if (!closeFreellmapiFallbackPanel()) return;
     await openSettingsPanel();
   }
-  settingsPanel.hidden = !opening;
+  if (opening) openOverlayPanel(settingsPanel);
+  else closeOverlayPanel(settingsPanel);
   settingsToggle.setAttribute("aria-expanded", String(opening));
   if (opening) settingsClose.focus();
 });
@@ -1182,7 +1186,7 @@ function renderCommandPaletteResults(): void {
 }
 
 function closeCommandPalette(): void {
-  commandPaletteOverlay.hidden = true;
+  closeOverlayPanel(commandPaletteOverlay);
   commandPaletteToggle.setAttribute("aria-expanded", "false");
   commandPaletteToggle.focus();
 }
@@ -1195,7 +1199,7 @@ function openCommandPalette(): void {
   if (!closeFreellmapiFallbackPanel()) return;
   commandPaletteInput.value = "";
   paletteSelectedIndex = 0;
-  commandPaletteOverlay.hidden = false;
+  openOverlayPanel(commandPaletteOverlay);
   commandPaletteToggle.setAttribute("aria-expanded", "true");
   renderCommandPaletteResults(); // static commands show immediately; the line below fills in sessions once they've loaded
   commandPaletteInput.focus();
