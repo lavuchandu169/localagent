@@ -4,6 +4,7 @@
 // .modal-card convention, same untested-DOM-wiring-by-convention posture
 // (no Electron runtime in this sandbox) as freellmapiPanel.ts.
 import type { RoutingSettings, RoutingStrategy, KeySelectionStrategy, FallbackModelRow, SortPreset } from "../freellmapiFallbackApi.js";
+import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 
 let panel: HTMLElement;
 let closeBtn: HTMLButtonElement;
@@ -105,12 +106,12 @@ export function closeFreellmapiFallbackPanel(): boolean {
     return false;
   }
   markDirty(false);
-  panel.hidden = true;
+  closeOverlayPanel(panel);
   return true;
 }
 
 export async function openFreellmapiFallbackPanel(): Promise<void> {
-  panel.hidden = false;
+  openOverlayPanel(panel);
   await refreshRouting();
   await refreshModels();
 }

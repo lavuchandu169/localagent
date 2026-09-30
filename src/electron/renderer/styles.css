@@ -110,6 +110,10 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+
+  #event-log {
+    scroll-behavior: auto;
+  }
 }
 
 * {
@@ -289,6 +293,7 @@ body {
   cursor: pointer;
   font-size: 12px;
   line-height: 1;
+  transition: color 0.15s ease;
 }
 
 .session-item-delete:hover {
@@ -425,6 +430,7 @@ summary:focus-visible {
   max-width: 160px;
   cursor: pointer;
   flex-shrink: 0;
+  transition: background 0.15s ease, border-bottom-color 0.15s ease;
 }
 
 .tab-strip-item.active {
@@ -490,6 +496,7 @@ summary:focus-visible {
   font-size: 12px;
   line-height: 1;
   padding: 0 2px;
+  transition: color 0.15s ease;
 }
 
 .tab-strip-item-close:hover {
@@ -665,7 +672,8 @@ summary:focus-visible {
 #settings-panel,
 #mcp-servers-panel,
 #command-palette-overlay,
-#freellmapi-panel {
+#freellmapi-panel,
+#freellmapi-fallback-panel {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -676,6 +684,7 @@ summary:focus-visible {
   font-size: 12px;
   color: var(--text-dim);
   font-family: var(--font-sans);
+  animation: overlay-in 150ms ease-out;
 }
 
 /* .row's `display: flex` pattern applies here too — these three set their
@@ -684,8 +693,32 @@ summary:focus-visible {
 #settings-panel[hidden],
 #mcp-servers-panel[hidden],
 #command-palette-overlay[hidden],
-#freellmapi-panel[hidden] {
+#freellmapi-panel[hidden],
+#freellmapi-fallback-panel[hidden] {
   display: none;
+}
+
+/* Set via JS right before closing (see closeOverlayPanel in renderer.ts) so
+   the backdrop and card fade/scale back out instead of vanishing the
+   instant `hidden` is set — `[hidden]`'s display:none can't itself be
+   transitioned, so the JS side waits for this animation to finish before
+   applying `hidden`. */
+#about-panel.closing,
+#settings-panel.closing,
+#mcp-servers-panel.closing,
+#command-palette-overlay.closing,
+#freellmapi-panel.closing,
+#freellmapi-fallback-panel.closing {
+  animation: overlay-out 140ms ease-in forwards;
+}
+
+#about-panel.closing .modal-card,
+#settings-panel.closing .modal-card,
+#mcp-servers-panel.closing .modal-card,
+#command-palette-overlay.closing .modal-card,
+#freellmapi-panel.closing .modal-card,
+#freellmapi-fallback-panel.closing .modal-card {
+  animation: modal-out 140ms ease-in forwards;
 }
 
 .freellmapi-panel-header {
@@ -850,8 +883,61 @@ summary:focus-visible {
   }
 }
 
+@keyframes modal-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes overlay-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .modal-card {
+    animation: none;
+  }
+
+  #about-panel,
+  #settings-panel,
+  #mcp-servers-panel,
+  #command-palette-overlay,
+  #freellmapi-panel,
+  #freellmapi-fallback-panel {
+    animation: none;
+  }
+
+  #about-panel.closing,
+  #settings-panel.closing,
+  #mcp-servers-panel.closing,
+  #command-palette-overlay.closing,
+  #freellmapi-panel.closing,
+  #freellmapi-fallback-panel.closing,
+  #about-panel.closing .modal-card,
+  #settings-panel.closing .modal-card,
+  #mcp-servers-panel.closing .modal-card,
+  #command-palette-overlay.closing .modal-card,
+  #freellmapi-panel.closing .modal-card,
+  #freellmapi-fallback-panel.closing .modal-card {
     animation: none;
   }
 }
@@ -1638,6 +1724,12 @@ label .hint-text {
   max-width: 760px;
   width: 100%;
   margin: 0 auto;
+  /* Every scroll-to-bottom call (logLine, a new tool card, a resolved
+     result, a permission decision) fires once per discrete event, never
+     per-token during streaming — text always arrives as a complete chunk,
+     never appended character by character — so animating all of them is
+     safe and never looks like it's chasing fast-arriving text. */
+  scroll-behavior: smooth;
   /* Tool arguments/results can contain long unbreakable tokens (paths, blobs) —
      wrap them instead of overflowing the window with a horizontal scrollbar. */
   overflow-wrap: anywhere;
@@ -1967,21 +2059,6 @@ label .hint-text {
   content: "";
 }
 
-#freellmapi-fallback-panel {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
-  font-size: 12px;
-  color: var(--text-dim);
-  font-family: var(--font-sans);
-}
-#freellmapi-fallback-panel[hidden] {
-  display: none;
-}
 #freellmapi-fallback-panel label {
   display: flex;
   flex-direction: column;
