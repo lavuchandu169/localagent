@@ -15,7 +15,7 @@ const SAFE_READ_COMMANDS = [
   /^cargo test\b/,
   /^go test\b/,
 ];
-const NETWORK_COMMANDS = [/^npm install\b/, /^pip install\b/, /^npm ci\b/, /^curl\b/, /^wget\b/];
+const NETWORK_COMMANDS = [/^npm install\b/, /^pip install\b/, /^npm ci\b/, /^curl\b/, /^wget\b/, /^git push\b/];
 const DESTRUCTIVE_COMMANDS = [/^rm\b/, /^git reset --hard/, /^git clean -fd/, /^sudo\b/, /^:>/, /^mkfs/];
 
 export type CommandRisk = "SAFE_READ" | "NETWORK" | "DESTRUCTIVE" | "UNKNOWN";

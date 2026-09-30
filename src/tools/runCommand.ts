@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import type { Tool, ToolContext } from "../types.js";
 import { redactSecrets } from "../protected.js";
+import { prepareGitPushCommand } from "../electron/githubPushAuth.js";
 
 interface Input {
   command: string;
@@ -32,8 +33,14 @@ export const runCommandTool: Tool<Input, CommandResult> = {
   },
   async execute(input, ctx: ToolContext) {
     const start = Date.now();
+    const prepared = await prepareGitPushCommand(input.command, ctx.workspaceRoot, ctx.getGithubToken ?? (async () => null));
+    if (prepared.kind === "blocked") {
+      return { ok: false, output: null, error: prepared.reason };
+    }
+    const commandToRun = prepared.kind === "authenticated" ? prepared.command : input.command;
+    const envOverride = prepared.kind === "authenticated" ? { ...process.env, ...prepared.env } : undefined;
     return new Promise((resolve) => {
-      const proc = spawn(input.command, { cwd: ctx.workspaceRoot, shell: true, timeout: input.timeoutMs ?? 30000 });
+      const proc = spawn(commandToRun, { cwd: ctx.workspaceRoot, shell: true, timeout: input.timeoutMs ?? 30000, env: envOverride });
       let stdout = "";
       let stderr = "";
       proc.stdout.on("data", (d) => (stdout += d.toString()));
