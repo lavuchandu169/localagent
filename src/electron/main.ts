@@ -32,8 +32,9 @@ import { listSessions, searchSessions, loadSessionRecord, claimUnownedSessions }
 import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 import { loadEnvFile } from "./loadEnvFile.js";
 import { isSecureStorageAvailable, electronStorageCrypto } from "./secureStorage.js";
-import { connectGithub, loadStoredGithubIdentity, clearStoredGithubIdentity } from "./githubAuth.js";
+import { connectGithub, loadStoredGithubIdentity, clearStoredGithubIdentity, getGithubAccessToken } from "./githubAuth.js";
 import { resolveGithubClientId } from "./githubSettings.js";
+import { createGithubCreateRepoTool, createGithubCreatePrTool } from "./githubTools.js";
 import { appendErrorLog } from "./errorLog.js";
 import { readAttachment, type PickedAttachment } from "./attachments.js";
 import { wireAutoUpdater, type UpdateManager } from "./updateManager.js";
@@ -133,6 +134,8 @@ app.whenReady().then(async () => {
       "[auth] OS-native secure storage isn't available on this system — the Google identity file will be stored as plain text (0600 permissions) instead of OS-encrypted."
     );
   }
+
+  const getGithubToken = () => getGithubAccessToken(githubAuthFilePath, storageCrypto);
 
   // Broadcasts to every live window rather than a single captured `win`
   // reference: on macOS, closing the window destroys that BrowserWindow
@@ -333,9 +336,10 @@ app.whenReady().then(async () => {
         onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
         signal: controller.signal,
         resume,
-        extraTools: currentMcpTools(),
+        extraTools: [...currentMcpTools(), createGithubCreateRepoTool(getGithubToken), createGithubCreatePrTool(getGithubToken)],
         settingsDir: app.getPath("userData"),
         storageCrypto,
+        getGithubToken,
       });
     } catch (err) {
       // healthCheck's real error message now reaches here (see
