@@ -200,6 +200,18 @@
             <button id="settings-close">Close</button>
 
             <hr />
+            <p>GitHub — connect an account so the agent can push commits and open pull requests on your behalf. Uses GitHub's device authorization flow: no password or token to paste.</p>
+            <div id="github-not-connected">
+              <button id="github-connect" type="button">Connect GitHub account</button>
+              <div id="github-device-code" class="hint-text" hidden></div>
+            </div>
+            <div id="github-connected" hidden>
+              <span id="github-connected-as"></span>
+              <button id="github-disconnect" type="button">Disconnect</button>
+            </div>
+            <div id="github-settings-error" class="error-text"></div>
+
+            <hr />
             <p>Downloaded models — delete one to free up disk space; it re-downloads automatically the next time you pick it.</p>
             <ul id="downloaded-models-list"></ul>
             <div id="downloaded-models-empty" class="hint-text">No models downloaded yet.</div>

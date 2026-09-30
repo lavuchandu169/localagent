@@ -36,6 +36,14 @@ contextBridge.exposeInMainWorld("agent", {
     return () => ipcRenderer.removeListener("agent:model-progress", listener);
   },
   googleSignIn: () => ipcRenderer.invoke("agent:google-sign-in"),
+  githubConnect: () => ipcRenderer.invoke("agent:github-connect"),
+  githubStatus: () => ipcRenderer.invoke("agent:github-status"),
+  githubDisconnect: () => ipcRenderer.invoke("agent:github-disconnect"),
+  onGithubDeviceCode: (callback) => {
+    const listener = (_event, code) => callback(code);
+    ipcRenderer.on("agent:github-device-code", listener);
+    return () => ipcRenderer.removeListener("agent:github-device-code", listener);
+  },
   signOut: () => ipcRenderer.invoke("agent:sign-out"),
   getAuthStatus: () => ipcRenderer.invoke("agent:auth-status"),
   listSessions: () => ipcRenderer.invoke("agent:list-sessions"),

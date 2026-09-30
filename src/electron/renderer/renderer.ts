@@ -124,6 +124,10 @@ interface AgentBridge {
   logRendererError(entry: { kind: string; message: string; stack?: string }): Promise<void>;
   openErrorLog(): Promise<void>;
   googleSignIn(): Promise<SignInResult>;
+  githubConnect(): Promise<{ login: string } | { error: string }>;
+  githubStatus(): Promise<{ connected: true; login: string } | { connected: false }>;
+  githubDisconnect(): Promise<void>;
+  onGithubDeviceCode(callback: (code: { userCode: string; verificationUri: string }) => void): () => void;
   signOut(): Promise<void>;
   getAuthStatus(): Promise<AuthStatus>;
   listSessions(): Promise<SessionIndexEntry[]>;
@@ -364,6 +368,13 @@ const geminiSettingsSaved = byId<HTMLDivElement>("gemini-settings-saved");
 const geminiSettingsSaveBtn = byId<HTMLButtonElement>("gemini-settings-save");
 const googleSignInBtn = byId<HTMLButtonElement>("google-sign-in");
 const signOutBtn = byId<HTMLButtonElement>("sign-out-btn");
+const githubConnectBtn = byId<HTMLButtonElement>("github-connect");
+const githubDisconnectBtn = byId<HTMLButtonElement>("github-disconnect");
+const githubNotConnectedEl = byId<HTMLDivElement>("github-not-connected");
+const githubConnectedEl = byId<HTMLDivElement>("github-connected");
+const githubConnectedAsEl = byId<HTMLSpanElement>("github-connected-as");
+const githubDeviceCodeEl = byId<HTMLDivElement>("github-device-code");
+const githubSettingsErrorEl = byId<HTMLDivElement>("github-settings-error");
 const authSignedOut = byId<HTMLDivElement>("auth-signed-out");
 const authSignedIn = byId<HTMLDivElement>("auth-signed-in");
 const authAvatar = byId<HTMLSpanElement>("auth-avatar");
@@ -2802,6 +2813,42 @@ signOutBtn.addEventListener("click", () => {
   });
 });
 
+async function refreshGithubStatus(): Promise<void> {
+  const status = await window.agent.githubStatus();
+  githubNotConnectedEl.hidden = status.connected;
+  githubConnectedEl.hidden = !status.connected;
+  if (status.connected) githubConnectedAsEl.textContent = `Connected as @${status.login}`;
+}
+
+githubConnectBtn.addEventListener("click", () => {
+  githubSettingsErrorEl.textContent = "";
+  githubDeviceCodeEl.hidden = true;
+  const stopListening = window.agent.onGithubDeviceCode((code) => {
+    githubDeviceCodeEl.hidden = false;
+    githubDeviceCodeEl.innerHTML = `Enter code <strong>${code.userCode}</strong> at <a href="${code.verificationUri}" target="_blank" rel="noopener">${code.verificationUri}</a>`;
+  });
+  void withBusyLabel(githubConnectBtn, "Waiting for authorization…", async () => {
+    try {
+      const result = await window.agent.githubConnect();
+      if ("error" in result) {
+        githubSettingsErrorEl.textContent = result.error;
+      } else {
+        githubDeviceCodeEl.hidden = true;
+        await refreshGithubStatus();
+      }
+    } finally {
+      stopListening();
+    }
+  });
+});
+
+githubDisconnectBtn.addEventListener("click", () => {
+  void withBusyLabel(githubDisconnectBtn, "Disconnecting…", async () => {
+    await window.agent.githubDisconnect();
+    await refreshGithubStatus();
+  });
+});
+
 window.agent.onSessionsChanged(() => {
   void refreshSessionList(sessionSearchInput.value.trim());
   void syncTabTitlesFromSidebar();
@@ -2886,3 +2933,4 @@ window.agent.getAuthStatus().then(renderAuthState).catch(() => {});
 
 initFreellmapiPanel();
 initFreellmapiFallbackPanel();
+void refreshGithubStatus();
