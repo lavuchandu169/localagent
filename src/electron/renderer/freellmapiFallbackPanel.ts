@@ -3,7 +3,7 @@
 // dashboard pages reimplemented (Keys, PR #35, was the first). Same
 // .modal-card convention, same untested-DOM-wiring-by-convention posture
 // (no Electron runtime in this sandbox) as freellmapiPanel.ts.
-import type { RoutingSettings, RoutingStrategy, KeySelectionStrategy } from "../freellmapiFallbackApi.js";
+import type { RoutingSettings, RoutingStrategy, KeySelectionStrategy, FallbackModelRow, SortPreset } from "../freellmapiFallbackApi.js";
 
 let panel: HTMLElement;
 let closeBtn: HTMLButtonElement;
@@ -26,6 +26,21 @@ let cooldownUncappedCheckbox: HTMLInputElement;
 let cooldownMinutesInput: HTMLInputElement;
 let saveRoutingBtn: HTMLButtonElement;
 
+let modelListEl: HTMLElement;
+let saveModelsBtn: HTMLButtonElement;
+let discardModelsBtn: HTMLButtonElement;
+let unsavedHintEl: HTMLElement;
+let sortIntelligenceBtn: HTMLButtonElement;
+let sortSpeedBtn: HTMLButtonElement;
+let sortBudgetBtn: HTMLButtonElement;
+
+// The working copy the user edits locally - nothing hits the network until
+// Save. A sort-preset click is the one exception (see wireModelList below):
+// it writes immediately, matching the real server's own behavior, and this
+// array is replaced wholesale with the result rather than merged.
+let workingModels: FallbackModelRow[] = [];
+let modelsDirty = false;
+
 export function initFreellmapiFallbackPanel(): void {
   panel = document.getElementById("freellmapi-fallback-panel")!;
   closeBtn = document.getElementById("freellmapi-fallback-close-x") as HTMLButtonElement;
@@ -47,9 +62,20 @@ export function initFreellmapiFallbackPanel(): void {
   cooldownUncappedCheckbox = document.getElementById("freellmapi-fallback-cooldown-uncapped") as HTMLInputElement;
   cooldownMinutesInput = document.getElementById("freellmapi-fallback-cooldown-minutes") as HTMLInputElement;
   saveRoutingBtn = document.getElementById("freellmapi-fallback-save-routing") as HTMLButtonElement;
+  modelListEl = document.getElementById("freellmapi-fallback-model-list")!;
+  saveModelsBtn = document.getElementById("freellmapi-fallback-save-models") as HTMLButtonElement;
+  discardModelsBtn = document.getElementById("freellmapi-fallback-discard-models") as HTMLButtonElement;
+  unsavedHintEl = document.getElementById("freellmapi-fallback-unsaved-hint")!;
+  sortIntelligenceBtn = document.getElementById("freellmapi-fallback-sort-intelligence") as HTMLButtonElement;
+  sortSpeedBtn = document.getElementById("freellmapi-fallback-sort-speed") as HTMLButtonElement;
+  sortBudgetBtn = document.getElementById("freellmapi-fallback-sort-budget") as HTMLButtonElement;
+  wireModelList();
 
   closeBtn.addEventListener("click", closeFreellmapiFallbackPanel);
-  refreshBtn.addEventListener("click", () => void refreshRouting());
+  refreshBtn.addEventListener("click", () => {
+    void refreshRouting();
+    void refreshModels();
+  });
   panel.addEventListener("click", (e) => {
     if (e.target === panel) closeFreellmapiFallbackPanel();
   });
@@ -68,12 +94,16 @@ export function initFreellmapiFallbackPanel(): void {
 }
 
 export function closeFreellmapiFallbackPanel(): void {
+  if (modelsDirty && !confirm("You have unsaved model priority changes. Discard them?")) {
+    return;
+  }
   panel.hidden = true;
 }
 
 export async function openFreellmapiFallbackPanel(): Promise<void> {
   panel.hidden = false;
   await refreshRouting();
+  await refreshModels();
 }
 
 function populateForm(settings: RoutingSettings): void {
@@ -147,5 +177,127 @@ async function saveRouting(): Promise<void> {
     }
   } finally {
     saveRoutingBtn.disabled = false;
+  }
+}
+
+function wireModelList(): void {
+  saveModelsBtn.addEventListener("click", () => void saveModels());
+  discardModelsBtn.addEventListener("click", () => void refreshModels());
+  const doSort = (preset: SortPreset) => async () => {
+    // Fires immediately, discarding any in-progress manual reorder - the
+    // real server's own presets write directly, they are not a preview
+    // (Review Focus item 2). markDirty(false) first so the confirm-on-close
+    // guard doesn't fire for a reorder that's already been superseded.
+    if (modelsDirty) {
+      const proceed = confirm("This will discard your unsaved manual reordering and sort by " + preset + ". Continue?");
+      if (!proceed) return;
+    }
+    try {
+      await window.agent.freellmapiFallbackSortModels(preset);
+      await refreshModels();
+    } catch (err) {
+      errorEl.hidden = false;
+      errorEl.textContent = err instanceof Error ? err.message : String(err);
+    }
+  };
+  sortIntelligenceBtn.addEventListener("click", doSort("intelligence"));
+  sortSpeedBtn.addEventListener("click", doSort("speed"));
+  sortBudgetBtn.addEventListener("click", doSort("budget"));
+}
+
+async function refreshModels(): Promise<void> {
+  try {
+    workingModels = await window.agent.freellmapiFallbackGetModels();
+    markDirty(false);
+    renderModelList();
+  } catch (err) {
+    errorEl.hidden = false;
+    errorEl.textContent = err instanceof Error ? err.message : String(err);
+  }
+}
+
+function markDirty(dirty: boolean): void {
+  modelsDirty = dirty;
+  saveModelsBtn.disabled = !dirty;
+  discardModelsBtn.disabled = !dirty;
+  unsavedHintEl.hidden = !dirty;
+}
+
+function renderModelList(): void {
+  modelListEl.innerHTML = "";
+  const sorted = [...workingModels].sort((a, b) => a.priority - b.priority);
+  sorted.forEach((model, index) => {
+    const row = document.createElement("div");
+    row.className = "freellmapi-provider-row";
+
+    const priorityBadge = document.createElement("span");
+    priorityBadge.className = "freellmapi-model-priority";
+    priorityBadge.textContent = String(index + 1);
+    row.appendChild(priorityBadge);
+
+    const name = document.createElement("span");
+    name.className = "freellmapi-provider-name";
+    name.textContent = `${model.displayName} (${model.platform})`;
+    row.appendChild(name);
+
+    const controls = document.createElement("div");
+    controls.className = "freellmapi-provider-controls";
+
+    const enabledCheckbox = document.createElement("input");
+    enabledCheckbox.type = "checkbox";
+    enabledCheckbox.checked = model.enabled;
+    enabledCheckbox.addEventListener("change", () => {
+      model.enabled = enabledCheckbox.checked;
+      markDirty(true);
+    });
+    controls.appendChild(enabledCheckbox);
+
+    const upBtn = document.createElement("button");
+    upBtn.type = "button";
+    upBtn.textContent = "↑";
+    upBtn.disabled = index === 0;
+    upBtn.addEventListener("click", () => {
+      swapPriority(sorted, index, index - 1);
+      markDirty(true);
+      renderModelList();
+    });
+    controls.appendChild(upBtn);
+
+    const downBtn = document.createElement("button");
+    downBtn.type = "button";
+    downBtn.textContent = "↓";
+    downBtn.disabled = index === sorted.length - 1;
+    downBtn.addEventListener("click", () => {
+      swapPriority(sorted, index, index + 1);
+      markDirty(true);
+      renderModelList();
+    });
+    controls.appendChild(downBtn);
+
+    row.appendChild(controls);
+    modelListEl.appendChild(row);
+  });
+}
+
+/** Swaps two rows' priority values in place (on the real model objects
+ * workingModels holds, not the sorted copy alone) so the next render sorts
+ * them into their new order. */
+function swapPriority(sorted: FallbackModelRow[], a: number, b: number): void {
+  const temp = sorted[a]!.priority;
+  sorted[a]!.priority = sorted[b]!.priority;
+  sorted[b]!.priority = temp;
+}
+
+async function saveModels(): Promise<void> {
+  saveModelsBtn.disabled = true;
+  try {
+    await window.agent.freellmapiFallbackUpdateModels(
+      workingModels.map((m) => ({ modelDbId: m.modelDbId, priority: m.priority, enabled: m.enabled }))
+    );
+    await refreshModels();
+  } catch (err) {
+    errorEl.hidden = false;
+    errorEl.textContent = err instanceof Error ? err.message : String(err);
+    saveModelsBtn.disabled = false;
   }
 }

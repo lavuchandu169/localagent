@@ -34,7 +34,7 @@ import type {
   DiscoverModelsParams,
   DiscoveredModel,
 } from "../freellmapiKeysApi.js";
-import type { RoutingSettings, UpdateRoutingParams, UpdateRoutingResult } from "../freellmapiFallbackApi.js";
+import type { RoutingSettings, UpdateRoutingParams, UpdateRoutingResult, FallbackModelRow, UpdateModelListEntry, SortPreset } from "../freellmapiFallbackApi.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
 import { initFreellmapiPanel, openFreellmapiPanel, closeFreellmapiPanel } from "./freellmapiPanel.js";
@@ -166,6 +166,9 @@ interface AgentBridge {
   freellmapiProbeCustomProvider(params: DiscoverModelsParams): Promise<{ ok: boolean }>;
   freellmapiFallbackGetRouting(): Promise<RoutingSettings>;
   freellmapiFallbackUpdateRouting(params: UpdateRoutingParams): Promise<UpdateRoutingResult>;
+  freellmapiFallbackGetModels(): Promise<FallbackModelRow[]>;
+  freellmapiFallbackUpdateModels(entries: UpdateModelListEntry[]): Promise<{ success: true }>;
+  freellmapiFallbackSortModels(preset: SortPreset): Promise<{ success: true; preset: string }>;
   openExternal(url: string): Promise<void>;
 }
 

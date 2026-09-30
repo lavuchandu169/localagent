@@ -1992,3 +1992,10 @@ label .hint-text {
 #freellmapi-fallback-panel input[type="checkbox"] {
   flex-direction: row;
 }
+.freellmapi-model-priority {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  min-width: 2em;
+  text-align: right;
+}
