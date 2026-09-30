@@ -76,6 +76,28 @@ console.log("github_create_repo:");
   }
 }
 
+{
+  // Important #6 from final review: owner/repo/org flow unvalidated
+  // straight into the URL path. Something like "o/r/issues/1/comments"
+  // would make a github_create_pr call actually POST to a completely
+  // different, real endpoint (adding an issue comment) while the approval
+  // prompt still says "github_create_pr" — misleading the user about what
+  // they approved. Reject anything outside GitHub's own real
+  // owner/repo-name character set outright, before ever building a path.
+  const tool = createGithubCreateRepoTool(async () => "gho_faketoken");
+  let fetchWasCalled = false;
+  const restore = fakeFetch(() => {
+    fetchWasCalled = true;
+    return new Response(JSON.stringify({}), { status: 201 });
+  });
+  try {
+    const result = await tool.execute({ name: "x", private: false, org: "o/r/issues/1/comments?x=" }, ctx);
+    check("rejects an org value containing a path separator without ever making the request", result.ok === false && !fetchWasCalled);
+  } finally {
+    restore();
+  }
+}
+
 console.log("\ngithub_create_pr:");
 {
   const tool = createGithubCreatePrTool(async () => "gho_faketoken");
@@ -108,6 +130,20 @@ console.log("\ngithub_create_pr:");
   try {
     const result = await tool.execute({ owner: "octocat", repo: "repo", base: "main", head: "feature", title: "t", body: "" }, ctx);
     check("surfaces a 422 message verbatim", result.ok === false && String(result.error).includes("already exists"));
+  } finally {
+    restore();
+  }
+}
+{
+  const tool = createGithubCreatePrTool(async () => "gho_faketoken");
+  let fetchWasCalled = false;
+  const restore = fakeFetch(() => {
+    fetchWasCalled = true;
+    return new Response(JSON.stringify({}), { status: 201 });
+  });
+  try {
+    const result = await tool.execute({ owner: "o", repo: "r/issues/1/comments?x=", base: "main", head: "feature", title: "t", body: "" }, ctx);
+    check("rejects a repo value that would redirect the request to a different real endpoint, without ever making it", result.ok === false && !fetchWasCalled);
   } finally {
     restore();
   }

@@ -5,6 +5,22 @@ type GetToken = () => Promise<string | null>;
 
 const NOT_CONNECTED_ERROR = "No GitHub account is connected — connect one in Settings first.";
 
+// GitHub's own real username/org/repo-name character set (letters, digits,
+// hyphens, underscores, dots) — anything outside this can only be an
+// attempt (deliberate or accidental) to redirect the request to a
+// different API path than the one the approval prompt named. Validated
+// before any path is built, not just percent-encoded, so a malformed
+// value is rejected outright rather than silently mangled into some other
+// still-technically-valid path.
+const VALID_GITHUB_IDENTIFIER = /^[A-Za-z0-9_.-]+$/;
+
+function validateGithubIdentifier(value: string, fieldName: string): string | null {
+  if (!VALID_GITHUB_IDENTIFIER.test(value)) {
+    return `Invalid ${fieldName} "${value}" — GitHub owner/repo/org names may only contain letters, digits, hyphens, underscores, and dots.`;
+  }
+  return null;
+}
+
 async function githubApiRequest<T>(getToken: GetToken, method: string, path: string, body?: unknown): Promise<ToolResult<T>> {
   const token = await getToken();
   if (!token) return { ok: false, output: null, error: NOT_CONNECTED_ERROR };
@@ -52,7 +68,11 @@ export function createGithubCreateRepoTool(getToken: GetToken): Tool<CreateRepoI
       required: ["name", "private"],
     },
     async execute(input: CreateRepoInput, _ctx: ToolContext): Promise<ToolResult<CreateRepoOutput>> {
-      const path = input.org ? `/orgs/${input.org}/repos` : "/user/repos";
+      if (input.org) {
+        const invalid = validateGithubIdentifier(input.org, "org");
+        if (invalid) return { ok: false, output: null, error: invalid };
+      }
+      const path = input.org ? `/orgs/${encodeURIComponent(input.org)}/repos` : "/user/repos";
       const result = await githubApiRequest<{ full_name: string; clone_url: string; html_url: string }>(getToken, "POST", path, {
         name: input.name,
         private: input.private,
@@ -98,7 +118,11 @@ export function createGithubCreatePrTool(getToken: GetToken): Tool<CreatePrInput
       required: ["owner", "repo", "base", "head", "title", "body"],
     },
     async execute(input: CreatePrInput, _ctx: ToolContext): Promise<ToolResult<CreatePrOutput>> {
-      const result = await githubApiRequest<{ html_url: string; number: number }>(getToken, "POST", `/repos/${input.owner}/${input.repo}/pulls`, {
+      const invalidOwner = validateGithubIdentifier(input.owner, "owner");
+      if (invalidOwner) return { ok: false, output: null, error: invalidOwner };
+      const invalidRepo = validateGithubIdentifier(input.repo, "repo");
+      if (invalidRepo) return { ok: false, output: null, error: invalidRepo };
+      const result = await githubApiRequest<{ html_url: string; number: number }>(getToken, "POST", `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/pulls`, {
         base: input.base,
         head: input.head,
         title: input.title,

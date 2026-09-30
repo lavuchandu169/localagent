@@ -111,6 +111,112 @@ console.log("\npollForAccessToken:");
   }
 }
 
+console.log("\npollForAccessToken slow_down handling (Important #3 from final review — GitHub's docs: a slow_down response's interval must actually be used, not the stale one):");
+{
+  let callCount = 0;
+  const restore = fakeFetch(() => {
+    callCount++;
+    if (callCount === 1) return new Response(JSON.stringify({ error: "slow_down", interval: 7 }), { status: 200 });
+    return new Response(JSON.stringify({ access_token: "gho_slowdown1" }), { status: 200 });
+  });
+  const recordedDelaysMs: number[] = [];
+  const fakeSleep = async (ms: number) => {
+    recordedDelaysMs.push(ms);
+  };
+  try {
+    const result = await pollForAccessToken("client-abc", "dc123", 0, 5, fakeSleep);
+    check("does not treat slow_down as a terminal failure", result.kind === "ok");
+    check("uses the exact interval GitHub's slow_down response returned, not the stale one", recordedDelaysMs[0] === 7000);
+  } finally {
+    restore();
+  }
+}
+{
+  let callCount = 0;
+  const restore = fakeFetch(() => {
+    callCount++;
+    if (callCount === 1) return new Response(JSON.stringify({ error: "slow_down" }), { status: 200 }); // no explicit interval field
+    return new Response(JSON.stringify({ access_token: "gho_slowdown2" }), { status: 200 });
+  });
+  const recordedDelaysMs: number[] = [];
+  const fakeSleep = async (ms: number) => {
+    recordedDelaysMs.push(ms);
+  };
+  try {
+    const result = await pollForAccessToken("client-abc", "dc123", 2, 5, fakeSleep);
+    check("succeeds after a slow_down with no explicit interval", result.kind === "ok");
+    check("falls back to +5 seconds on top of the previous interval, per GitHub's documented behavior", recordedDelaysMs[0] === 7000);
+  } finally {
+    restore();
+  }
+}
+
+console.log("\npollForAccessToken other terminal errors (Important #4 from final review — device_flow_disabled etc. must not be treated as still-pending):");
+{
+  const restore = fakeFetch(() =>
+    new Response(JSON.stringify({ error: "device_flow_disabled", error_description: "Device Flow is not enabled for this app." }), { status: 200 })
+  );
+  try {
+    const result = await pollForAccessToken("client-abc", "dc123", 0, 5);
+    check("device_flow_disabled is terminal, not treated as pending", result.kind === "error");
+    if (result.kind === "error") check("surfaces the real error description", result.message === "Device Flow is not enabled for this app.");
+  } finally {
+    restore();
+  }
+}
+{
+  const restore = fakeFetch(() => new Response(JSON.stringify({ error: "incorrect_client_credentials" }), { status: 200 }));
+  try {
+    const result = await pollForAccessToken("client-abc", "dc123", 0, 5);
+    check("incorrect_client_credentials is terminal too", result.kind === "error");
+  } finally {
+    restore();
+  }
+}
+
+console.log("\nrequestDeviceCode validates the response shape (Important #4 from final review):");
+{
+  const restore = fakeFetch(
+    () => new Response(JSON.stringify({ error: "bad_verification_code", error_description: "The code passed is incorrect or expired." }), { status: 200 })
+  );
+  try {
+    let threw = false;
+    let message = "";
+    try {
+      await requestDeviceCode("client-abc");
+    } catch (err) {
+      threw = true;
+      message = err instanceof Error ? err.message : String(err);
+    }
+    check("throws instead of silently returning undefined fields when GitHub responds with an error at HTTP 200", threw);
+    check("surfaces the real error description", message.includes("The code passed is incorrect or expired."));
+  } finally {
+    restore();
+  }
+}
+
+console.log("\nconnectGithub surfaces a poll 'error' kind's real message, not a generic 'expired' message (Important #4):");
+await withTempFile(async (filePath) => {
+  const restore = fakeFetch((url) => {
+    if (url === "https://github.com/login/device/code") {
+      return new Response(
+        JSON.stringify({ device_code: "dc1", user_code: "AAAA-1111", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 0 }),
+        { status: 200 }
+      );
+    }
+    if (url === "https://github.com/login/oauth/access_token") {
+      return new Response(JSON.stringify({ error: "device_flow_disabled", error_description: "Device Flow is not enabled for this app." }), { status: 200 });
+    }
+    throw new Error(`unexpected URL in test: ${url}`);
+  });
+  try {
+    const result = await connectGithub("client-abc", filePath);
+    check("surfaces the poll error's real message", "error" in result && result.error === "Device Flow is not enabled for this app.");
+  } finally {
+    restore();
+  }
+});
+
 console.log("\nidentity persistence:");
 await withTempFile(async (filePath) => {
   const before = await loadStoredGithubIdentity(filePath);
