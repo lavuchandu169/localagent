@@ -10,6 +10,7 @@
 // for the rest of this feature), verified by manual testing on a real
 // machine instead.
 import type { ProviderRow, KeyRow } from "../freellmapiKeysApi.js";
+import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 
 /** Full signup-URL map, transcribed from the vendored client's own
  * PLATFORMS constant (vendor/freellmapi/client/src/components/keys/shared.tsx,
@@ -113,11 +114,11 @@ export function initFreellmapiPanel(): void {
  * this file - Task 9 wires the reverse direction when it rewires the
  * "Manage free providers..." button itself. */
 export function closeFreellmapiPanel(): void {
-  panel.hidden = true;
+  closeOverlayPanel(panel);
 }
 
 export async function openFreellmapiPanel(): Promise<void> {
-  panel.hidden = false;
+  openOverlayPanel(panel);
   await refreshProviders();
   await refreshCustomEndpoints(customEndpointsEl);
 }
