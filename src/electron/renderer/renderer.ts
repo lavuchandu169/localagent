@@ -235,7 +235,7 @@ openFreellmapiDashboardBtn.addEventListener("click", () => {
   if (!aboutPanel.hidden) closeAboutPanel();
   if (!mcpServersPanel.hidden) closeMcpServersPanel();
   if (!settingsPanel.hidden) closeSettingsPanel();
-  closeFreellmapiFallbackPanel();
+  if (!closeFreellmapiFallbackPanel()) return;
   void openFreellmapiPanel();
 });
 const openFreellmapiFallbackBtn = byId<HTMLButtonElement>("open-freellmapi-fallback-panel");
@@ -831,7 +831,7 @@ aboutToggle.addEventListener("click", () => {
     if (!mcpServersPanel.hidden) closeMcpServersPanel();
     if (!commandPaletteOverlay.hidden) closeCommandPalette();
     closeFreellmapiPanel();
-    closeFreellmapiFallbackPanel();
+    if (!closeFreellmapiFallbackPanel()) return;
   }
   aboutPanel.hidden = !opening;
   aboutToggle.setAttribute("aria-expanded", String(opening));
@@ -931,7 +931,7 @@ mcpServersToggle.addEventListener("click", () => {
     if (!settingsPanel.hidden) closeSettingsPanel();
     if (!commandPaletteOverlay.hidden) closeCommandPalette();
     closeFreellmapiPanel();
-    closeFreellmapiFallbackPanel();
+    if (!closeFreellmapiFallbackPanel()) return;
   }
   mcpServersPanel.hidden = !opening;
   mcpServersToggle.setAttribute("aria-expanded", String(opening));
@@ -1080,7 +1080,7 @@ settingsToggle.addEventListener("click", async () => {
     if (!mcpServersPanel.hidden) closeMcpServersPanel();
     if (!commandPaletteOverlay.hidden) closeCommandPalette();
     closeFreellmapiPanel();
-    closeFreellmapiFallbackPanel();
+    if (!closeFreellmapiFallbackPanel()) return;
     await openSettingsPanel();
   }
   settingsPanel.hidden = !opening;
@@ -1181,7 +1181,7 @@ function openCommandPalette(): void {
   if (!mcpServersPanel.hidden) closeMcpServersPanel();
   if (!settingsPanel.hidden) closeSettingsPanel();
   closeFreellmapiPanel();
-  closeFreellmapiFallbackPanel();
+  if (!closeFreellmapiFallbackPanel()) return;
   commandPaletteInput.value = "";
   paletteSelectedIndex = 0;
   commandPaletteOverlay.hidden = false;

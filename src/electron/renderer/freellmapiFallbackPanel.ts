@@ -73,6 +73,9 @@ export function initFreellmapiFallbackPanel(): void {
 
   closeBtn.addEventListener("click", closeFreellmapiFallbackPanel);
   refreshBtn.addEventListener("click", () => {
+    if (modelsDirty && !confirm("You have unsaved model priority changes. Discard them?")) {
+      return;
+    }
     void refreshRouting();
     void refreshModels();
   });
@@ -93,11 +96,17 @@ export function initFreellmapiFallbackPanel(): void {
   saveRoutingBtn.addEventListener("click", () => void saveRouting());
 }
 
-export function closeFreellmapiFallbackPanel(): void {
+/** Returns true once the panel is actually closed (or was already closed) -
+ * false means the user cancelled an unsaved-changes prompt, and callers must
+ * not proceed to open their own panel or this panel stacks on top of theirs. */
+export function closeFreellmapiFallbackPanel(): boolean {
+  if (panel.hidden) return true;
   if (modelsDirty && !confirm("You have unsaved model priority changes. Discard them?")) {
-    return;
+    return false;
   }
+  markDirty(false);
   panel.hidden = true;
+  return true;
 }
 
 export async function openFreellmapiFallbackPanel(): Promise<void> {
@@ -225,7 +234,10 @@ function markDirty(dirty: boolean): void {
 
 function renderModelList(): void {
   modelListEl.innerHTML = "";
-  const sorted = [...workingModels].sort((a, b) => a.priority - b.priority);
+  // Only models with a configured key are actually routable - the vendored
+  // page filters the same way (FallbackPage.tsx). workingModels itself stays
+  // unfiltered so saveModels' full-replace PUT still includes every row.
+  const sorted = workingModels.filter((m) => m.keyCount > 0).sort((a, b) => a.priority - b.priority);
   sorted.forEach((model, index) => {
     const row = document.createElement("div");
     row.className = "freellmapi-provider-row";
