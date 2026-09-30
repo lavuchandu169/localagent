@@ -55,6 +55,11 @@ export interface AgentSessionOptions {
    * unconditional failure on any provider error.
    */
   fallbackProviders?: { provider: ModelProvider; model: string; label: string }[];
+  /** Supplies the GitHub push-authentication token accessor to every tool
+   * call's ToolContext — see ToolContext.getGithubToken. Only main.ts (via
+   * sessionRegistry.ts's startSession) ever sets this; the CLI/demo entry
+   * points leave it undefined. */
+  getGithubToken?: () => Promise<string | null>;
 }
 
 export const DEFAULT_SYSTEM_PROMPT = `You are a careful autonomous coding agent operating on a local repository.
@@ -352,7 +357,7 @@ export class AgentSession {
 
     this.state = "EXECUTING_TOOL";
     yield { type: "tool.start", call };
-    const result = await tool.execute(call.arguments, { workspaceRoot: this.opts.workspaceRoot, log: () => {} });
+    const result = await tool.execute(call.arguments, { workspaceRoot: this.opts.workspaceRoot, log: () => {}, getGithubToken: this.opts.getGithubToken });
     yield { type: "tool.result", call, result };
     this.messages.push({
       role: "tool",
@@ -645,6 +650,7 @@ export class AgentSession {
         yield { type: "tool.start", call };
         const result = await tool.execute(effectiveCall.arguments, {
           workspaceRoot: this.opts.workspaceRoot,
+          getGithubToken: this.opts.getGithubToken,
           log: (msg) => {
             /* forwarded via tool.result event below */
             void msg;

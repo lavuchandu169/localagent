@@ -139,6 +139,7 @@ export async function startSession(
     /** Directory holding anthropic-settings.json/openai-settings.json/gemini-settings.json — passed so startSession can resolve fallback candidates via providerFallback.ts. Undefined (every existing caller/test that doesn't care about fallback) means no fallback is ever configured, exactly like today's behavior. */
     settingsDir?: string;
     storageCrypto?: StorageCrypto;
+    getGithubToken?: () => Promise<string | null>;
   } = {}
 ): Promise<{ sessionId: string; workspaceRoot: string }> {
   const provider = (deps.providerFactory ?? buildProvider)(config.provider, deps.onDownloadProgress, deps.signal);
@@ -206,6 +207,7 @@ export async function startSession(
             : config.provider.size,
     provider,
     tools: defaultToolRegistry(deps.extraTools ?? []),
+    getGithubToken: deps.getGithubToken,
     permissionMode: config.mode,
     initialMessages: deps.resume?.initialMessages,
     onApprovalNeeded: (call) =>

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import type { Tool, ToolContext } from "../types.js";
 import { redactSecrets } from "../protected.js";
+import { prepareGitPushCommand } from "../electron/githubPushAuth.js";
 
 interface Input {
   command: string;
@@ -32,8 +33,24 @@ export const runCommandTool: Tool<Input, CommandResult> = {
   },
   async execute(input, ctx: ToolContext) {
     const start = Date.now();
+    const prepared = await prepareGitPushCommand(input.command, ctx.workspaceRoot, ctx.getGithubToken ?? (async () => null));
+    if (prepared.kind === "blocked") {
+      return { ok: false, output: null, error: prepared.reason };
+    }
     return new Promise((resolve) => {
-      const proc = spawn(input.command, { cwd: ctx.workspaceRoot, shell: true, timeout: input.timeoutMs ?? 30000 });
+      // The authenticated case spawns git directly via its own argv, with
+      // no shell at all — never a shell string built from this feature's
+      // own quoting, which is what makes it work identically on Windows
+      // (Node's shell:true would otherwise invoke cmd.exe, which doesn't
+      // understand the POSIX single-quoting a shell-string version of this
+      // rewrite would need) and closes off every other process in a
+      // compound command ever seeing the injected token (there is no
+      // shell metacharacter interpretation to exploit when there's no
+      // shell in the first place — see isSimpleGitPushCommand's own gate).
+      const proc =
+        prepared.kind === "authenticated"
+          ? spawn(prepared.argv[0]!, prepared.argv.slice(1), { cwd: ctx.workspaceRoot, timeout: input.timeoutMs ?? 30000, env: { ...process.env, ...prepared.env } })
+          : spawn(input.command, { cwd: ctx.workspaceRoot, shell: true, timeout: input.timeoutMs ?? 30000 });
       let stdout = "";
       let stderr = "";
       proc.stdout.on("data", (d) => (stdout += d.toString()));

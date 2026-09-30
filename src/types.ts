@@ -30,6 +30,12 @@ export interface AttachedText {
 export interface ToolContext {
   workspaceRoot: string;
   log: (msg: string) => void;
+  /** Returns the currently-connected GitHub account's access token, or null
+   * if none is connected. Only run_command's git-push handling consumes
+   * this — every other tool ignores it. Undefined in the CLI/demo entry
+   * points (neither wires Electron's stored credentials), which is exactly
+   * "no account connected" as far as this feature is concerned. */
+  getGithubToken?: () => Promise<string | null>;
 }
 
 export interface Tool<TInput = any, TOutput = any> {

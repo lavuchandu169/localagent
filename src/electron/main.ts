@@ -32,6 +32,9 @@ import { listSessions, searchSessions, loadSessionRecord, claimUnownedSessions }
 import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 import { loadEnvFile } from "./loadEnvFile.js";
 import { isSecureStorageAvailable, electronStorageCrypto } from "./secureStorage.js";
+import { connectGithub, loadStoredGithubIdentity, clearStoredGithubIdentity, getGithubAccessToken } from "./githubAuth.js";
+import { resolveGithubClientId } from "./githubSettings.js";
+import { createGithubCreateRepoTool, createGithubCreatePrTool } from "./githubTools.js";
 import { appendErrorLog } from "./errorLog.js";
 import { readAttachment, type PickedAttachment } from "./attachments.js";
 import { wireAutoUpdater, type UpdateManager } from "./updateManager.js";
@@ -109,6 +112,8 @@ function createWindow(): BrowserWindow {
 
 app.whenReady().then(async () => {
   const authFilePath = path.join(app.getPath("userData"), "auth.json");
+  const githubAuthFilePath = path.join(app.getPath("userData"), "github-auth.json");
+  const githubSettingsFilePath = path.join(app.getPath("userData"), "githubSettings.json");
   const settingsFilePath = path.join(app.getPath("userData"), "googleSettings.json");
   const anthropicSettingsFilePath = path.join(app.getPath("userData"), "anthropicSettings.json");
   const openaiSettingsFilePath = path.join(app.getPath("userData"), "openaiSettings.json");
@@ -129,6 +134,8 @@ app.whenReady().then(async () => {
       "[auth] OS-native secure storage isn't available on this system — the Google identity file will be stored as plain text (0600 permissions) instead of OS-encrypted."
     );
   }
+
+  const getGithubToken = () => getGithubAccessToken(githubAuthFilePath, storageCrypto);
 
   // Broadcasts to every live window rather than a single captured `win`
   // reference: on macOS, closing the window destroys that BrowserWindow
@@ -329,9 +336,10 @@ app.whenReady().then(async () => {
         onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
         signal: controller.signal,
         resume,
-        extraTools: currentMcpTools(),
+        extraTools: [...currentMcpTools(), createGithubCreateRepoTool(getGithubToken), createGithubCreatePrTool(getGithubToken)],
         settingsDir: app.getPath("userData"),
         storageCrypto,
+        getGithubToken,
       });
     } catch (err) {
       // healthCheck's real error message now reaches here (see
@@ -490,6 +498,22 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent:auth-status", async () => {
     const { clientId, clientSecret } = await resolveGoogleCredentials(settingsFilePath, storageCrypto);
     return getAuthStatus(authFilePath, clientId, clientSecret, storageCrypto);
+  });
+  ipcMain.handle("agent:github-connect", async (event) => {
+    const clientId = await resolveGithubClientId(githubSettingsFilePath, storageCrypto);
+    return connectGithub(clientId, githubAuthFilePath, storageCrypto, (code) => {
+      event.sender.send("agent:github-device-code", {
+        userCode: code.userCode,
+        verificationUri: code.verificationUri,
+      });
+    });
+  });
+  ipcMain.handle("agent:github-status", async () => {
+    const identity = await loadStoredGithubIdentity(githubAuthFilePath, storageCrypto);
+    return identity ? { connected: true as const, login: identity.login } : { connected: false as const };
+  });
+  ipcMain.handle("agent:github-disconnect", async () => {
+    await clearStoredGithubIdentity(githubAuthFilePath);
   });
   ipcMain.handle("agent:get-google-settings", async () => {
     const settings = await loadGoogleSettings(settingsFilePath, storageCrypto);
