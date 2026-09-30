@@ -395,7 +395,7 @@
     <div class="hero-content reveal">
       <span class="eyebrow">// Local-first coding agent</span>
       <h1>A local-first coding agent that actually gets things done.</h1>
-      <p class="subtitle">Bring your own model — an embedded GGUF file, any Ollama / LM&nbsp;Studio / vLLM server, or Claude, OpenAI, and Gemini with your own API keys — and get a real agent loop with a permission engine, checkpoints, and MCP tools. Nothing has to leave your machine unless you tell it to.</p>
+      <p class="subtitle">Bring your own model — an embedded GGUF file, any Ollama / LM&nbsp;Studio / vLLM server, Claude, OpenAI, and Gemini with your own API keys, or a free multi-provider router that needs no key at all — and get a real agent loop with a permission engine, checkpoints, and MCP tools. Nothing has to leave your machine unless you tell it to.</p>
       <div class="hero-actions">
         <a class="btn" href="#download">Download for Mac / Windows</a>
         <a class="btn-secondary" href="https://github.com/lavuchandu169/localagent">View on GitHub</a>
@@ -510,6 +510,14 @@ node dist/cli.js "explain how add() works in math.js" \
         <h3>Claude, OpenAI, or Gemini — with automatic fallback</h3>
         <p>Add your own API key for any of the three. If the one you're using hits a rate limit or quota error mid-task, localagent automatically retries on another provider you've configured, in the order you added them — no manual switching, no lost progress.</p>
       </div>
+      <div class="feature reveal">
+        <h3>A free multi-provider router, built in</h3>
+        <p>No API key at all — a bundled free-tier router gives you a rotating set of cloud models, with per-provider keys, cross-provider fallback, and routing-strategy controls all as native panels, not a separate window.</p>
+      </div>
+      <div class="feature reveal">
+        <h3>Commit and push, right from the agent</h3>
+        <p>Connect a GitHub account once (no token to paste) and the agent can push commits, create a new repo, or open a pull request — each one still asks for your approval first, exactly like every other action it takes.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -540,7 +548,7 @@ node dist/cli.js "explain how add() works in math.js" \
     <div class="faq-list">
       <details class="faq-item reveal">
         <summary>Is localagent really free?</summary>
-        <p>Yes. Every embedded model, custom Hugging Face models, the custom-server option, and your own Claude, OpenAI, or Gemini API key are all included — nothing is gated behind a paywall. The optional one-time "Support the project" payment unlocks no feature; it's just a way to say thanks.</p>
+        <p>Yes. Every embedded model, custom Hugging Face models, the custom-server option, the built-in free multi-provider router, and your own Claude, OpenAI, or Gemini API key are all included — nothing is gated behind a paywall. The optional one-time "Support the project" payment unlocks no feature; it's just a way to say thanks.</p>
       </details>
       <details class="faq-item reveal">
         <summary>Does my code ever leave my machine?</summary>
@@ -569,9 +577,10 @@ node dist/cli.js "explain how add() works in math.js" \
     <h2 class="reveal">Privacy Policy</h2>
     <p class="disclaimer">Last reviewed: September 2026. Written to accurately describe what the app does — not a substitute for professional legal advice. Treat it as an honest draft, not a finished legal document.</p>
     <p>There is no backend for this project — no server we operate, no analytics, no telemetry, nothing phoning home. Everything below happens directly between your machine and whichever service you've explicitly configured.</p>
-    <p><strong>Your code and files</strong> stay on your machine unless you choose a provider that sends them elsewhere: Claude, OpenAI, and Gemini each send task context to that provider's own API, using your own API key — nothing is sent to us. A custom server sends it to whatever OpenAI-compatible endpoint you point at. If you've configured more than one cloud provider and the active one hits a rate limit or quota error mid-task, the same task's context is automatically sent to the next configured provider instead — never to one you haven't added a key for. The default embedded mode — curated or a custom Hugging Face model — sends nothing anywhere once downloaded.</p>
+    <p><strong>Your code and files</strong> stay on your machine unless you choose a provider that sends them elsewhere: Claude, OpenAI, and Gemini each send task context to that provider's own API, using your own API key — nothing is sent to us. The built-in free multi-provider router sends task context to its own backing service the same way a cloud provider does. A custom server sends it to whatever OpenAI-compatible endpoint you point at. If you've configured more than one cloud provider and the active one hits a rate limit or quota error mid-task, the same task's context is automatically sent to the next configured provider instead — never to one you haven't added a key for. The default embedded mode — curated or a custom Hugging Face model — sends nothing anywhere once downloaded.</p>
     <p><strong>Session history</strong> is saved locally on your machine. It only leaves your machine if you sign in with Google, in which case it's backed up to a hidden, app-private folder in your own Google Drive — not visible in your normal Drive UI, not accessible to any other app or person.</p>
     <p><strong>Google sign-in</strong> is optional and gates nothing. If used, your email, name, and profile picture URL are requested from Google's own identity endpoint and stored locally; the refresh token is encrypted at rest via your OS's native credential store, never written to disk as plain text.</p>
+    <p><strong>GitHub account connection</strong> is optional and gates nothing. If used, it's authorized through GitHub's own device-based sign-in flow — no password or token ever passes through the app. GitHub's access token is encrypted at rest via your OS's native credential store, and is used only to push commits, create a repository, or open a pull request, each of which still requires your explicit approval before it runs, exactly like every other action the agent takes. Disconnecting removes the stored token from your machine; it does not revoke access on GitHub's side, which you can do at any time from your own GitHub account settings.</p>
     <p><strong>Crash and error logs</strong> are written locally and never uploaded anywhere — no external crash-reporting service, no account, no telemetry.</p>
     <p><strong>The optional "Support the project" purchase</strong> is processed entirely by the payment platform used to sell it — we do not receive or store your payment details ourselves. It unlocks no feature and creates no account.</p>
     <p>Questions about this policy: <a href="mailto:lavuchandu169@gmail.com">lavuchandu169@gmail.com</a>.</p>
