@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.58 — 2026-09-30
+
+- feat: GitHub account integration (OAuth Device Flow, push, repo/PR creation)
+
 ## v0.1.0-beta.57 — 2026-09-30
 
 - feat: native Fallback (Routing) panel
