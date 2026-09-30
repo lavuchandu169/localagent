@@ -34,9 +34,11 @@ import type {
   DiscoverModelsParams,
   DiscoveredModel,
 } from "../freellmapiKeysApi.js";
+import type { RoutingSettings, UpdateRoutingParams, UpdateRoutingResult, FallbackModelRow, UpdateModelListEntry, SortPreset } from "../freellmapiFallbackApi.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
 import { WHATS_NEW } from "../../whatsNew.js";
 import { initFreellmapiPanel, openFreellmapiPanel, closeFreellmapiPanel } from "./freellmapiPanel.js";
+import { initFreellmapiFallbackPanel, openFreellmapiFallbackPanel, closeFreellmapiFallbackPanel } from "./freellmapiFallbackPanel.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 import type { HfSearchResult } from "../modelSearch.js";
@@ -162,6 +164,11 @@ interface AgentBridge {
   freellmapiAddCustomProvider(params: AddCustomProviderParams): Promise<{ success: true; keyId: number }>;
   freellmapiDiscoverModels(params: DiscoverModelsParams): Promise<{ models: DiscoveredModel[] }>;
   freellmapiProbeCustomProvider(params: DiscoverModelsParams): Promise<{ ok: boolean }>;
+  freellmapiFallbackGetRouting(): Promise<RoutingSettings>;
+  freellmapiFallbackUpdateRouting(params: UpdateRoutingParams): Promise<UpdateRoutingResult>;
+  freellmapiFallbackGetModels(): Promise<FallbackModelRow[]>;
+  freellmapiFallbackUpdateModels(entries: UpdateModelListEntry[]): Promise<{ success: true }>;
+  freellmapiFallbackSortModels(preset: SortPreset): Promise<{ success: true; preset: string }>;
   openExternal(url: string): Promise<void>;
 }
 
@@ -228,7 +235,16 @@ openFreellmapiDashboardBtn.addEventListener("click", () => {
   if (!aboutPanel.hidden) closeAboutPanel();
   if (!mcpServersPanel.hidden) closeMcpServersPanel();
   if (!settingsPanel.hidden) closeSettingsPanel();
+  if (!closeFreellmapiFallbackPanel()) return;
   void openFreellmapiPanel();
+});
+const openFreellmapiFallbackBtn = byId<HTMLButtonElement>("open-freellmapi-fallback-panel");
+openFreellmapiFallbackBtn.addEventListener("click", () => {
+  if (!aboutPanel.hidden) closeAboutPanel();
+  if (!mcpServersPanel.hidden) closeMcpServersPanel();
+  if (!settingsPanel.hidden) closeSettingsPanel();
+  closeFreellmapiPanel();
+  void openFreellmapiFallbackPanel();
 });
 const baseUrlInput = byId<HTMLInputElement>("base-url");
 const externalModelInput = byId<HTMLInputElement>("external-model");
@@ -292,6 +308,7 @@ const aboutToggle = byId<HTMLButtonElement>("about-toggle");
 const aboutPanel = byId<HTMLDivElement>("about-panel");
 const aboutClose = byId<HTMLButtonElement>("about-close");
 const freellmapiPanelEl = byId<HTMLDivElement>("freellmapi-panel");
+const freellmapiFallbackPanelEl = byId<HTMLDivElement>("freellmapi-fallback-panel");
 const aboutCloseX = byId<HTMLButtonElement>("about-close-x");
 const mcpServersToggle = byId<HTMLButtonElement>("mcp-servers-toggle");
 const mcpServersPanel = byId<HTMLDivElement>("mcp-servers-panel");
@@ -814,6 +831,7 @@ aboutToggle.addEventListener("click", () => {
     if (!mcpServersPanel.hidden) closeMcpServersPanel();
     if (!commandPaletteOverlay.hidden) closeCommandPalette();
     closeFreellmapiPanel();
+    if (!closeFreellmapiFallbackPanel()) return;
   }
   aboutPanel.hidden = !opening;
   aboutToggle.setAttribute("aria-expanded", String(opening));
@@ -913,6 +931,7 @@ mcpServersToggle.addEventListener("click", () => {
     if (!settingsPanel.hidden) closeSettingsPanel();
     if (!commandPaletteOverlay.hidden) closeCommandPalette();
     closeFreellmapiPanel();
+    if (!closeFreellmapiFallbackPanel()) return;
   }
   mcpServersPanel.hidden = !opening;
   mcpServersToggle.setAttribute("aria-expanded", String(opening));
@@ -1061,6 +1080,7 @@ settingsToggle.addEventListener("click", async () => {
     if (!mcpServersPanel.hidden) closeMcpServersPanel();
     if (!commandPaletteOverlay.hidden) closeCommandPalette();
     closeFreellmapiPanel();
+    if (!closeFreellmapiFallbackPanel()) return;
     await openSettingsPanel();
   }
   settingsPanel.hidden = !opening;
@@ -1161,6 +1181,7 @@ function openCommandPalette(): void {
   if (!mcpServersPanel.hidden) closeMcpServersPanel();
   if (!settingsPanel.hidden) closeSettingsPanel();
   closeFreellmapiPanel();
+  if (!closeFreellmapiFallbackPanel()) return;
   commandPaletteInput.value = "";
   paletteSelectedIndex = 0;
   commandPaletteOverlay.hidden = false;
@@ -1228,6 +1249,7 @@ document.addEventListener("keydown", (e) => {
   else if (!commandPaletteOverlay.hidden) closeCommandPalette();
   else if (!changesPanel.hidden) closeChangesPanel();
   else if (!freellmapiPanelEl.hidden) closeFreellmapiPanel();
+  else if (!freellmapiFallbackPanelEl.hidden) closeFreellmapiFallbackPanel();
 });
 
 // A focus trap for the onboarding/what's-new modals specifically — they're
@@ -2863,3 +2885,4 @@ window.agent.onUpdateStatus((status) => {
 window.agent.getAuthStatus().then(renderAuthState).catch(() => {});
 
 initFreellmapiPanel();
+initFreellmapiFallbackPanel();

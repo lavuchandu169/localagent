@@ -93,4 +93,9 @@ contextBridge.exposeInMainWorld("agent", {
   openExternal: (url) => ipcRenderer.invoke("agent:open-external", url),
   freellmapiPickImportFiles: () => ipcRenderer.invoke("agent:freellmapi-pick-import-files"),
   freellmapiExportToFile: (format) => ipcRenderer.invoke("agent:freellmapi-export-to-file", format),
+  freellmapiFallbackGetRouting: () => ipcRenderer.invoke("agent:freellmapi-fallback-get-routing"),
+  freellmapiFallbackUpdateRouting: (params) => ipcRenderer.invoke("agent:freellmapi-fallback-update-routing", params),
+  freellmapiFallbackGetModels: () => ipcRenderer.invoke("agent:freellmapi-fallback-get-models"),
+  freellmapiFallbackUpdateModels: (entries) => ipcRenderer.invoke("agent:freellmapi-fallback-update-models", entries),
+  freellmapiFallbackSortModels: (preset) => ipcRenderer.invoke("agent:freellmapi-fallback-sort-models", preset),
 });
