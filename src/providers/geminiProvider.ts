@@ -132,7 +132,7 @@ export class GeminiProvider implements ModelProvider {
 
   constructor(opts: { apiKey: string; model?: string }) {
     this.apiKey = opts.apiKey;
-    this.model = opts.model || "gemini-2.5-flash";
+    this.model = opts.model || "gemini-3.8-flash";
   }
 
   async listModels(): Promise<ModelInfo[]> {

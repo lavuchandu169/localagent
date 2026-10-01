@@ -15,7 +15,7 @@ export interface ConfiguredCloudProvider {
 export const DEFAULT_MODEL_BY_KIND: Record<CloudProviderKind, string> = {
   anthropic: "claude-sonnet-5",
   openai: "gpt-5.5",
-  gemini: "gemini-2.5-flash",
+  gemini: "gemini-3.8-flash",
 };
 
 // Matches main.ts's real, already-shipped file naming exactly
