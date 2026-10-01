@@ -14,6 +14,15 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /** Opaque, provider-specific continuity token for the model's internal
+   * reasoning state (e.g. Gemini's thoughtSignature on a functionCall
+   * part), present only on providers/models that use one. Must be
+   * round-tripped back to the SAME provider verbatim on the next turn —
+   * see geminiProvider.ts's toGeminiContents/fromGeminiResult — never
+   * interpreted or modified, and never meaningful across a provider
+   * fallback switch (a signature minted by one provider for its own
+   * model is meaningless to a different one). */
+  providerSignature?: string;
 }
 
 export interface AttachedImage {

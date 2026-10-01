@@ -10,6 +10,15 @@ interface GeminiPart {
   functionCall?: { name: string; args: Record<string, unknown> };
   functionResponse?: { name: string; response: Record<string, unknown> };
   inlineData?: { mimeType: string; data: string };
+  /** Sibling field to functionCall (not nested inside it), present on a
+   * "thinking"-capable model like gemini-3.8-flash. Required on the first
+   * functionCall part of a turn (and the first of each step in a
+   * sequential-calls conversation) — a thinking model's API rejects a
+   * replayed functionCall history part that omits it with a 400,
+   * "Function call is missing a thought_signature in functionCall parts."
+   * Verified against ai.google.dev/gemini-api/docs/generate-content/thought-signatures,
+   * not guessed. */
+  thoughtSignature?: string;
 }
 interface GeminiContent {
   role: "user" | "model";
@@ -37,7 +46,10 @@ export function toGeminiContents(messages: ChatMessage[]): { systemInstruction?:
       const parts: GeminiPart[] = [];
       if (m.content) parts.push({ text: m.content });
       for (const tc of m.tool_calls ?? []) {
-        parts.push({ functionCall: { name: tc.name, args: tc.arguments } });
+        parts.push({
+          functionCall: { name: tc.name, args: tc.arguments },
+          ...(tc.providerSignature ? { thoughtSignature: tc.providerSignature } : {}),
+        });
       }
       contents.push({ role: "model", parts });
     } else if (m.role === "tool") {
@@ -108,7 +120,12 @@ export function fromGeminiResult(raw: any): ChatResponse {
       // carried-over history is a real 400 on the fallback provider, not
       // just a cosmetic collision. crypto.randomUUID() keeps every id
       // globally unique regardless of which turn or provider produced it.
-      toolCalls.push({ id: `call_${crypto.randomUUID()}`, name: part.functionCall.name, arguments: part.functionCall.args ?? {} });
+      toolCalls.push({
+        id: `call_${crypto.randomUUID()}`,
+        name: part.functionCall.name,
+        arguments: part.functionCall.args ?? {},
+        ...(part.thoughtSignature ? { providerSignature: part.thoughtSignature } : {}),
+      });
     }
   });
 

@@ -84,6 +84,37 @@ console.log("Gemini message conversion:");
   );
 }
 
+{
+  // Gemini's "thinking" models (gemini-3.8-flash and the 2.5 series) 400
+  // if a replayed functionCall part omits thoughtSignature — a sibling
+  // field to functionCall, not nested inside it. Verified against
+  // ai.google.dev/gemini-api/docs/generate-content/thought-signatures.
+  const messages: ChatMessage[] = [
+    { role: "user", content: "read math.js" },
+    { role: "assistant", content: "", tool_calls: [{ id: "c1", name: "read_file", arguments: { path: "math.js" }, providerSignature: "sig-abc123" }] },
+    { role: "tool", tool_call_id: "c1", name: "read_file", content: "file contents" },
+  ];
+  const { contents } = toGeminiContents(messages);
+  check(
+    "a tool call's providerSignature replays as a sibling thoughtSignature field, not nested inside functionCall",
+    JSON.stringify(contents[1]) ===
+      JSON.stringify({ role: "model", parts: [{ functionCall: { name: "read_file", args: { path: "math.js" } }, thoughtSignature: "sig-abc123" }] })
+  );
+}
+
+{
+  // A tool call with no providerSignature (an older/non-thinking response,
+  // or a provider that never sets one) must never send a bogus
+  // thoughtSignature field at all.
+  const messages: ChatMessage[] = [
+    { role: "user", content: "read math.js" },
+    { role: "assistant", content: "", tool_calls: [{ id: "c1", name: "read_file", arguments: { path: "math.js" } }] },
+  ];
+  const { contents } = toGeminiContents(messages);
+  const part = (contents[1]?.parts[0] ?? {}) as Record<string, unknown>;
+  check("no providerSignature means no thoughtSignature key is sent at all", !("thoughtSignature" in part));
+}
+
 console.log("\nGemini response conversion:");
 
 {
@@ -100,6 +131,26 @@ console.log("\nGemini response conversion:");
   check(
     "a functionCall part becomes a tool_calls turn",
     response.turn.type === "tool_calls" && response.turn.toolCalls[0]?.name === "read_file" && JSON.stringify(response.turn.toolCalls[0]?.arguments) === JSON.stringify({ path: "x.txt" })
+  );
+}
+
+{
+  const response = fromGeminiResult({
+    candidates: [{ content: { parts: [{ functionCall: { name: "read_file", args: { path: "x.txt" } }, thoughtSignature: "sig-xyz789" }] } }],
+  });
+  check(
+    "a functionCall part's sibling thoughtSignature is captured as the tool call's providerSignature",
+    response.turn.type === "tool_calls" && response.turn.toolCalls[0]?.providerSignature === "sig-xyz789"
+  );
+}
+
+{
+  const response = fromGeminiResult({
+    candidates: [{ content: { parts: [{ functionCall: { name: "read_file", args: { path: "x.txt" } } }] } }],
+  });
+  check(
+    "no thoughtSignature on the part means no providerSignature key on the resulting tool call",
+    response.turn.type === "tool_calls" && !("providerSignature" in response.turn.toolCalls[0]!)
   );
 }
 
