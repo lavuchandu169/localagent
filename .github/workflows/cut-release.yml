@@ -216,7 +216,24 @@ jobs:
 
           FINAL_STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
           if [ "$FINAL_STATE" != "MERGED" ]; then
-            echo "Release PR did not merge within the timeout — aborting, no tag pushed. Check $PR_URL." >&2
+            # A still-open PR (and its release/vX branch, left behind
+            # because --delete-branch above only fires on an actual merge)
+            # would otherwise block every future run of this workflow: the
+            # next run computes the SAME next version from the same
+            # not-yet-bumped main and tries to push a release/vX branch
+            # with that same name, which fails as a non-fast-forward push
+            # against this abandoned one — confirmed live (v0.1.0-beta.59's
+            # own release PR sat ~2h on a GitHub Actions "action_required"
+            # CI check — the same not-yet-root-caused platform quirk this
+            # file's own top comment already documents — outlived this
+            # loop's 10-minute wait, and the very next push to main
+            # collided with this PR's still-open branch). Closing the PR
+            # also disarms --auto, so a CI pass minutes after this timeout
+            # can never merge a release this run has already given up on —
+            # which previously left main bumped with no tag and no build
+            # ever triggered for it.
+            echo "Release PR did not merge within the timeout — closing it and deleting its branch so the next run isn't blocked. Check $PR_URL." >&2
+            gh pr close "$PR_URL" --delete-branch || true
             exit 1
           fi
 

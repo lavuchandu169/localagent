@@ -17,6 +17,17 @@ on:
   # normal way, via the push trigger above.
   workflow_dispatch:
 
+# A human pushing a tag by hand fires the push trigger above AND can
+# independently fire workflow_dispatch for that same tag (e.g. to finish a
+# release whose automated run never reached this step) — two concurrent
+# runs building/publishing the same version, which this workflow has no
+# other guard against (release creation/asset upload isn't naturally
+# idempotent). Keying on the ref means only two runs for the SAME tag ever
+# collide; different tags still run independently.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Blocks the entire release — including create-release's empty shell — on
   # the test suite actually passing. Previously nothing in CI ran `npm
