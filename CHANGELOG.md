@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.60 — 2026-10-01
+
+- fix: clean up a timed-out release PR instead of leaving it to block the next run
+
 ## v0.1.0-beta.59 — 2026-09-30
 
 - docs: update marketing site for the free-tier router and GitHub integration
