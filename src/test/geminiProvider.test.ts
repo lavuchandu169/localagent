@@ -170,7 +170,7 @@ console.log("\nGemini provider classifies RESOURCE_EXHAUSTED as retryable:");
   try {
     const provider = new GeminiProvider({ apiKey: "test-key" });
     try {
-      await provider.chat({ model: "gemini-2.5-flash", messages: [{ role: "user", content: "hi" }] });
+      await provider.chat({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "hi" }] });
       check("a RESOURCE_EXHAUSTED response throws", false);
     } catch (err) {
       check("throws a ProviderChatError", err instanceof ProviderChatError);

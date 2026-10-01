@@ -277,11 +277,11 @@ const OPENAI_MODELS: Record<string, { name: string; note: string }> = {
 };
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const GEMINI_MODELS: Record<string, { name: string; note: string }> = {
-  "gemini-2.5-flash": { name: "Gemini 2.5 Flash", note: "free tier available, balanced — default" },
-  "gemini-2.5-pro": { name: "Gemini 2.5 Pro", note: "free tier available, most capable" },
-  "gemini-2.5-flash-lite": { name: "Gemini 2.5 Flash-Lite", note: "free tier available, highest free daily quota" },
+  "gemini-3.8-flash": { name: "Gemini 3.8 Flash", note: "free tier available, balanced — default" },
+  "gemini-3.1-pro": { name: "Gemini 3.1 Pro", note: "preview, most capable" },
+  "gemini-3.5-flash-lite": { name: "Gemini 3.5 Flash-Lite", note: "free tier available, highest free daily quota" },
 };
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
 const CUSTOM_SERVER_VALUE = "custom-server";
 const CUSTOM_EMBEDDED_VALUE = "custom-embedded";
 const FREELLMAPI_VALUE = "freellmapi-auto";
