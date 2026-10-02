@@ -174,6 +174,35 @@ for (const status of [502, 413, 404, 503]) {
     globalThis.fetch = realFetch;
   }
 }
+{
+  // Final-review pushback: 400 is ALSO the generic "malformed request"
+  // status (not just FreeLLMAPI's own needsKey error, which happens to
+  // use it too) — this wrapper can only see the status code, not the
+  // specific error `code` field that would distinguish the two, so it
+  // must NOT be swept into retryable. Doing so would silently retry a
+  // genuinely malformed request against a paid fallback provider instead
+  // of surfacing the real error.
+  const fakeDeps = {
+    startFreellmapiServer: async (_deps: any) => ({ port: 18883 }),
+    getFreellmapiUnifiedApiKey: () => "test-key",
+  };
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: { message: "malformed request" } }), { status: 400 })) as typeof fetch;
+
+  try {
+    const provider = new FreellmapiProxyProvider({ userDataDir: "/tmp/does-not-matter" }, fakeDeps as any);
+    await provider.healthCheck();
+    try {
+      await provider.chat({ model: "auto", messages: [{ role: "user", content: "hi" }] });
+      check("a 400 response throws", false);
+    } catch (err) {
+      check("a 400 response is NOT retryable", err instanceof ProviderChatError && err.retryable === false);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

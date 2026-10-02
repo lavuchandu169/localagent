@@ -18,9 +18,18 @@ import { startFreellmapiServer, getFreellmapiUnifiedApiKey } from "../electron/f
  * kick in instead of hard-failing the task — a no-op when no fallback
  * provider is configured, since that same check gates it. Scoped to this
  * wrapper (not the shared OpenAICompatibleProvider itself) so an arbitrary
- * custom server's genuine 400/404/413/502/503 keeps failing clearly instead
- * of silently retrying against a provider the user never asked for. */
-const FREE_TIER_UNUSABLE_STATUSES = new Set([400, 404, 413, 502, 503]);
+ * custom server's genuine 404/413/502/503 keeps failing clearly instead
+ * of silently retrying against a provider the user never asked for.
+ *
+ * Deliberately does NOT include 400: FreeLLMAPI's own "needsKey" error
+ * (no provider key configured for any model) happens to use 400, but 400
+ * is also the generic "your request was malformed" status — this wrapper
+ * can only see the status code here, not the specific error `code` field
+ * that would distinguish the two, so including it would silently retry a
+ * genuinely malformed request against a paid fallback provider instead of
+ * surfacing the real error (final-review pushback: the original inclusion
+ * of 400 here had no status-specific justification to match the others). */
+const FREE_TIER_UNUSABLE_STATUSES = new Set([404, 413, 502, 503]);
 
 function broadenRetryable(err: unknown): never {
   if (err instanceof ProviderChatError && !err.retryable && err.status !== undefined && FREE_TIER_UNUSABLE_STATUSES.has(err.status)) {
