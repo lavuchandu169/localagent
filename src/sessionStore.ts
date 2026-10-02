@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChatMessage, AgentEvent, PermissionMode } from "./types.js";
@@ -41,6 +42,27 @@ export interface SessionRecord {
   planFirst: boolean;
   /** Correctness audit finding (session High #2): without this, a checkpoint never survives an app restart — "Revert this task" silently becomes unavailable the moment the app is closed and reopened, with no indication to the user that the capability (and the now-or-never window to use it) just disappeared. */
   checkpointHash: string | null;
+  /**
+   * Correctness audit finding (session Medium #1): cloud sync's merge used
+   * to compare `updatedAt` directly across devices — two wall clocks that
+   * can disagree (clock skew), which can make an actually-older edit look
+   * newer and silently overwrite a genuinely newer one. This checkpoint
+   * captures, as of the last successful push or pull for this session on
+   * THIS device, Drive's own server-assigned modifiedTime for the remote
+   * copy and this device's own updatedAt at that moment — comparing a
+   * CURRENT value against this device's own PRIOR observation of itself
+   * never compares two different devices' clocks against each other.
+   * Null for a record never reconciled under this scheme yet (a
+   * pre-migration record, or one that's never touched cloud sync at all);
+   * cloudSync.ts's reconcileSessions falls back to the previous
+   * updatedAt-vs-updatedAt comparison for exactly one pass in that case,
+   * then seeds this field so every subsequent pass uses the robust path.
+   * Deliberately NOT uploaded to Drive (see cloudSync.ts's
+   * stripLocalOnlyFieldsForUpload) — it's this device's own bookkeeping
+   * about ITS OWN last sync, and would corrupt another device's identical
+   * bookkeeping about its own if it were ever pulled down.
+   */
+  lastSyncCheckpoint: { remoteModifiedTime: string; localUpdatedAt: number } | null;
 }
 
 function indexPath(sessionsDir: string): string {
@@ -55,9 +77,29 @@ function recordPath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.json`);
 }
 
+/**
+ * Correctness audit finding (session Medium #1 fallout): a plain
+ * fs.writeFile() truncates the destination before writing its new
+ * content, leaving a real window where a concurrent reader can see an
+ * empty or partial file. That stopped being a purely theoretical risk
+ * once cloudSync.ts's syncUploadToCloud started doing a SECOND
+ * saveSession() for the same session shortly after the first — a
+ * concurrent loadSessionRecord() for that same id could intermittently
+ * read mid-write and come back null even though the record had just been
+ * saved correctly. Writing to a temp file in the SAME directory (so the
+ * later rename stays on one filesystem, where POSIX guarantees it's
+ * atomic) and renaming it into place means a reader only ever sees the
+ * complete old file or the complete new one, never a partial write.
+ */
+async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  const tmpPath = `${filePath}.tmp-${crypto.randomUUID()}`;
+  await fs.writeFile(tmpPath, content, "utf-8");
+  await fs.rename(tmpPath, filePath);
+}
+
 async function writeIndex(sessionsDir: string, entries: SessionIndexEntry[]): Promise<void> {
   await fs.mkdir(sessionsDir, { recursive: true });
-  await fs.writeFile(indexPath(sessionsDir), JSON.stringify(entries, null, 2), "utf-8");
+  await writeFileAtomic(indexPath(sessionsDir), JSON.stringify(entries, null, 2));
 }
 
 /** Reconstructs index.json from the directory listing — used when the index is missing or corrupted. Any individual record file that also fails to parse is skipped, not fatal. */
@@ -148,6 +190,7 @@ export async function loadSessionRecord(sessionsDir: string, id: string): Promis
       mode: r.mode ?? null,
       planFirst: r.planFirst ?? false,
       checkpointHash: r.checkpointHash ?? null,
+      lastSyncCheckpoint: r.lastSyncCheckpoint ?? null,
     };
   } catch {
     return null;
@@ -156,7 +199,7 @@ export async function loadSessionRecord(sessionsDir: string, id: string): Promis
 
 export async function saveSession(sessionsDir: string, record: SessionRecord): Promise<void> {
   await fs.mkdir(sessionsDir, { recursive: true });
-  await fs.writeFile(recordPath(sessionsDir, record.id), JSON.stringify(record, null, 2), "utf-8");
+  await writeFileAtomic(recordPath(sessionsDir, record.id), JSON.stringify(record, null, 2));
 
   const entries = await listAllSessions(sessionsDir);
   const withoutThis = entries.filter((e) => e.id !== record.id);

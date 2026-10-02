@@ -9,7 +9,7 @@ import { OpenAIProvider } from "../providers/openaiProvider.js";
 import { GeminiProvider } from "../providers/geminiProvider.js";
 import { FreellmapiProxyProvider } from "../providers/freellmapiProxy.js";
 import { isEmbeddedModelId } from "../models.js";
-import { saveSession, deleteSession, type SessionRecord, type PersistedProviderConfig } from "../sessionStore.js";
+import { saveSession, deleteSession, loadSessionRecord, type SessionRecord, type PersistedProviderConfig } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode, PermissionResponse, Tool } from "../types.js";
 import { isEphemeralStreamEvent } from "../types.js";
@@ -59,7 +59,7 @@ export interface ResumePayload {
 export interface CloudSyncConfig {
   getAccessToken: () => Promise<string | null>;
   onScopeError: () => void;
-  uploadSession?: (accessToken: string, record: SessionRecord) => Promise<void>;
+  uploadSession?: (accessToken: string, record: SessionRecord) => Promise<{ modifiedTime: string }>;
   deleteRemoteSession?: (accessToken: string, sessionId: string) => Promise<void>;
   /** Cheap, no-network read of the currently signed-in account's email (or null if signed out) — stamped onto every saved session as its owner, so the UI can later filter local history by account. */
   getOwnerEmail: () => Promise<string | null>;
@@ -408,6 +408,13 @@ export async function getSessionChanges(
 
 async function persistSession(registry: SessionRegistry, sessionId: string, entry: SessionEntry): Promise<void> {
   if (entry.deleted) return;
+  // lastSyncCheckpoint is cloud sync's own bookkeeping about ITS last
+  // successful push/pull (see SessionRecord's doc comment) — a normal
+  // task-completion save has nothing to do with that and must carry it
+  // forward unchanged, not silently reset it to null every time a task
+  // finishes (which would force every single reconcile pass back onto the
+  // less-robust updatedAt-fallback comparison).
+  const existing = await loadSessionRecord(registry.sessionsDir, sessionId);
   const record: SessionRecord = {
     id: sessionId,
     title: entry.title ?? "(untitled)",
@@ -425,6 +432,7 @@ async function persistSession(registry: SessionRegistry, sessionId: string, entr
     mode: entry.session.getPermissionMode(),
     planFirst: entry.session.getPlanFirst(),
     checkpointHash: entry.session.getCheckpointHash(),
+    lastSyncCheckpoint: existing?.lastSyncCheckpoint ?? null,
   };
   await saveSession(registry.sessionsDir, record);
   // Fire-and-forget: syncUploadToCloud never rejects (it catches everything
@@ -443,7 +451,18 @@ async function syncUploadToCloud(registry: SessionRegistry, record: SessionRecor
   try {
     const token = await getAccessToken();
     if (!token) return;
-    await upload(token, record);
+    const { modifiedTime } = await upload(token, record);
+    // Correctness audit finding (session Medium #1): without this, every
+    // continuous per-task upload (this function) would leave the local
+    // checkpoint stale relative to what Drive now actually holds — the
+    // NEXT reconcileSessions pass would then see "remote changed" (it did,
+    // but only because THIS device just pushed it) and misread its own
+    // background upload as a concurrent edit from another device,
+    // routing every subsequent save into the conflict-preservation branch
+    // for no reason. Refreshing the checkpoint here keeps it accurate
+    // between reconcile passes, exactly like reconcileSessions' own push
+    // branch does after a push it drives itself.
+    await saveSession(registry.sessionsDir, { ...record, lastSyncCheckpoint: { remoteModifiedTime: modifiedTime, localUpdatedAt: record.updatedAt } });
   } catch (err) {
     if (err instanceof DriveScopeError) onScopeError();
     else console.warn(`[cloudSync] upload failed for session ${record.id}, will retry on next save:`, err);

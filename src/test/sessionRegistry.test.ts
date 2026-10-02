@@ -776,6 +776,7 @@ await (async () => {
       uploadSession: async (token, record) => {
         uploadedToken = token;
         uploadedRecordId = record.id;
+        return { modifiedTime: "2024-01-01T00:00:00.000Z" };
       },
       getOwnerEmail: async () => null,
     });
@@ -798,6 +799,7 @@ await (async () => {
       onScopeError: () => {},
       uploadSession: async () => {
         uploadCalled = true;
+        return { modifiedTime: "2024-01-01T00:00:00.000Z" };
       },
       getOwnerEmail: async () => null,
     });
@@ -881,7 +883,7 @@ await (async () => {
     const registry = createSessionRegistry(sessionsDir, {
       getAccessToken: async () => "fake-token",
       onScopeError: () => {},
-      uploadSession: async () => {},
+      uploadSession: async () => ({ modifiedTime: "2024-01-01T00:00:00.000Z" }),
       getOwnerEmail: async () => "owner@example.com",
     });
     const { sessionId } = await startSession(
@@ -901,7 +903,7 @@ await (async () => {
     const registry = createSessionRegistry(sessionsDir, {
       getAccessToken: async () => "fake-token",
       onScopeError: () => {},
-      uploadSession: async () => {},
+      uploadSession: async () => ({ modifiedTime: "2024-01-01T00:00:00.000Z" }),
       getOwnerEmail: async () => "someone-else@example.com",
     });
     const { sessionId } = await startSession(

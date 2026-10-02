@@ -41,6 +41,7 @@ function makeRecord(id: string, title: string, updatedAt: number, extra: Partial
     mode: null,
     planFirst: false,
     checkpointHash: null,
+    lastSyncCheckpoint: null,
     ...extra,
   };
 }
@@ -201,6 +202,34 @@ console.log("\nSessionRecord persists provider/mode/planFirst/checkpointHash, so
   check("mode defaults to null", loaded?.mode === null);
   check("planFirst defaults to false", loaded?.planFirst === false);
   check("checkpointHash defaults to null", loaded?.checkpointHash === null);
+  await fs.rm(sessionsDir, { recursive: true, force: true });
+}
+
+console.log("\nsaveSession writes atomically (correctness audit: session Medium #1 fallout):");
+{
+  // A real race was found via cloudSync.ts's syncUploadToCloud, which does
+  // a SECOND saveSession() for the same id shortly after the first (to
+  // refresh lastSyncCheckpoint after a background upload): while that
+  // second write was in flight, a concurrent loadSessionRecord() for the
+  // very same id intermittently read a truncated/empty file and came back
+  // null, even though the record had just been saved correctly moments
+  // earlier. A plain fs.writeFile() truncates the destination before
+  // writing its content, so a reader racing the write can observe that
+  // empty window — reproduced reliably via sessionRegistry.test.ts's own
+  // "Session ownership" tests (many concurrent persistSession/
+  // syncUploadToCloud calls sharing one sessionsDir), which is this fix's
+  // real regression guard; the timing window is too fast and filesystem-
+  // dependent to reproduce deterministically in a narrow unit test here.
+  // What IS deterministic and worth pinning directly: the atomic
+  // write-then-rename strategy must never leak its temp file.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessions-atomic-test-"));
+  const id = "atomic-test";
+  await saveSession(sessionsDir, makeRecord(id, "v1", 100));
+  await saveSession(sessionsDir, makeRecord(id, "v2", 200));
+  const filesAfter = await fs.readdir(sessionsDir);
+  check("no leftover temp file from the atomic write remains", filesAfter.every((f) => f === `${id}.json` || f === "index.json"));
+  const loaded = await loadSessionRecord(sessionsDir, id);
+  check("the final record is the last write, fully intact", loaded?.title === "v2");
   await fs.rm(sessionsDir, { recursive: true, force: true });
 }
 
