@@ -106,6 +106,16 @@ function createWindow(): BrowserWindow {
     shell.openExternal(url);
     return { action: "deny" };
   });
+  // Security audit finding M1: with no guard, dropping an untrusted HTML
+  // file onto the window (or any other in-page navigation away from the
+  // app's own bundled page) would load that page with the SAME preload
+  // bridge still attached — including addMcpServer, which spawns an
+  // arbitrary command. This window never legitimately navigates anywhere
+  // after its one loadFile() call below, so every will-navigate is denied
+  // unconditionally rather than trying to allowlist specific targets.
+  win.webContents.on("will-navigate", (event) => {
+    event.preventDefault();
+  });
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
   return win;
 }
@@ -130,8 +140,15 @@ app.whenReady().then(async () => {
   // secret-service/keyring daemon running (some minimal Linux setups).
   const storageCrypto = isSecureStorageAvailable() ? electronStorageCrypto : undefined;
   if (!storageCrypto) {
+    // Security audit finding M4: this one `storageCrypto` value governs
+    // EVERY secret this app stores — not just the Google identity file:
+    // the Anthropic/OpenAI/Gemini API keys, the GitHub OAuth token, and
+    // MCP server configs all fall back to plain text (still 0600) the
+    // same way. The warning said only "the Google identity file", which
+    // understated the real scope of what's affected on a system with no
+    // OS keychain/DPAPI/libsecret available.
     console.warn(
-      "[auth] OS-native secure storage isn't available on this system — the Google identity file will be stored as plain text (0600 permissions) instead of OS-encrypted."
+      "[auth] OS-native secure storage isn't available on this system — every credential this app stores (provider API keys, the GitHub token, the Google identity file, MCP server configs) will be saved as plain text (0600 permissions) instead of OS-encrypted."
     );
   }
 

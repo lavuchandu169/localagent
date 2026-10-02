@@ -41,8 +41,14 @@ check("rm is DESTRUCTIVE", classifyCommand("rm -rf foo") === "DESTRUCTIVE");
 check("git status is SAFE_READ", classifyCommand("git status") === "SAFE_READ");
 check("npm install is NETWORK", classifyCommand("npm install left-pad") === "NETWORK");
 check("unrecognized command is UNKNOWN", classifyCommand("some-custom-tool --flag") === "UNKNOWN");
-check("cargo test is SAFE_READ", classifyCommand("cargo test") === "SAFE_READ");
-check("go test is SAFE_READ", classifyCommand("go test ./...") === "SAFE_READ");
+// Security audit final-review Critical #2: these run a repo's own
+// test-runner script (arbitrary repo-defined code), not a read — moved
+// out of SAFE_READ into their own PROJECT_SCRIPT tier, which always
+// evaluates to ASK from the engine's own stateless perspective (see
+// permissions.test.ts and agent.ts's projectScriptApprovedThisTask for
+// the once-per-task override that still lets this stay usable).
+check("cargo test is PROJECT_SCRIPT, not SAFE_READ", classifyCommand("cargo test") === "PROJECT_SCRIPT");
+check("go test is PROJECT_SCRIPT, not SAFE_READ", classifyCommand("go test ./...") === "PROJECT_SCRIPT");
 
 console.log("\nPermission engine:");
 {
@@ -1055,10 +1061,15 @@ await (async () => {
   {
     // A workspace with a real, fast, dependency-free "npm test" script —
     // after the write succeeds and the model tries to finish, auto-verify
-    // should inject a real run_command("npm test") call (going through the
-    // exact same permission path as any model-issued command — SAFE_READ,
-    // so it auto-allows) BEFORE the task is allowed to complete, then give
-    // the model one more turn to react to the real result.
+    // should inject a real run_command("npm test") call BEFORE the task is
+    // allowed to complete, then give the model one more turn to react to
+    // the real result. Security audit finding H3: "npm test" etc. classify
+    // as SAFE_READ in permissions.ts, which would otherwise auto-run a
+    // repo's own test script — arbitrary repo-defined code — with zero
+    // approval; the first auto-verify each task is now forced through a
+    // real ASK regardless of that classification (see
+    // autoVerifyApprovedThisTask in agent.ts), so this session must supply
+    // onApprovalNeeded to exercise the "approved" path.
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-autoverify-test-"));
     await fs.writeFile(
       path.join(tmpDir, "package.json"),
@@ -1079,12 +1090,17 @@ await (async () => {
       { turn: { type: "final", content: "Fixed the bug." } },
       { turn: { type: "final", content: "Confirmed — the test run passed." } },
     ];
+    const approvalRequests: ToolCall[] = [];
     const session = new AgentSession({
       workspaceRoot: tmpDir,
       model: "mock",
       provider: new MockProvider(script),
       tools: defaultToolRegistry(),
       permissionMode: "ACCEPT_EDITS",
+      onApprovalNeeded: async (call) => {
+        approvalRequests.push(call);
+        return { approved: true };
+      },
     });
 
     const events: AgentEvent[] = [];
@@ -1092,6 +1108,12 @@ await (async () => {
       events.push(event);
     }
 
+    const verifyPermissionRequest = events.find((e) => e.type === "permission.request" && e.call.name === "run_command");
+    check(
+      "the first auto-verify this task is forced through a real ASK, not auto-ALLOW (security audit H3)",
+      verifyPermissionRequest?.type === "permission.request" && verifyPermissionRequest.decision === "ASK"
+    );
+    check("onApprovalNeeded was actually called for the verify command", approvalRequests.some((c) => c.name === "run_command" && c.arguments.command === "npm test"));
     const verifyCall = events.find((e) => e.type === "tool.start" && e.call.name === "run_command");
     check("auto-verify injected a real run_command call after the write succeeded", !!verifyCall);
     check(
@@ -1142,6 +1164,122 @@ await (async () => {
       !events.some((e) => e.type === "tool.start" && e.call.name === "run_command")
     );
     check("the task still completes normally on its own final turn", events.filter((e) => e.type === "done").length === 1);
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+
+  {
+    // Security audit H3: a SECOND write-then-verify within the SAME task
+    // must not ask again once the first one was approved — matching
+    // checkpointAttemptedThisTask's own once-per-task granularity, so the
+    // feature stays usable across an iterative editing task instead of
+    // prompting on every single edit.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-autoverify-repeat-test-"));
+    await fs.writeFile(path.join(tmpDir, "package.json"), JSON.stringify({ name: "x", scripts: { test: "node -e \"process.exit(0)\"" } }), "utf-8");
+
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "a.js" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "a.js", content: "// v1\n" } }] } },
+      { turn: { type: "final", content: "first fix" } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e2", name: "edit_file", arguments: { path: "a.js", content: "// v2\n" } }] } },
+      { turn: { type: "final", content: "second fix" } },
+    ];
+    let approvalCount = 0;
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+      onApprovalNeeded: async () => {
+        approvalCount++;
+        return { approved: true };
+      },
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("fix a.js twice")) events.push(event);
+
+    const verifyPermissionRequests = events.filter((e) => e.type === "permission.request" && e.call.name === "run_command");
+    check("exactly 2 verify attempts happened (one per edit)", verifyPermissionRequests.length === 2);
+    check("the first verify attempt was a real ASK", verifyPermissionRequests[0]?.type === "permission.request" && verifyPermissionRequests[0].decision === "ASK");
+    check("the second verify attempt auto-allows without asking again, this same task", verifyPermissionRequests[1]?.type === "permission.request" && verifyPermissionRequests[1].decision === "ALLOW");
+    check("onApprovalNeeded was only actually invoked once (not for the second, already-approved verify)", approvalCount === 1);
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+
+  {
+    // Security audit H3: if the user REJECTS the first auto-verify ask, the
+    // repo's test script must never run.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-autoverify-rejected-test-"));
+    await fs.writeFile(path.join(tmpDir, "package.json"), JSON.stringify({ name: "x", scripts: { test: "node -e \"process.exit(0)\"" } }), "utf-8");
+
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "a.js" } },
+            { id: "e1", name: "edit_file", arguments: { path: "a.js", content: "// v1\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "done, verify was rejected" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+      onApprovalNeeded: async () => ({ approved: false }),
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("edit a.js")) events.push(event);
+
+    check("no run_command ever actually executed", !events.some((e) => e.type === "tool.start" && e.call.name === "run_command"));
+    const doneEvent = events.find((e) => e.type === "done");
+    check("the task still completes (a rejected verify isn't a hard failure)", doneEvent?.type === "done" && doneEvent.success === true);
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+
+  {
+    // Final review Critical #2, confirmed live: the original H3 fix only
+    // guarded auto-verify's OWN call site — a MODEL issuing
+    // run_command("npm test") directly (e.g. via a prompt injection, or
+    // just because it decided to) was still auto-ALLOWed with zero
+    // approval in every mode, since classifyCommand still put it in
+    // SAFE_READ. This proves the model's own direct call is now gated
+    // exactly the same way, and shares the same once-per-task memo.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-modelcall-projectscript-test-"));
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "npm test" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c2", name: "run_command", arguments: { command: "npm test" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const approvalRequests: ToolCall[] = [];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "AUTO_SAFE",
+      onApprovalNeeded: async (call) => {
+        approvalRequests.push(call);
+        return { approved: true };
+      },
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("run the tests")) events.push(event);
+
+    const permissionRequests = events.filter((e) => e.type === "permission.request" && e.call.name === "run_command");
+    check("a model-issued run_command(\"npm test\") is forced through a real ASK, even in AUTO_SAFE mode", permissionRequests[0]?.type === "permission.request" && permissionRequests[0].decision === "ASK");
+    check("onApprovalNeeded was actually called for the model's own run_command", approvalRequests.length === 1);
+    check("a SECOND model-issued run_command(\"npm test\") this same task auto-allows without asking again", permissionRequests[1]?.type === "permission.request" && permissionRequests[1].decision === "ALLOW");
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   }

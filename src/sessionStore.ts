@@ -35,7 +35,12 @@ function recordPath(sessionsDir: string, id: string): string {
 
 async function writeIndex(sessionsDir: string, entries: SessionIndexEntry[]): Promise<void> {
   await fs.mkdir(sessionsDir, { recursive: true });
-  await fs.writeFile(indexPath(sessionsDir), JSON.stringify(entries, null, 2), "utf-8");
+  // Security audit finding M3: a session's own history can contain file
+  // contents the agent read mid-task (which may include secrets), yet
+  // this was the only place in the codebase writing to disk with no
+  // explicit mode — every settings file holding an API key already uses
+  // 0600 (see anthropicSettings.ts etc.). Match that standard here too.
+  await fs.writeFile(indexPath(sessionsDir), JSON.stringify(entries, null, 2), { encoding: "utf-8", mode: 0o600 });
 }
 
 /** Reconstructs index.json from the directory listing — used when the index is missing or corrupted. Any individual record file that also fails to parse is skipped, not fatal. */
@@ -130,7 +135,7 @@ export async function loadSessionRecord(sessionsDir: string, id: string): Promis
 
 export async function saveSession(sessionsDir: string, record: SessionRecord): Promise<void> {
   await fs.mkdir(sessionsDir, { recursive: true });
-  await fs.writeFile(recordPath(sessionsDir, record.id), JSON.stringify(record, null, 2), "utf-8");
+  await fs.writeFile(recordPath(sessionsDir, record.id), JSON.stringify(record, null, 2), { encoding: "utf-8", mode: 0o600 });
 
   const entries = await listAllSessions(sessionsDir);
   const withoutThis = entries.filter((e) => e.id !== record.id);

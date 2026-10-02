@@ -46,7 +46,26 @@ async function run() {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
+async function runSecurityAuditFixes() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-errorlog-security-test-"));
+  const logFile = path.join(dir, "error.log");
+
+  await appendErrorLog(logFile, { source: "main", kind: "uncaughtException", message: "boom" });
+  if (process.platform !== "win32") {
+    const stat = await fs.stat(logFile);
+    check("the error log is created with owner-only permissions (0600) (security audit M4)", (stat.mode & 0o777) === 0o600);
+  }
+
+  const secretKey = "sk-" + "i".repeat(36);
+  await appendErrorLog(logFile, { source: "main", kind: "fetch failed", message: `request to https://api.example.com?key=${secretKey} failed` });
+  const content = await fs.readFile(logFile, "utf-8");
+  check("a secret accidentally embedded in an error message is redacted before being written (security audit M4)", !content.includes(secretKey));
+
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
 await run();
+await runSecurityAuditFixes();
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -58,5 +58,29 @@ console.log("redactSecrets:");
   check("isProtectedPath is untouched by this change", isProtectedPath(".env") === true && isProtectedPath("src/index.ts") === false);
 }
 
+console.log("\nisProtectedPath is case-insensitive (security audit M5 — APFS/NTFS are case-insensitive by default, so '.GIT/hooks/pre-commit' bypassed the case-sensitive regexes):");
+{
+  check("'.GIT/hooks/pre-commit' (uppercase) is still protected", isProtectedPath(".GIT/hooks/pre-commit") === true);
+  check("'.Git/config' (mixed case) is still protected", isProtectedPath(".Git/config") === true);
+  check("'.ENV' (uppercase) is still protected", isProtectedPath(".ENV") === true);
+  check("'Secrets.YAML' (uppercase) is still protected", isProtectedPath("Secrets.YAML") === true);
+  check("an ordinary non-secret path is still NOT protected", isProtectedPath("src/Index.ts") === false);
+}
+
+console.log("\nredactSecrets covers a bare Gemini API key, not just OpenAI/GitHub prefixes (security audit — Gemini's key rides in the request URL query string, not a header, so any future accidental URL logging needs this):");
+{
+  const geminiKey = "AIzaSy" + "g".repeat(33);
+  const result = redactSecrets(`fetch failed: https://generativelanguage.googleapis.com/v1beta/models/x:generateContent?key=${geminiKey}`);
+  check("redacts a bare AIza-prefixed Gemini key", !result.includes(geminiKey));
+}
+
+console.log("\nredactSecrets covers a PEM private-key body (final review Important #6 — now that a SAFE_READ cat/git-diff escaping an absolute path downgrades to ASK rather than silently auto-running, a human-approved one could still dump a raw key into run_command's output):");
+{
+  const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA1234567890abcdefg\nmoreBase64HereAndHere==\n-----END RSA PRIVATE KEY-----";
+  const result = redactSecrets(`cat output:\n${pem}\ndone`);
+  check("the PEM body is redacted", !result.includes("MIIEpAIBAAKCAQEA1234567890abcdefg"));
+  check("surrounding text survives", result.includes("cat output:") && result.includes("done"));
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

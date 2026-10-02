@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Tool, ToolContext } from "../types.js";
+import { resolveWithinWorkspace } from "../workspacePath.js";
 
 const IGNORE = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "venv", ".venv", "target", "vendor"]);
 
@@ -30,10 +31,20 @@ export const listDirectoryTool: Tool<Input, { entries: string[] }> = {
   },
   async execute(input, ctx: ToolContext) {
     const rel = input.path ?? ".";
-    const abs = path.resolve(ctx.workspaceRoot, rel);
+    const resolvedRoot = await resolveWithinWorkspace(ctx.workspaceRoot, ".");
+    if (!resolvedRoot.ok) {
+      return { ok: false, output: null, error: resolvedRoot.error };
+    }
+    const resolved = await resolveWithinWorkspace(ctx.workspaceRoot, rel);
+    if (!resolved.ok) {
+      return { ok: false, output: null, error: resolved.error };
+    }
     const out: string[] = [];
     try {
-      await walk(abs, ctx.workspaceRoot, 0, 3, out);
+      // Entries stay relative to the WHOLE workspace root (not the listed
+      // subdirectory) — matches this tool's existing behavior; only the
+      // starting point and containment check change.
+      await walk(resolved.abs, resolvedRoot.abs, 0, 3, out);
       return { ok: true, output: { entries: out.slice(0, 500) }, truncated: out.length > 500 };
     } catch (err: any) {
       return { ok: false, output: null, error: err.message };

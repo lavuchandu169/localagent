@@ -15,7 +15,7 @@ import type {
 } from "./types.js";
 import { ProviderChatError } from "./types.js";
 import { ToolRegistry } from "./toolRegistry.js";
-import { PermissionEngine } from "./permissions.js";
+import { PermissionEngine, classifyCommand } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
 import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
@@ -141,6 +141,21 @@ export class AgentSession {
   private gpuStatusReported = false;
   /** Whether THIS task has already attempted its one checkpoint — reset at the start of every run() call. Attempted, not "succeeded": a non-git workspace or any other createCheckpoint failure still marks this true so every subsequent write this task doesn't retry it. */
   private checkpointAttemptedThisTask = false;
+  /** Security audit findings H3 and final-review Critical #2: a
+   * PROJECT_SCRIPT command (`npm test`/`pytest`/`cargo test`/`go test` —
+   * running a repo's own test-runner script, arbitrary repo-defined code)
+   * always evaluates to ASK from permissions.ts's own stateless
+   * perspective, in every mode. This is the once-per-task memo that lets
+   * it stop asking after the first approval THIS task — shared by BOTH
+   * the places a PROJECT_SCRIPT run_command can originate: the model
+   * issuing one directly (the main per-call loop below) and auto-verify
+   * injecting one after a successful edit (autoVerifyAfterEdit). Fixing
+   * only the auto-verify call site (the original H3 fix) left a model
+   * calling run_command("npm test") directly completely unguarded — the
+   * same hole, reachable a different way. Reset at the start of every
+   * run() call, matching checkpointAttemptedThisTask's own once-per-task
+   * granularity. */
+  private projectScriptApprovedThisTask = false;
   /**
    * Whether the model's MOST RECENT attempt at a WRITE-permission tool this
    * task was denied or rejected — reset at the start of every run() call,
@@ -336,7 +351,15 @@ export class AgentSession {
     if (!tool) return false;
 
     const call: ToolCall = { id: `auto_verify_${this.turn}`, name: "run_command", arguments: { command } };
-    const decision = this.permissions.evaluate(call, tool.permission);
+    let decision = this.permissions.evaluate(call, tool.permission);
+    // Security audit finding H3 / final-review Critical #2: detectVerifyCommand's
+    // commands all classify as PROJECT_SCRIPT, which evaluate() always
+    // answers ASK for from its own stateless perspective — running them
+    // means executing this repo's own test-runner script, arbitrary
+    // repo-defined code. This override (shared with the main per-call
+    // loop above, for a model-issued run_command of the same kind) is
+    // what lets it stop asking after the first approval THIS task.
+    if (decision === "ASK" && this.projectScriptApprovedThisTask) decision = "ALLOW";
     yield { type: "permission.request", call, decision };
     this.messages.push({ role: "assistant", content: "", tool_calls: [call] });
 
@@ -360,6 +383,7 @@ export class AgentSession {
         });
         return true;
       }
+      this.projectScriptApprovedThisTask = true;
     }
 
     this.state = "EXECUTING_TOOL";
@@ -391,6 +415,7 @@ export class AgentSession {
     this.opts.fallbackProviders = this.originalFallbackProviders ? [...this.originalFallbackProviders] : this.originalFallbackProviders;
     this.state = "THINKING";
     this.checkpointAttemptedThisTask = false;
+    this.projectScriptApprovedThisTask = false;
     this.wroteThisTask = false;
     this.anyWriteSucceededThisTask = false;
     this.writeSucceededSinceLastVerify = false;
@@ -623,6 +648,16 @@ export class AgentSession {
           // otherwise auto-allow writes.
           decision = "ASK";
         }
+        // Final review Critical #2: permissions.ts's own evaluate() always
+        // returns ASK for a PROJECT_SCRIPT command (running a repo's own
+        // test runner) — this is the once-per-task override that lets a
+        // MODEL-issued run_command("npm test") stop asking after the
+        // first approval this task, same memo autoVerifyAfterEdit shares
+        // below. Without this, the model's own direct call was the one
+        // path the original H3 fix never covered.
+        if (decision === "ASK" && call.name === "run_command" && classifyCommand(String(call.arguments.command ?? "")) === "PROJECT_SCRIPT" && this.projectScriptApprovedThisTask) {
+          decision = "ALLOW";
+        }
         const diff = await this.computeEditDiffForCall(call);
         yield diff ? { type: "permission.request", call, decision, diff } : { type: "permission.request", call, decision };
 
@@ -649,6 +684,9 @@ export class AgentSession {
               content: JSON.stringify({ ok: false, error: "User rejected this action." }),
             });
             continue;
+          }
+          if (call.name === "run_command" && classifyCommand(String(call.arguments.command ?? "")) === "PROJECT_SCRIPT") {
+            this.projectScriptApprovedThisTask = true;
           }
           // A genuinely PARTIAL hunk selection rewrites the arguments actually
           // handed to tool.execute below — the model's own turn history (the
