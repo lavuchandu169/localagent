@@ -58,5 +58,21 @@ console.log("redactSecrets:");
   check("isProtectedPath is untouched by this change", isProtectedPath(".env") === true && isProtectedPath("src/index.ts") === false);
 }
 
+console.log("\nisProtectedPath is case-insensitive (security audit M5 — APFS/NTFS are case-insensitive by default, so '.GIT/hooks/pre-commit' bypassed the case-sensitive regexes):");
+{
+  check("'.GIT/hooks/pre-commit' (uppercase) is still protected", isProtectedPath(".GIT/hooks/pre-commit") === true);
+  check("'.Git/config' (mixed case) is still protected", isProtectedPath(".Git/config") === true);
+  check("'.ENV' (uppercase) is still protected", isProtectedPath(".ENV") === true);
+  check("'Secrets.YAML' (uppercase) is still protected", isProtectedPath("Secrets.YAML") === true);
+  check("an ordinary non-secret path is still NOT protected", isProtectedPath("src/Index.ts") === false);
+}
+
+console.log("\nredactSecrets covers a bare Gemini API key, not just OpenAI/GitHub prefixes (security audit — Gemini's key rides in the request URL query string, not a header, so any future accidental URL logging needs this):");
+{
+  const geminiKey = "AIzaSy" + "g".repeat(33);
+  const result = redactSecrets(`fetch failed: https://generativelanguage.googleapis.com/v1beta/models/x:generateContent?key=${geminiKey}`);
+  check("redacts a bare AIza-prefixed Gemini key", !result.includes(geminiKey));
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
