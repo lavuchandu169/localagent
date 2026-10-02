@@ -345,8 +345,20 @@ export async function revertSessionCheckpoint(registry: SessionRegistry, session
   if (entry.running) return { ok: false, error: "Can't revert while a task is running." };
   const hash = entry.session.getCheckpointHash();
   if (!hash) return { ok: false, error: "No checkpoint available for this session." };
-  await revertToCheckpoint(entry.session.getWorkspaceRoot(), hash);
-  return { ok: true };
+  // Correctness audit finding (session Medium #3): a checkpoint is a
+  // deliberately dangling, unreferenced git commit (see checkpoints.ts's
+  // own doc comment — "eventually GC'd"), so revertToCheckpoint can
+  // genuinely fail for reasons outside this function's control (the
+  // commit got pruned, a git subprocess error) — same shape of failure
+  // getSessionChanges below already guards against. Without this, that
+  // failure propagated as an unhandled rejection instead of the clear
+  // {ok:false, error} this function's own return type promises.
+  try {
+    await revertToCheckpoint(entry.session.getWorkspaceRoot(), hash);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**

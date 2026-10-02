@@ -940,6 +940,48 @@ await (async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 })();
 
+console.log("\nsetWorkspaceRoot clears a stale checkpoint hash (correctness audit: session Medium #3):");
+await (async () => {
+  // A checkpoint hash is a commit hash inside a SPECIFIC git repo — moving
+  // to a different workspace mid-session (via "Edit settings…") without
+  // clearing it would leave revertSessionCheckpoint trying to check out a
+  // commit hash from the OLD repo inside the NEW one, which almost always
+  // throws (unknown revision / not the right repo).
+  const execFileAsync = promisify(execFile);
+  const git = async (cwd: string, args: string[]) => (await execFileAsync("git", args, { cwd })).stdout.trim();
+  const repoA = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-workspaceswitch-a-"));
+  await git(repoA, ["init", "-q"]);
+  await git(repoA, ["config", "user.email", "t@t.com"]);
+  await git(repoA, ["config", "user.name", "T"]);
+  await fs.writeFile(path.join(repoA, "a.txt"), "v1\n", "utf-8");
+  await git(repoA, ["add", "-A"]);
+  await git(repoA, ["commit", "-q", "-m", "initial"]);
+  const repoB = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-workspaceswitch-b-"));
+
+  const script: ChatResponse[] = [
+    { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v2\n" } }] } },
+    { turn: { type: "final", content: "done" } },
+  ];
+  const session = new AgentSession({
+    workspaceRoot: repoA,
+    model: "mock",
+    provider: new MockProvider(script),
+    tools: defaultToolRegistry(),
+    permissionMode: "ACCEPT_EDITS",
+    onApprovalNeeded: async () => ({ approved: true }),
+  });
+  for await (const _event of session.run("edit a.txt")) {
+    /* drain */
+  }
+  check("a real checkpoint exists in repoA before switching workspace", typeof session.getCheckpointHash() === "string");
+
+  session.setWorkspaceRoot(repoB);
+  check("getCheckpointHash() is cleared to null after switching workspace — the old hash belongs to a different repo", session.getCheckpointHash() === null);
+
+  await fs.rm(repoA, { recursive: true, force: true });
+  await fs.rm(repoB, { recursive: true, force: true });
+})();
+
 console.log("\nCorrective nudge — a 'create X' task answered with code-in-prose instead of a real edit_file call:");
 await (async () => {
   // A throwaway temp dir, not fixture-repo — this scenario actually writes

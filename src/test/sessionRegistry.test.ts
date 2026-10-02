@@ -1001,6 +1001,70 @@ await (async () => {
   }
 
   {
+    // Correctness audit finding (session Medium #3): revertSessionCheckpoint
+    // had no try/catch around revertToCheckpoint, unlike getSessionChanges'
+    // own identical-shaped call a few lines below it — any real failure
+    // (not just the workspace-switch case setWorkspaceRoot now prevents by
+    // clearing checkpointHash) propagated as an unhandled rejection
+    // instead of the clear {ok:false, error} this function's own return
+    // type promises. Reproduced with a REAL failure mode, not a mock: a
+    // checkpoint is a deliberately dangling, unreferenced git commit (see
+    // checkpoints.ts's own doc comment — "eventually GC'd"), so an
+    // aggressive gc can genuinely prune it out from under a later revert.
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessionregistry-checkpoint-gc-test-"));
+    const execFileAsync2 = promisify(execFile);
+    const git2 = async (args: string[]) => (await execFileAsync2("git", args, { cwd: repo })).stdout.trim();
+    await git2(["init", "-q"]);
+    await git2(["config", "user.email", "t@t.com"]);
+    await git2(["config", "user.name", "T"]);
+    await fs.writeFile(path.join(repo, "a.txt"), "v1\n", "utf-8");
+    await git2(["add", "-A"]);
+    await git2(["commit", "-q", "-m", "initial"]);
+
+    const registry = createSessionRegistry(sessionsDir);
+    // read_file first, matching this file's established pattern — edit_file
+    // on a path never read this session gets ASKed even in ACCEPT_EDITS
+    // (the read-before-write override), and nothing here answers that ask.
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "a.txt" } },
+            { id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v2\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot: repo, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    await runTask(registry, sessionId, "bump the file", () => {});
+    check("a real checkpoint exists", typeof getCheckpointHash(registry, sessionId) === "string");
+
+    // Prune the dangling checkpoint commit out from under the session —
+    // a real, reproducible way revertToCheckpoint can genuinely fail
+    // without any test-only hook or mock.
+    await git2(["reflog", "expire", "--expire=now", "--all"]);
+    await git2(["gc", "--prune=now"]);
+
+    let threw = false;
+    let revertResult: { ok: boolean; error?: string } | undefined;
+    try {
+      revertResult = await revertSessionCheckpoint(registry, sessionId);
+    } catch {
+      threw = true;
+    }
+    check("revertSessionCheckpoint never throws uncaught — it returns {ok:false, error} like getSessionChanges already does", !threw);
+    check("the failure is reported with a real error message, not silently swallowed either", revertResult?.ok === false && !!revertResult.error);
+
+    await fs.rm(repo, { recursive: true, force: true });
+  }
+
+  {
     const registry = createSessionRegistry(sessionsDir);
     const noSession = await getSessionChanges(registry, "nope");
     check("getSessionChanges returns ok:false for an unknown session id", noSession.ok === false && !!noSession.error);

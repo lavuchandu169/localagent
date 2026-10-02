@@ -222,6 +222,13 @@ export class AgentSession {
    */
   setWorkspaceRoot(workspaceRoot: string): void {
     this.opts.workspaceRoot = workspaceRoot;
+    // Correctness audit finding (session Medium #3): a checkpoint hash is
+    // a commit inside a SPECIFIC git repo — carrying it over into a
+    // different workspace would make a later revert try to check out
+    // that hash inside the WRONG repo, which almost always throws
+    // (unknown revision / not a git repo at all). The old checkpoint is
+    // simply inapplicable here, not something to silently keep offering.
+    this.checkpointHash = null;
   }
 
   /** The workspace a checkpoint hash (see getCheckpointHash) needs to be reverted against — reads the same live opts.workspaceRoot setWorkspaceRoot mutates, so this is never stale even after a mid-session workspace edit. */
