@@ -95,6 +95,8 @@ interface SessionRecord {
   mode: PermissionMode | null;
   planFirst: boolean;
   checkpointHash: string | null;
+  /** Final-review finding C3 — see sessionStore.ts's SessionRecord for why this must travel paired with checkpointHash. */
+  checkpointWorkspaceRoot: string | null;
 }
 
 interface ResumePayload {
@@ -105,6 +107,7 @@ interface ResumePayload {
   createdAt: number;
   ownerEmail: string | null;
   checkpointHash: string | null;
+  checkpointWorkspaceRoot: string | null;
 }
 
 /** The live, in-memory shape of an active session — see getLiveSessionSnapshot in sessionRegistry.ts. Unlike SessionRecord, this is available even for a session that hasn't run a task (and so hasn't hit disk) yet. */
@@ -2450,6 +2453,14 @@ async function applySessionEdits(): Promise<void> {
       createdAt: snapshot.createdAt,
       ownerEmail: snapshot.ownerEmail,
       checkpointHash,
+      // Final-review finding C3: the workspace this checkpoint was
+      // actually read from (snapshot.workspaceRoot, the live session's
+      // CURRENT workspace at the moment getCheckpoint ran above) — if the
+      // user also changed the workspace field in this same edit, the new
+      // session starts somewhere this hash doesn't belong, and
+      // startSession must refuse to restore it rather than risk a revert
+      // against the wrong repo.
+      checkpointWorkspaceRoot: checkpointHash ? snapshot.workspaceRoot : null,
     });
   } finally {
     tab.editingSession = false;
@@ -2801,6 +2812,10 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
       // checkpoint never survives an app restart — "Revert this task"
       // silently becomes unavailable with no indication to the user.
       checkpointHash: diskRecord.checkpointHash,
+      // Final-review finding C3: paired with checkpointHash so
+      // startSession can refuse to restore it if this tab's workspace
+      // ends up differing from where the checkpoint was actually made.
+      checkpointWorkspaceRoot: diskRecord.checkpointWorkspaceRoot,
     });
     tab.title = diskRecord.title;
     renderTabStrip();

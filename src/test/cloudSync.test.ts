@@ -29,6 +29,7 @@ function makeRecord(id: string, updatedAt: number, lastSyncCheckpoint: SessionRe
     mode: null,
     planFirst: false,
     checkpointHash: null,
+    checkpointWorkspaceRoot: null,
     lastSyncCheckpoint,
   };
 }
@@ -141,6 +142,7 @@ console.log("\nuploadSession — strips image/text attachments before upload:");
     mode: null,
     planFirst: false,
     checkpointHash: null,
+    checkpointWorkspaceRoot: null,
     lastSyncCheckpoint: null,
   };
 
@@ -192,6 +194,7 @@ console.log("\nuploadSession — a message with no attachments round-trips unaff
     mode: null,
     planFirst: false,
     checkpointHash: null,
+    checkpointWorkspaceRoot: null,
     lastSyncCheckpoint: null,
   };
 

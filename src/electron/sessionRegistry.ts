@@ -53,6 +53,8 @@ export interface ResumePayload {
   ownerEmail: string | null;
   /** Correctness audit finding (session High #2): without this, a resumed session always starts with no checkpoint — "Revert this task" silently disappears across an app restart. Null for a session that never took one. */
   checkpointHash: string | null;
+  /** Final-review finding C3: the workspace checkpointHash was actually made in — startSession only restores the hash when this matches the workspace the session is about to run in (config.workspaceRoot below), refusing it outright otherwise rather than risking a revert against the wrong repo. See SessionRecord.checkpointWorkspaceRoot. */
+  checkpointWorkspaceRoot: string | null;
 }
 
 /** Best-effort cloud sync wiring, supplied by main.ts. uploadSession/deleteRemoteSession default to the real Drive-backed implementations — tests override them directly instead of faking fetch. */
@@ -270,7 +272,18 @@ export async function startSession(
       }),
     fallbackProviders,
     providerLabel,
-    initialCheckpointHash: deps.resume?.checkpointHash ?? null,
+    // Final-review finding C3: only restore the checkpoint when it was
+    // actually made in THIS workspace — a resumed session or a
+    // provider-change mid-session restart can land in a workspace the
+    // old checkpoint hash doesn't belong to at all (SessionRecord never
+    // used to persist workspaceRoot, so a resume just runs in whatever
+    // the tab currently shows). Usually a mismatched hash just makes a
+    // later `git checkout` fail, but git worktrees of the same repo share
+    // one object database — there it can resolve successfully in the
+    // WRONG worktree and overwrite its files. A legacy record (no
+    // checkpointWorkspaceRoot recorded at all) is treated as "unknown",
+    // which never matches, same safe default as discarding the checkpoint.
+    initialCheckpointHash: deps.resume && deps.resume.checkpointWorkspaceRoot === workspaceRoot ? deps.resume.checkpointHash : null,
   });
 
   // Fixed once here: a resumed session keeps its original owner regardless
@@ -436,6 +449,7 @@ async function persistSession(registry: SessionRegistry, sessionId: string, entr
   // finishes (which would force every single reconcile pass back onto the
   // less-robust updatedAt-fallback comparison).
   const existing = await loadSessionRecord(registry.sessionsDir, sessionId);
+  const checkpointHash = entry.session.getCheckpointHash();
   const record: SessionRecord = {
     id: sessionId,
     title: entry.title ?? "(untitled)",
@@ -452,7 +466,14 @@ async function persistSession(registry: SessionRegistry, sessionId: string, entr
     provider: entry.providerConfig,
     mode: entry.session.getPermissionMode(),
     planFirst: entry.session.getPlanFirst(),
-    checkpointHash: entry.session.getCheckpointHash(),
+    checkpointHash,
+    // Final-review finding C3: paired with checkpointHash so a later
+    // resume/restart can refuse to restore it into a different workspace
+    // — see SessionRecord's own doc comment. getWorkspaceRoot() is the
+    // SAME live value setWorkspaceRoot keeps in lock-step with the
+    // checkpoint (it clears the hash on any real change), so this is
+    // never stale relative to checkpointHash above.
+    checkpointWorkspaceRoot: checkpointHash ? entry.session.getWorkspaceRoot() : null,
     lastSyncCheckpoint: existing?.lastSyncCheckpoint ?? null,
   };
   await saveSession(registry.sessionsDir, record);

@@ -644,7 +644,7 @@ await (async () => {
       { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
       {
         providerFactory: () => new MockProvider([]),
-        resume: { sessionId, initialMessages: [{ role: "system", content: "sys" }], priorEvents: [], title: "t", createdAt: Date.now(), ownerEmail: null, checkpointHash: null },
+        resume: { sessionId, initialMessages: [{ role: "system", content: "sys" }], priorEvents: [], title: "t", createdAt: Date.now(), ownerEmail: null, checkpointHash: null, checkpointWorkspaceRoot: null },
       }
     );
     check("starting a new session under the same just-cancelled id succeeds", restarted.sessionId === sessionId);
@@ -752,6 +752,7 @@ await (async () => {
           createdAt: 12345,
           ownerEmail: null,
           checkpointHash: null,
+          checkpointWorkspaceRoot: null,
         },
       }
     );
@@ -1069,6 +1070,7 @@ await (async () => {
           createdAt: Date.now(),
           ownerEmail: "original-owner@example.com",
           checkpointHash: null,
+          checkpointWorkspaceRoot: null,
         },
       }
     );
@@ -1521,6 +1523,7 @@ await (async () => {
           createdAt: saved!.createdAt,
           ownerEmail: saved!.ownerEmail,
           checkpointHash: saved!.checkpointHash,
+          checkpointWorkspaceRoot: saved!.checkpointWorkspaceRoot,
         },
       }
     );
@@ -1528,8 +1531,81 @@ await (async () => {
       "resuming from the persisted record restores getCheckpointHash() to the real checkpoint, not null",
       registry2.sessions.get(sessionId)?.session.getCheckpointHash() === saved?.checkpointHash
     );
+    check(
+      "the persisted record's checkpointWorkspaceRoot matches the workspace the checkpoint was actually made in (final-review finding C3)",
+      saved?.checkpointWorkspaceRoot === repo
+    );
 
     await fs.rm(repo, { recursive: true, force: true });
+  }
+
+  console.log("\nstartSession refuses to restore a checkpoint into a DIFFERENT workspace than it was made in (final-review finding C3):");
+  {
+    // The exact bug this closes: a checkpoint hash is a commit inside a
+    // SPECIFIC git repo. Resuming (or a provider-change mid-session
+    // restart) into some OTHER workspace with the old hash still attached
+    // must not carry it over — usually that just makes a later revert
+    // fail with "unknown revision", but git worktrees of the same
+    // repository share one object database, where the hash can resolve
+    // successfully in the WRONG worktree and overwrite its files.
+    const execFileAsync = promisify(execFile);
+    const repoA = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-checkpoint-workspace-a-"));
+    const repoB = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-checkpoint-workspace-b-"));
+    for (const repo of [repoA, repoB]) {
+      await execFileAsync("git", ["init", "-q"], { cwd: repo });
+      await execFileAsync("git", ["config", "user.email", "t@t.com"], { cwd: repo });
+      await execFileAsync("git", ["config", "user.name", "T"], { cwd: repo });
+      // createCheckpoint needs at least one real commit (it diffs against
+      // HEAD) — an empty repo with zero commits always returns null.
+      await fs.writeFile(path.join(repo, "seed.txt"), "seed\n", "utf-8");
+      await execFileAsync("git", ["add", "-A"], { cwd: repo });
+      await execFileAsync("git", ["commit", "-q", "-m", "seed"], { cwd: repo });
+    }
+
+    const registry = createSessionRegistry(sessionsDir);
+    // read_file first, matching this file's own established pattern —
+    // edit_file on a path never read this session gets ASKed even in
+    // ACCEPT_EDITS (the read-before-write override), and this test has no
+    // onApprovalNeeded wired up to ever answer that ask.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "a.txt" } }, { id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v1\n" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot: repoA, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    await runTask(registry, sessionId, "make a.txt", () => {});
+    const saved = await loadSessionRecord(sessionsDir, sessionId);
+    check("a real checkpoint was persisted, paired with repoA as its workspace", typeof saved?.checkpointHash === "string" && saved.checkpointWorkspaceRoot === repoA);
+
+    // Resume the SAME session id, but into repoB this time.
+    const registry2 = createSessionRegistry(sessionsDir);
+    await startSession(
+      registry2,
+      { workspaceRoot: repoB, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      {
+        providerFactory: () => new MockProvider([]),
+        resume: {
+          sessionId,
+          initialMessages: saved!.messages,
+          priorEvents: saved!.events,
+          title: saved!.title,
+          createdAt: saved!.createdAt,
+          ownerEmail: saved!.ownerEmail,
+          checkpointHash: saved!.checkpointHash,
+          checkpointWorkspaceRoot: saved!.checkpointWorkspaceRoot,
+        },
+      }
+    );
+    check(
+      "the checkpoint is NOT restored into the mismatched workspace — getCheckpointHash() is null, not the old repoA hash",
+      registry2.sessions.get(sessionId)?.session.getCheckpointHash() === null
+    );
+
+    await fs.rm(repoA, { recursive: true, force: true });
+    await fs.rm(repoB, { recursive: true, force: true });
   }
 
   await fs.rm(sessionsDir, { recursive: true, force: true });

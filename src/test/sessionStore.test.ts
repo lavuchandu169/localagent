@@ -41,6 +41,7 @@ function makeRecord(id: string, title: string, updatedAt: number, extra: Partial
     mode: null,
     planFirst: false,
     checkpointHash: null,
+    checkpointWorkspaceRoot: null,
     lastSyncCheckpoint: null,
     ...extra,
   };
@@ -170,6 +171,7 @@ console.log("\nSessionRecord persists provider/mode/planFirst/checkpointHash, so
     mode: "PLAN",
     planFirst: true,
     checkpointHash: "abc123def456",
+    checkpointWorkspaceRoot: "/repo/a",
   });
   await saveSession(sessionsDir, record);
   const loaded = await loadSessionRecord(sessionsDir, "persist-1");
@@ -177,6 +179,11 @@ console.log("\nSessionRecord persists provider/mode/planFirst/checkpointHash, so
   check("mode round-trips", loaded?.mode === "PLAN");
   check("planFirst round-trips", loaded?.planFirst === true);
   check("checkpointHash round-trips", loaded?.checkpointHash === "abc123def456");
+  // Final-review finding C3: checkpointWorkspaceRoot must round-trip
+  // alongside checkpointHash — a lone checkpointHash with no paired
+  // workspace is exactly the gap that let a resume/restart apply it in
+  // the wrong repo.
+  check("checkpointWorkspaceRoot round-trips alongside checkpointHash", loaded?.checkpointWorkspaceRoot === "/repo/a");
   await fs.rm(sessionsDir, { recursive: true, force: true });
 }
 {
@@ -202,6 +209,7 @@ console.log("\nSessionRecord persists provider/mode/planFirst/checkpointHash, so
   check("mode defaults to null", loaded?.mode === null);
   check("planFirst defaults to false", loaded?.planFirst === false);
   check("checkpointHash defaults to null", loaded?.checkpointHash === null);
+  check("checkpointWorkspaceRoot defaults to null", loaded?.checkpointWorkspaceRoot === null);
   await fs.rm(sessionsDir, { recursive: true, force: true });
 }
 

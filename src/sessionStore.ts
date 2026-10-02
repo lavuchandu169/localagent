@@ -43,6 +43,25 @@ export interface SessionRecord {
   /** Correctness audit finding (session High #2): without this, a checkpoint never survives an app restart — "Revert this task" silently becomes unavailable the moment the app is closed and reopened, with no indication to the user that the capability (and the now-or-never window to use it) just disappeared. */
   checkpointHash: string | null;
   /**
+   * Final-review finding C3: a checkpoint hash is a commit inside a
+   * SPECIFIC git repo — nothing paired it with WHICH workspace that was,
+   * so a resumed session (which runs in whatever workspace the tab
+   * currently shows, since SessionRecord never persisted workspaceRoot
+   * itself) or a provider-change mid-session restart could carry an old
+   * checkpoint hash into an unrelated current workspace. Usually that
+   * just makes `git checkout <hash>` fail ("unknown revision"), but git
+   * worktrees of the same repository share one object database — there,
+   * the hash can resolve successfully in a DIFFERENT worktree than the
+   * one it was made in, and reverting would overwrite that worktree's
+   * files (including deleting untracked ones) instead of refusing
+   * outright. sessionRegistry.ts's startSession only restores
+   * checkpointHash when this matches the workspace the session is
+   * actually about to run in; null (a legacy record saved before this
+   * field existed) is treated as "unknown" and never matches, same safe
+   * default as discarding the checkpoint outright.
+   */
+  checkpointWorkspaceRoot: string | null;
+  /**
    * Correctness audit finding (session Medium #1): cloud sync's merge used
    * to compare `updatedAt` directly across devices — two wall clocks that
    * can disagree (clock skew), which can make an actually-older edit look
@@ -58,7 +77,7 @@ export interface SessionRecord {
    * updatedAt-vs-updatedAt comparison for exactly one pass in that case,
    * then seeds this field so every subsequent pass uses the robust path.
    * Deliberately NOT uploaded to Drive (see cloudSync.ts's
-   * stripLocalOnlyFieldsForUpload) — it's this device's own bookkeeping
+   * cloudSync.ts's prepareRecordForUpload) — it's this device's own bookkeeping
    * about ITS OWN last sync, and would corrupt another device's identical
    * bookkeeping about its own if it were ever pulled down.
    */
@@ -251,6 +270,7 @@ export async function loadSessionRecord(sessionsDir: string, id: string): Promis
       mode: r.mode ?? null,
       planFirst: r.planFirst ?? false,
       checkpointHash: r.checkpointHash ?? null,
+      checkpointWorkspaceRoot: r.checkpointWorkspaceRoot ?? null,
       lastSyncCheckpoint: r.lastSyncCheckpoint ?? null,
     };
   } catch {
