@@ -6,6 +6,7 @@ import type {
   AttachedImage,
   AttachedText,
   ChatMessage,
+  ChatResponse,
   ModelProvider,
   PermissionMode,
   PermissionResponse,
@@ -132,6 +133,12 @@ export class AgentSession {
   private readPaths = new Set<string>();
   /** The most recent task's checkpoint (see createCheckpoint) — one per task, not a deep undo stack. Overwritten the next time a task actually makes its first non-read tool call; a task that never writes anything leaves the previous task's checkpoint as the current "revert" target. */
   private checkpointHash: string | null = null;
+  /** Reported once, right after the first successful provider call —
+   * never re-checked on later turns. Only the embedded provider sets
+   * this (see embeddedLlama.ts's own gpuStatus field, Task 7), but this
+   * code is generic: it reports whatever ModelProvider.gpuStatus says,
+   * for any provider that has one. */
+  private gpuStatusReported = false;
   /** Whether THIS task has already attempted its one checkpoint — reset at the start of every run() call. Attempted, not "succeeded": a non-git workspace or any other createCheckpoint failure still marks this true so every subsequent write this task doesn't retry it. */
   private checkpointAttemptedThisTask = false;
   /**
@@ -403,14 +410,40 @@ export class AgentSession {
       yield { type: "status", message: `Turn ${this.turn + 1}: thinking...` };
 
       let response;
+      let streamedAnything = false;
       try {
-        response = await this.opts.provider.chat({
-          model: this.opts.model,
-          messages: this.messages,
-          tools: this.opts.tools.toSchema(),
-        });
+        if (this.opts.provider.chatStream) {
+          let gotDone: ChatResponse | undefined;
+          for await (const streamEvent of this.opts.provider.chatStream({
+            model: this.opts.model,
+            messages: this.messages,
+            tools: this.opts.tools.toSchema(),
+          })) {
+            if (streamEvent.type === "done") {
+              gotDone = streamEvent.response;
+              break;
+            }
+            streamedAnything = true;
+            if (streamEvent.type === "text") {
+              yield { type: "text.delta", text: streamEvent.text };
+            } else if (streamEvent.type === "tool_call_start") {
+              yield { type: "tool_call.start", index: streamEvent.index, name: streamEvent.name };
+            } else if (streamEvent.type === "tool_call_delta") {
+              yield { type: "tool_call.delta", index: streamEvent.index, argumentsDelta: streamEvent.argumentsDelta };
+            }
+          }
+          if (!gotDone) throw new Error("Provider's chatStream ended without a final 'done' event.");
+          response = gotDone;
+        } else {
+          response = await this.opts.provider.chat({
+            model: this.opts.model,
+            messages: this.messages,
+            tools: this.opts.tools.toSchema(),
+          });
+        }
       } catch (err: any) {
         if (err instanceof ProviderChatError && err.retryable && this.opts.fallbackProviders?.length) {
+          if (streamedAnything) yield { type: "stream.reset" };
           const next = this.opts.fallbackProviders.shift()!;
           const fromLabel = this.opts.providerLabel ?? "the current provider";
           yield { type: "status", message: `${fromLabel} hit a rate limit — retrying on ${next.label}...` };
@@ -423,6 +456,12 @@ export class AgentSession {
         yield { type: "error", message: `Model provider error: ${err.message}` };
         yield { type: "done", success: false, summary: "Provider error." };
         return;
+      }
+
+      if (!this.gpuStatusReported) {
+        this.gpuStatusReported = true;
+        const gpuStatus = (this.opts.provider as { gpuStatus?: string }).gpuStatus;
+        if (typeof gpuStatus === "string") yield { type: "status", message: gpuStatus };
       }
 
       // Reported unconditionally whenever the provider's response carries

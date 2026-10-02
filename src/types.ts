@@ -81,6 +81,12 @@ export interface ChatResponse {
   raw?: unknown;
 }
 
+export type StreamEvent =
+  | { type: "text"; text: string }
+  | { type: "tool_call_start"; index: number; name: string }
+  | { type: "tool_call_delta"; index: number; argumentsDelta: string }
+  | { type: "done"; response: ChatResponse };
+
 /** healthCheck's result: `ok:false` always carries the real failure reason — the underlying error message, not a bare boolean — so a caller can show the user something more useful than "health check failed". */
 export type HealthCheckResult = { ok: true } | { ok: false; error: string };
 
@@ -108,6 +114,13 @@ export interface ModelProvider {
   listModels(): Promise<ModelInfo[]>;
   healthCheck(): Promise<HealthCheckResult>;
   chat(request: ChatRequest): Promise<ChatResponse>;
+  /** Optional incremental-rendering side channel — see StreamEvent. When
+   * present, agent.ts calls this instead of chat(), driving it with
+   * `for await` and yielding a corresponding AgentEvent per StreamEvent.
+   * The final `done` event's response is identical in shape to what
+   * chat() would return for the same input — streaming never changes
+   * what's persisted to session history, only what's rendered live. */
+  chatStream?(request: ChatRequest): AsyncGenerator<StreamEvent>;
   /** Releases any local native resources (loaded model weights, KV cache/context). Optional — only providers holding local resources (the embedded provider) implement it; remote providers have nothing to release. */
   dispose?(): Promise<void>;
 }
@@ -140,13 +153,18 @@ export type ProposedPlan =
 export type AgentEvent =
   | { type: "status"; message: string }
   | { type: "text"; text: string }
+  | { type: "text.delta"; text: string }
   | { type: "tool.start"; call: ToolCall }
+  | { type: "tool_call.start"; index: number; name: string }
+  | { type: "tool_call.delta"; index: number; argumentsDelta: string }
   | { type: "tool.result"; call: ToolCall; result: ToolResult }
   | { type: "permission.request"; call: ToolCall; decision: PermissionDecision; diff?: Change[] }
   | { type: "checkpoint.created"; checkpointHash: string }
   | { type: "plan.proposed"; plan: ProposedPlan }
   /** One real API call's token cost, whenever the provider's response reports it — see ChatResponse.usage. Carries `model` since a single session's cost depends on which Claude model actually served each turn. */
   | { type: "usage"; model: string; inputTokens: number; outputTokens: number }
+  /** Ephemeral UI-only signal: discard whatever partial text/tool-card state is being built for the current turn — a provider-fallback retry after a mid-stream failure fires this before its own "retrying..." status message, so the fallback's fresh output never visually mixes with the failed provider's partial one. */
+  | { type: "stream.reset" }
   | { type: "done"; success: boolean; summary: string }
   | { type: "error"; message: string }
   /** Renderer-only, never emitted by the agent itself: pushed into a tab's own event history the moment a task is sent, purely so replaying that history (switching away from a tab mid-task and back) reproduces the user's own sent message, not just the agent's side of it. Never persisted to disk — sessionRegistry's own event stream has no equivalent and doesn't need one. */
