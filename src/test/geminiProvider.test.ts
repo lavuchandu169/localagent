@@ -181,5 +181,69 @@ console.log("\nGemini provider classifies RESOURCE_EXHAUSTED as retryable:");
   }
 }
 
+console.log("\nGeminiProvider.chatStream:");
+{
+  const sseBody =
+    'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}\n\n' + 'data: {"candidates":[{"content":{"parts":[{"text":" world"}]}}]}\n\n';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    check("requests :streamGenerateContent with alt=sse, not :generateContent", url.includes(":streamGenerateContent") && url.includes("alt=sse"));
+    return new Response(sseBody, { status: 200 });
+  }) as typeof fetch;
+  try {
+    const provider = new GeminiProvider({ apiKey: "test-key" });
+    const seen: any[] = [];
+    for await (const e of provider.chatStream!({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "hi" }] })) seen.push(e);
+    const textEvents = seen.filter((e) => e.type === "text");
+    check("yields a text StreamEvent per streamed text part", textEvents.length === 2 && textEvents[0].text === "Hello" && textEvents[1].text === " world");
+    const done = seen.find((e) => e.type === "done");
+    check("the terminal done event assembles the full text", done?.response.turn.type === "final" && done.response.turn.content === "Hello world");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+{
+  // Gemini's own real limitation (Developer API, not Vertex): a
+  // functionCall part always arrives fully formed in a single chunk —
+  // never split into a separate "name known" moment and later argument
+  // fragments. Per spec, this means NO tool_call_start/tool_call_delta at
+  // all for this call — it surfaces only through the terminal done event,
+  // exactly like a non-streaming response would.
+  const sseBody = 'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file","args":{"path":"a.txt"}}}]}}]}\n\n';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(sseBody, { status: 200 })) as typeof fetch;
+  try {
+    const provider = new GeminiProvider({ apiKey: "test-key" });
+    const seen: any[] = [];
+    for await (const e of provider.chatStream!({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "read a.txt" }], tools: [] })) seen.push(e);
+    check("never emits tool_call_start for Gemini (no genuine 'name known early' moment exists)", !seen.some((e) => e.type === "tool_call_start"));
+    check("never emits tool_call_delta for Gemini", !seen.some((e) => e.type === "tool_call_delta"));
+    const done = seen.find((e) => e.type === "done");
+    check("the tool call still surfaces correctly through the terminal done event", done?.response.turn.type === "tool_calls" && done.response.turn.toolCalls[0]?.name === "read_file");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: { message: "quota exceeded", status: "RESOURCE_EXHAUSTED" } }), { status: 429 })) as typeof fetch;
+  try {
+    const provider = new GeminiProvider({ apiKey: "test-key" });
+    let threw: any = null;
+    try {
+      for await (const _e of provider.chatStream!({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "hi" }] })) {
+        // no-op
+      }
+    } catch (err) {
+      threw = err;
+    }
+    check("a non-200 response throws a ProviderChatError, same as chat()", threw instanceof ProviderChatError && threw.retryable === true);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

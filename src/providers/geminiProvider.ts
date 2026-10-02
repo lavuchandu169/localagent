@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
-import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, StreamEvent, ToolCall } from "../types.js";
 import { ProviderChatError } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
+import { parseSseLines } from "./sseLines.js";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -175,5 +176,59 @@ export class GeminiProvider implements ModelProvider {
 
     const data: any = await res.json();
     return fromGeminiResult(data);
+  }
+
+  async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
+    const { systemInstruction, contents } = toGeminiContents(request.messages);
+    const tools = toGeminiTools(request.tools);
+    const body = {
+      contents,
+      ...(systemInstruction ? { systemInstruction } : {}),
+      ...(tools ? { tools } : {}),
+    };
+
+    const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const data: any = await res.json().catch(() => ({}));
+      const geminiStatus = data?.error?.status;
+      throw new ProviderChatError(data?.error?.message ?? `Gemini error ${res.status}`, {
+        status: res.status,
+        retryable: res.status === 429 || geminiStatus === "RESOURCE_EXHAUSTED",
+      });
+    }
+
+    let text = "";
+    const toolCalls: ToolCall[] = [];
+    for await (const payload of parseSseLines(res)) {
+      const chunk = JSON.parse(payload);
+      const parts: GeminiPart[] = chunk?.candidates?.[0]?.content?.parts ?? [];
+      for (const part of parts) {
+        if (part.text) {
+          text += part.text;
+          yield { type: "text", text: part.text };
+        } else if (part.functionCall) {
+          // Arrives fully formed — see Global Constraints. Not streamed as
+          // tool_call_start/tool_call_delta; folded straight into the
+          // terminal done event below, exactly like a non-streaming
+          // response.
+          toolCalls.push({
+            id: `call_${crypto.randomUUID()}`,
+            name: part.functionCall.name,
+            arguments: part.functionCall.args ?? {},
+          });
+        }
+      }
+    }
+
+    if (toolCalls.length > 0) {
+      yield { type: "done", response: { turn: { type: "tool_calls", toolCalls, content: text || undefined } } };
+    } else {
+      yield { type: "done", response: { turn: { type: "final", content: text } } };
+    }
   }
 }
