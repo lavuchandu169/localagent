@@ -143,7 +143,12 @@ console.log("\nuploadSession — strips image/text attachments before upload:");
     planFirst: false,
     checkpointHash: null,
     checkpointWorkspaceRoot: null,
-    lastSyncCheckpoint: null,
+    // Correctness audit finding (session Medium #1): this is this
+    // device's own bookkeeping about ITS OWN last sync — never previously
+    // asserted to actually be stripped before upload, even though
+    // uploading it would corrupt another device's identical bookkeeping
+    // about its own last sync the moment it pulled this record.
+    lastSyncCheckpoint: { remoteModifiedTime: "2024-05-05T00:00:00.000Z", localUpdatedAt: 999 },
   };
 
   let capturedBody: string | undefined;
@@ -168,6 +173,7 @@ console.log("\nuploadSession — strips image/text attachments before upload:");
   check("the uploaded user message has no 'textAttachments' key at all", !("textAttachments" in uploadedUserMessage));
   check("the uploaded user message's text content is unaffected", uploadedUserMessage.content === "please look at this");
   check("the uploaded assistant message's content is unaffected", uploadedAssistantMessage.content === "sure, looking now");
+  check("the uploaded record has no 'lastSyncCheckpoint' key at all", !("lastSyncCheckpoint" in uploaded));
 
   // The ORIGINAL record and its messages must be untouched — local
   // persistence (sessionRegistry.ts) reads this same object independently
@@ -177,6 +183,7 @@ console.log("\nuploadSession — strips image/text attachments before upload:");
     "the original record's user message still carries its textAttachments array",
     Array.isArray(messages[0]!.textAttachments) && messages[0]!.textAttachments!.length === 1
   );
+  check("the original record still carries its own lastSyncCheckpoint", record.lastSyncCheckpoint?.localUpdatedAt === 999);
 }
 
 console.log("\nuploadSession — a message with no attachments round-trips unaffected:");
