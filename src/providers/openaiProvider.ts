@@ -1,6 +1,6 @@
-import type { ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider } from "../types.js";
+import type { ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, StreamEvent } from "../types.js";
 import { ProviderChatError } from "../types.js";
-import { buildChatBody } from "./openaiCompatible.js";
+import { buildChatBody, fromOpenAIChatMessage, streamOpenAIShapeResponse } from "./openaiCompatible.js";
 
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -67,21 +67,28 @@ export class OpenAIProvider implements ModelProvider {
 
     const data: any = await res.json();
     const choice = data.choices?.[0];
-    const message = choice?.message ?? {};
+    return fromOpenAIChatMessage(choice?.message ?? {}, data);
+  }
 
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      const toolCalls = message.tool_calls.map((tc: any, i: number) => {
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(tc.function?.arguments ?? "{}");
-        } catch {
-          args = {};
-        }
-        return { id: tc.id ?? `call_${i}`, name: tc.function?.name ?? "unknown", arguments: args };
-      });
-      return { turn: { type: "tool_calls", toolCalls, content: message.content ?? undefined }, raw: data };
+  async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
+    const body = buildChatBody({ ...request, model: request.model || this.model });
+    if ("max_tokens" in body) {
+      body.max_completion_tokens = body.max_tokens;
+      delete body.max_tokens;
+    }
+    body.stream = true;
+
+    const res = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new ProviderChatError(`OpenAI error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
     }
 
-    return { turn: { type: "final", content: message.content ?? "" }, raw: data };
+    yield* streamOpenAIShapeResponse(res);
   }
 }

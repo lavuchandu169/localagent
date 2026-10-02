@@ -1,6 +1,7 @@
-import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, StreamEvent, ToolCall } from "../types.js";
 import { ProviderChatError } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
+import { parseSseLines } from "./sseLines.js";
 
 /**
  * Builds one message's `content` for the wire request — a plain string
@@ -129,21 +130,87 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
     const data: any = await res.json();
     const choice = data.choices?.[0];
-    const message = choice?.message ?? {};
+    return fromOpenAIChatMessage(choice?.message ?? {}, data);
+  }
+}
 
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      const toolCalls: ToolCall[] = message.tool_calls.map((tc: any, i: number) => {
+/** Converts one OpenAI/OpenAI-compatible chat-completion response message
+ * into this app's ChatResponse — the exact parsing both OpenAIProvider and
+ * OpenAICompatibleProvider's non-streaming chat() already did inline,
+ * pulled out once so the new streaming accumulation path (Task 5) can
+ * reuse it instead of a third copy. */
+export function fromOpenAIChatMessage(message: any, raw: unknown): ChatResponse {
+  if (message.tool_calls && message.tool_calls.length > 0) {
+    const toolCalls: ToolCall[] = message.tool_calls.map((tc: any, i: number) => {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(tc.function?.arguments ?? "{}");
+      } catch {
+        args = {};
+      }
+      return { id: tc.id ?? `call_${i}`, name: tc.function?.name ?? "unknown", arguments: args };
+    });
+    return { turn: { type: "tool_calls", toolCalls, content: message.content ?? undefined }, raw };
+  }
+  return { turn: { type: "final", content: message.content ?? "" }, raw };
+}
+
+/** Drives an OpenAI-shape SSE chat-completions stream (shared by
+ * OpenAIProvider and OpenAICompatibleProvider — both target the exact same
+ * wire format) into StreamEvents, then the final ChatResponse via
+ * fromOpenAIChatMessage. A tool call whose entire arguments string arrives
+ * in a single chunk (confirmed for Ollama's own /v1 endpoint) is handled
+ * by the exact same accumulation logic as one that arrives over many
+ * fragments — "the whole string in one piece" is just that loop's
+ * degenerate case, not a special branch. */
+export async function* streamOpenAIShapeResponse(response: Response): AsyncGenerator<StreamEvent> {
+  const toolCallIndexSeen = new Set<number>();
+  const argumentsByIndex = new Map<number, string>();
+  const nameByIndex = new Map<number, string>();
+  const idByIndex = new Map<number, string>();
+  let content = "";
+
+  for await (const payload of parseSseLines(response)) {
+    const chunk = JSON.parse(payload);
+    const delta = chunk.choices?.[0]?.delta ?? {};
+
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      content += delta.content;
+      yield { type: "text", text: delta.content };
+    }
+
+    for (const tc of delta.tool_calls ?? []) {
+      const index = tc.index ?? 0;
+      if (!toolCallIndexSeen.has(index)) {
+        toolCallIndexSeen.add(index);
+        const name = tc.function?.name ?? "unknown";
+        nameByIndex.set(index, name);
+        idByIndex.set(index, tc.id ?? `call_${index}`);
+        argumentsByIndex.set(index, "");
+        yield { type: "tool_call_start", index, name };
+      }
+      const argsFragment: string = tc.function?.arguments ?? "";
+      if (argsFragment.length > 0) {
+        argumentsByIndex.set(index, (argumentsByIndex.get(index) ?? "") + argsFragment);
+        yield { type: "tool_call_delta", index, argumentsDelta: argsFragment };
+      }
+    }
+  }
+
+  if (toolCallIndexSeen.size > 0) {
+    const toolCalls: ToolCall[] = [...toolCallIndexSeen]
+      .sort((a, b) => a - b)
+      .map((index) => {
         let args: Record<string, unknown> = {};
         try {
-          args = JSON.parse(tc.function?.arguments ?? "{}");
+          args = JSON.parse(argumentsByIndex.get(index) || "{}");
         } catch {
           args = {};
         }
-        return { id: tc.id ?? `call_${i}`, name: tc.function?.name ?? "unknown", arguments: args };
+        return { id: idByIndex.get(index)!, name: nameByIndex.get(index)!, arguments: args };
       });
-      return { turn: { type: "tool_calls", toolCalls, content: message.content ?? undefined }, raw: data };
-    }
-
-    return { turn: { type: "final", content: message.content ?? "" }, raw: data };
+    yield { type: "done", response: { turn: { type: "tool_calls", toolCalls, content: content || undefined } } };
+  } else {
+    yield { type: "done", response: { turn: { type: "final", content } } };
   }
 }
