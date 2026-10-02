@@ -194,15 +194,28 @@ console.log("\nuploadSession — a message with no attachments round-trips unaff
 
 console.log("\ndeleteRemoteSession:");
 {
-  const calls: { url: string; method?: string }[] = [];
+  // Correctness audit finding (session High #3): a literal DELETE left no
+  // trace that this session had ever existed — a second device that
+  // hadn't synced since the delete would see "my local copy is still
+  // here, the remote copy is just gone" during its own reconcile pass and
+  // re-upload its local copy, silently resurrecting a session the user
+  // deliberately deleted. Writing a tombstone to the SAME file (never
+  // actually deleting it) keeps it discoverable via the exact same
+  // listRemoteSessions/findRemoteFile query every other device already
+  // uses, so they can learn about the deletion instead of re-creating it.
+  const calls: { url: string; method?: string; body?: string }[] = [];
   const fakeFetch: typeof fetch = async (url, init) => {
-    calls.push({ url: url.toString(), method: init?.method });
+    calls.push({ url: url.toString(), method: init?.method, body: typeof init?.body === "string" ? init.body : undefined });
     if (!init?.method) return new Response(JSON.stringify({ files: [{ id: "to-delete" }] }), { status: 200 });
-    return new Response(null, { status: 204 });
+    return new Response(JSON.stringify({ id: "to-delete" }), { status: 200 });
   };
   await deleteRemoteSession("tok", "s1", fakeFetch);
-  const deleteCall = calls.find((c) => c.method === "DELETE");
-  check("deletes the found file id", !!deleteCall && deleteCall.url.includes("to-delete"));
+  check("never issues a literal DELETE", !calls.some((c) => c.method === "DELETE"));
+  const patchCall = calls.find((c) => c.method === "PATCH");
+  check("PATCHes the found file's content instead", !!patchCall && patchCall.url.includes("to-delete"));
+  const tombstone = patchCall?.body ? JSON.parse(patchCall.body) : null;
+  check("the new content is a tombstone marker for this exact sessionId", tombstone?.tombstone === true && tombstone?.sessionId === "s1");
+  check("the tombstone carries a deletedAt timestamp", typeof tombstone?.deletedAt === "string" && tombstone.deletedAt.length > 0);
 }
 {
   const fakeFetch: typeof fetch = async () => new Response(JSON.stringify({ files: [] }), { status: 200 });
@@ -212,7 +225,7 @@ console.log("\ndeleteRemoteSession:");
   } catch {
     threw = true;
   }
-  check("no-ops without throwing when no remote file exists for this session", !threw);
+  check("no-ops without throwing when no remote file exists for this session (nothing to tombstone)", !threw);
 }
 
 console.log("\nDriveScopeError classification:");
@@ -337,6 +350,49 @@ console.log("\nreconcileSessions:");
   });
   check("a failed remote download doesn't abort the rest of the pass", uploaded.some((r) => r.id === "ok"));
   check("the failed session isn't counted as pulled", result.pulled === 0);
+}
+
+console.log("\nreconcileSessions: a remote tombstone (correctness audit: session High #3):");
+{
+  // The exact resurrection bug this fixes: device A deletes a session
+  // (both local and remote, via deleteRemoteSession's new tombstone
+  // write). Device B never synced since — its reconcile pass sees the
+  // session still present locally AND still present remotely (as a
+  // tombstone, not absent), and must delete its own local copy instead of
+  // treating "present remotely" as license to push/pull like a normal
+  // record.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  await saveSession(sessionsDir, makeRecord("deleted-elsewhere", 100));
+
+  const uploaded: SessionRecord[] = [];
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "deleted-elsewhere", driveFileId: "f1" }],
+      downloadSession: async () => ({ tombstone: true as const, sessionId: "deleted-elsewhere", deletedAt: new Date().toISOString() }),
+      uploadSession: async (_token, record) => {
+        uploaded.push(record);
+      },
+    },
+  });
+  const local = await loadSessionRecord(sessionsDir, "deleted-elsewhere");
+  check("the local copy is deleted, not re-pushed", local === null && uploaded.length === 0);
+  check("reports it as a local deletion, not a pull or push", result.deletedLocal === 1 && result.pulled === 0 && result.pushed === 0);
+}
+{
+  // The tombstone exists remotely but nothing local ever knew about this
+  // session (e.g. a third device that never had it) — nothing to delete.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "never-had-it", driveFileId: "f1" }],
+      downloadSession: async () => ({ tombstone: true as const, sessionId: "never-had-it", deletedAt: new Date().toISOString() }),
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+  check("a tombstone with no local copy anywhere is a pure no-op", result.deletedLocal === 0 && result.pulled === 0 && result.pushed === 0);
 }
 
 console.log("\nreconcileSessions: stale local index doesn't cause data loss:");

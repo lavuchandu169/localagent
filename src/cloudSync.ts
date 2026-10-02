@@ -1,9 +1,30 @@
 import crypto from "node:crypto";
-import { listSessions, loadSessionRecord, saveSession, type SessionRecord } from "./sessionStore.js";
+import { listSessions, loadSessionRecord, saveSession, deleteSession, type SessionRecord } from "./sessionStore.js";
 
 export interface RemoteSessionMeta {
   sessionId: string;
   driveFileId: string;
+}
+
+/**
+ * Correctness audit finding (session High #3): a deleted session's Drive
+ * file used to be removed outright — a second device that hadn't synced
+ * since the delete would see "my local copy is still here, the remote
+ * copy is just gone" during its own reconcile pass and treat that as a
+ * local-only session needing to be pushed, silently resurrecting
+ * something the user deliberately deleted. A tombstone keeps the file (so
+ * it's still discoverable via the exact same sessionId-keyed query every
+ * device already uses) but replaces its content with this marker, so a
+ * reconcile pass can tell "deleted elsewhere" apart from "never synced".
+ */
+export interface SessionTombstone {
+  tombstone: true;
+  sessionId: string;
+  deletedAt: string;
+}
+
+function isTombstone(data: SessionRecord | SessionTombstone): data is SessionTombstone {
+  return (data as SessionTombstone).tombstone === true;
 }
 
 type FetchImpl = typeof fetch;
@@ -69,12 +90,15 @@ async function findRemoteFile(accessToken: string, sessionId: string, fetchImpl:
   return body.files?.[0]?.id ?? null;
 }
 
-/** Downloads and parses one session's full record by its Drive file id. */
-export async function downloadSession(accessToken: string, driveFileId: string, fetchImpl: FetchImpl = fetch): Promise<SessionRecord> {
+/** Downloads and parses one session's Drive file by its file id — either a
+ * real SessionRecord, or a SessionTombstone if it was deleted on another
+ * device. Callers must check isTombstone() before treating the result as
+ * a SessionRecord. */
+export async function downloadSession(accessToken: string, driveFileId: string, fetchImpl: FetchImpl = fetch): Promise<SessionRecord | SessionTombstone> {
   const url = `${DRIVE_FILES_ENDPOINT}/${driveFileId}?alt=media`;
   const response = await fetchImpl(url, { headers: authHeaders(accessToken), signal: AbortSignal.timeout(10_000) });
   await checkDriveResponse(response, "download");
-  return (await response.json()) as SessionRecord;
+  return (await response.json()) as SessionRecord | SessionTombstone;
 }
 
 /**
@@ -136,27 +160,38 @@ export async function uploadSession(accessToken: string, record: SessionRecord, 
   await checkDriveResponse(response, "create");
 }
 
-/** Best-effort delete of a session's Drive file, if one exists. No-op if there is none. */
+/**
+ * Marks a session deleted on Drive, if a remote file exists for it — see
+ * SessionTombstone's doc comment for why this writes a tombstone instead
+ * of literally deleting the file. No-op if there is no remote file yet:
+ * nothing else could possibly know about a session that was never
+ * uploaded anywhere, so there's nothing to warn anyone away from
+ * resurrecting.
+ */
 export async function deleteRemoteSession(accessToken: string, sessionId: string, fetchImpl: FetchImpl = fetch): Promise<void> {
   const fileId = await findRemoteFile(accessToken, sessionId, fetchImpl);
   if (!fileId) return;
-  const response = await fetchImpl(`${DRIVE_FILES_ENDPOINT}/${fileId}`, {
-    method: "DELETE",
-    headers: authHeaders(accessToken),
+  const tombstone: SessionTombstone = { tombstone: true, sessionId, deletedAt: new Date().toISOString() };
+  const response = await fetchImpl(`${DRIVE_UPLOAD_ENDPOINT}/${fileId}?uploadType=media`, {
+    method: "PATCH",
+    headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
+    body: JSON.stringify(tombstone),
     signal: AbortSignal.timeout(10_000),
   });
-  if (response.status === 404) return;
+  if (response.status === 404) return; // the file vanished between findRemoteFile and here — already gone either way
   await checkDriveResponse(response, "delete");
 }
 
 export interface ReconcileResult {
   pulled: number;
   pushed: number;
+  /** Correctness audit finding (session High #3): a local copy removed because its remote counterpart was a tombstone (deleted on another device), not pulled or pushed. */
+  deletedLocal: number;
 }
 
 export interface ReconcileOps {
   listRemoteSessions: (accessToken: string) => Promise<RemoteSessionMeta[]>;
-  downloadSession: (accessToken: string, driveFileId: string) => Promise<SessionRecord>;
+  downloadSession: (accessToken: string, driveFileId: string) => Promise<SessionRecord | SessionTombstone>;
   uploadSession: (accessToken: string, record: SessionRecord) => Promise<void>;
 }
 
@@ -176,7 +211,7 @@ function defaultReconcileOps(fetchImpl: FetchImpl): ReconcileOps {
  * session's sync is caught individually so one bad file can't block the
  * rest of the pass.
  */
-type ReconcileOutcome = "pulled" | "pushed" | "skipped";
+type ReconcileOutcome = "pulled" | "pushed" | "skipped" | "deletedLocal";
 
 export async function reconcileSessions(
   sessionsDir: string,
@@ -208,10 +243,21 @@ export async function reconcileSessions(
         const localRecord = await loadSessionRecord(sessionsDir, remote.sessionId);
         if (!localRecord) {
           const record = await ops.downloadSession(accessToken, remote.driveFileId);
+          // A tombstone with no local copy anywhere means nothing here ever
+          // knew about this session in the first place — nothing to delete.
+          if (isTombstone(record)) return "skipped";
           await saveSession(sessionsDir, record);
           return "pulled";
         }
         const remoteRecord = await ops.downloadSession(accessToken, remote.driveFileId);
+        if (isTombstone(remoteRecord)) {
+          // Deleted on another device since this local copy was last
+          // synced — delete it here too instead of treating "present
+          // locally, present remotely" as license to push/pull like a
+          // normal record, which would silently resurrect it.
+          await deleteSession(sessionsDir, remote.sessionId);
+          return "deletedLocal";
+        }
         if (remoteRecord.updatedAt > localRecord.updatedAt) {
           await saveSession(sessionsDir, remoteRecord);
           return "pulled";
@@ -250,5 +296,6 @@ export async function reconcileSessions(
   return {
     pulled: outcomes.filter((o) => o === "pulled").length,
     pushed: outcomes.filter((o) => o === "pushed").length,
+    deletedLocal: outcomes.filter((o) => o === "deletedLocal").length,
   };
 }

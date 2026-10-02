@@ -499,8 +499,8 @@ app.whenReady().then(async () => {
         const reconcileCreds = await resolveGoogleCredentials(settingsFilePath, storageCrypto);
         const token = await getFreshAccessToken(authFilePath, reconcileCreds.clientId, reconcileCreds.clientSecret, storageCrypto);
         if (token) {
-          const { pulled, pushed } = await reconcileSessions(sessionsDir, token);
-          console.log(`[cloudSync] reconcile after sign-in: pulled ${pulled}, pushed ${pushed}`);
+          const { pulled, pushed, deletedLocal } = await reconcileSessions(sessionsDir, token);
+          console.log(`[cloudSync] reconcile after sign-in: pulled ${pulled}, pushed ${pushed}, deleted locally ${deletedLocal}`);
         } else {
           console.warn("[cloudSync] sign-in succeeded but no access token was available for reconcile — skipping.");
         }
