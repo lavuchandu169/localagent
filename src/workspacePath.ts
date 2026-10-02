@@ -42,7 +42,22 @@ export async function resolveWithinWorkspace(workspaceRoot: string, relPath: str
   // exist (the app is already running against it), so this always
   // resolves on the first attempt in practice.
   const resolvedRoot = await realOrFallback(syntacticRoot);
+  if (resolvedRoot === null) {
+    return { ok: false, error: "Could not resolve workspace root." };
+  }
   const real = await realOrFallback(naive);
+  if (real === null) {
+    // Final-review Critical #1, confirmed live: a DANGLING symlink (the
+    // link itself exists; its target doesn't) made fs.realpath throw for
+    // a reason indistinguishable, by that error alone, from "this path
+    // segment just doesn't exist yet" — the old fallback treated both
+    // cases identically and silently let edit_file write straight through
+    // the link to wherever it pointed, outside the workspace. There is no
+    // safe way to know where a dangling link resolves to once its target
+    // is eventually created, so it's rejected outright rather than
+    // guessed at.
+    return { ok: false, error: "Path escapes workspace root (dangling symlink)." };
+  }
   if (!isWithin(real, resolvedRoot)) {
     return { ok: false, error: "Path escapes workspace root (symlink)." };
   }
@@ -62,10 +77,20 @@ function isWithin(candidate: string, root: string): boolean {
  * segments on top of it. This keeps the result on the same symlink-
  * resolved basis as resolvedRoot above, however deep the not-yet-existing
  * part goes — falling back to the first existing ancestor's realpath
- * only (the previous version's bug) would still mismatch a multi-level
- * new path against an already-resolved root.
+ * only (an earlier version's bug) would still mismatch a multi-level new
+ * path against an already-resolved root.
+ *
+ * Returns null (reject) rather than falling through to "not yet
+ * created" when a failing segment turns out to actually exist as a
+ * symlink (lstat succeeds where realpath didn't) — that's a DANGLING
+ * symlink, not an absent path, and it can't be safely treated as either
+ * "resolve its target" (there is none yet) or "ignore it" (the caller
+ * would write straight through it once a target does appear). Any lstat
+ * failure OTHER than ENOENT (EACCES, ELOOP, ENOTDIR — a real but
+ * unusual filesystem condition) also rejects rather than silently
+ * treating it as absent.
  */
-async function realOrFallback(naive: string): Promise<string> {
+async function realOrFallback(naive: string): Promise<string | null> {
   let current = naive;
   const notYetExisting: string[] = [];
   while (true) {
@@ -73,10 +98,26 @@ async function realOrFallback(naive: string): Promise<string> {
       const resolved = await fs.realpath(current);
       return notYetExisting.length > 0 ? path.join(resolved, ...notYetExisting.reverse()) : resolved;
     } catch {
+      if (!(await isTrulyAbsent(current))) return null; // dangling symlink, or some other real error — reject rather than guess
       const parent = path.dirname(current);
       if (parent === current) return naive; // hit the filesystem root with nothing resolvable at all
       notYetExisting.push(path.basename(current));
       current = parent;
     }
+  }
+}
+
+/** True only when `p` genuinely doesn't exist at all (lstat itself throws
+ * ENOENT) — the one case it's safe to treat as "not yet created" and keep
+ * walking up. Anything lstat can actually see at this path — a dangling
+ * symlink, or a file/directory realpath otherwise failed on for some
+ * other reason (EACCES, ELOOP) — is a real, inspectable thing on disk
+ * that the caller must not silently skip past. */
+async function isTrulyAbsent(p: string): Promise<boolean> {
+  try {
+    await fs.lstat(p);
+    return false;
+  } catch (err: any) {
+    return err?.code === "ENOENT";
   }
 }

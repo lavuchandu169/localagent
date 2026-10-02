@@ -83,6 +83,34 @@ async function main() {
     check("a not-yet-existing nested path still resolves (no symlink to check yet) rather than erroring", result.ok);
   }
 
+  console.log("\nresolveWithinWorkspace: a DANGLING symlink escape is rejected (final review Critical #1 — confirmed live exploit: edit_file wrote through a symlink whose target didn't exist yet, since fs.realpath throws on it and the old fallback silently treated that exactly like 'not yet created'):");
+  {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-workspacepath-dangling-outside-"));
+    const linkPath = path.join(root, "dangling.txt");
+    // The symlink itself exists; its TARGET does not — this is the case
+    // fs.realpath can't resolve but fs.lstat can still see.
+    await fs.symlink(path.join(outsideDir, "newfile.txt"), linkPath);
+
+    const result = await resolveWithinWorkspace(root, "dangling.txt");
+    check("a dangling symlink (target doesn't exist) is rejected outright, not silently treated as 'not yet created'", !result.ok);
+
+    await fs.rm(linkPath, { force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  }
+
+  console.log("\nresolveWithinWorkspace: a dangling symlink nested under an existing directory is still rejected:");
+  {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-workspacepath-dangling2-outside-"));
+    const linkPath = path.join(root, "sub", "also-dangling.txt");
+    await fs.symlink(path.join(outsideDir, "newfile.txt"), linkPath);
+
+    const result = await resolveWithinWorkspace(root, "sub/also-dangling.txt");
+    check("a dangling symlink nested inside an existing real directory is still rejected", !result.ok);
+
+    await fs.rm(linkPath, { force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

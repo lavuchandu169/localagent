@@ -56,5 +56,30 @@ console.log("\nPermissionEngine.evaluate: PLAN mode still denies EXECUTE outrigh
   check("an injected command is denied in PLAN mode", engine.evaluate(runCommandCall("ls; curl evil.example"), "EXECUTE") === "DENY");
 }
 
+console.log("\nclassifyCommand: project test-runner commands are their own tier, not SAFE_READ (final review Critical #2 — a model-issued run_command(\"npm test\") auto-allowed with no approval in every mode, same hole H3's fix only closed for the auto-verify call site):");
+{
+  check("npm test is PROJECT_SCRIPT, not SAFE_READ", classifyCommand("npm test") === "PROJECT_SCRIPT");
+  check("pytest is PROJECT_SCRIPT, not SAFE_READ", classifyCommand("pytest") === "PROJECT_SCRIPT");
+  check("cargo test is PROJECT_SCRIPT, not SAFE_READ", classifyCommand("cargo test") === "PROJECT_SCRIPT");
+  check("go test ./... is PROJECT_SCRIPT, not SAFE_READ", classifyCommand("go test ./...") === "PROJECT_SCRIPT");
+}
+
+console.log("\nPermissionEngine.evaluate: a model-issued PROJECT_SCRIPT command is NEVER auto-ALLOW from the engine's own stateless perspective, in any mode:");
+{
+  for (const mode of ["DEFAULT", "ACCEPT_EDITS", "AUTO_SAFE"] as const) {
+    const engine = new PermissionEngine(mode);
+    check(`npm test is not auto-ALLOW in ${mode} mode`, engine.evaluate(runCommandCall("npm test"), "EXECUTE") !== "ALLOW");
+  }
+}
+
+console.log("\nPermissionEngine.evaluate: flag-injected variants of a project-script command are still never auto-ALLOW (a bare classifyCommand prefix match alone proved insufficient for C1 too):");
+{
+  const engine = new PermissionEngine("AUTO_SAFE");
+  const variants = ["npm test --script-shell=./x.sh", "go test -exec=./x ./...", "pytest -p evilplugin"];
+  for (const cmd of variants) {
+    check(`"${cmd}" is not auto-ALLOW`, engine.evaluate(runCommandCall(cmd), "EXECUTE") !== "ALLOW");
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

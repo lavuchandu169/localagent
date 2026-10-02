@@ -41,8 +41,14 @@ check("rm is DESTRUCTIVE", classifyCommand("rm -rf foo") === "DESTRUCTIVE");
 check("git status is SAFE_READ", classifyCommand("git status") === "SAFE_READ");
 check("npm install is NETWORK", classifyCommand("npm install left-pad") === "NETWORK");
 check("unrecognized command is UNKNOWN", classifyCommand("some-custom-tool --flag") === "UNKNOWN");
-check("cargo test is SAFE_READ", classifyCommand("cargo test") === "SAFE_READ");
-check("go test is SAFE_READ", classifyCommand("go test ./...") === "SAFE_READ");
+// Security audit final-review Critical #2: these run a repo's own
+// test-runner script (arbitrary repo-defined code), not a read — moved
+// out of SAFE_READ into their own PROJECT_SCRIPT tier, which always
+// evaluates to ASK from the engine's own stateless perspective (see
+// permissions.test.ts and agent.ts's projectScriptApprovedThisTask for
+// the once-per-task override that still lets this stay usable).
+check("cargo test is PROJECT_SCRIPT, not SAFE_READ", classifyCommand("cargo test") === "PROJECT_SCRIPT");
+check("go test is PROJECT_SCRIPT, not SAFE_READ", classifyCommand("go test ./...") === "PROJECT_SCRIPT");
 
 console.log("\nPermission engine:");
 {
@@ -1236,6 +1242,44 @@ await (async () => {
     check("no run_command ever actually executed", !events.some((e) => e.type === "tool.start" && e.call.name === "run_command"));
     const doneEvent = events.find((e) => e.type === "done");
     check("the task still completes (a rejected verify isn't a hard failure)", doneEvent?.type === "done" && doneEvent.success === true);
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+
+  {
+    // Final review Critical #2, confirmed live: the original H3 fix only
+    // guarded auto-verify's OWN call site — a MODEL issuing
+    // run_command("npm test") directly (e.g. via a prompt injection, or
+    // just because it decided to) was still auto-ALLOWed with zero
+    // approval in every mode, since classifyCommand still put it in
+    // SAFE_READ. This proves the model's own direct call is now gated
+    // exactly the same way, and shares the same once-per-task memo.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-modelcall-projectscript-test-"));
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "npm test" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c2", name: "run_command", arguments: { command: "npm test" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const approvalRequests: ToolCall[] = [];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "AUTO_SAFE",
+      onApprovalNeeded: async (call) => {
+        approvalRequests.push(call);
+        return { approved: true };
+      },
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("run the tests")) events.push(event);
+
+    const permissionRequests = events.filter((e) => e.type === "permission.request" && e.call.name === "run_command");
+    check("a model-issued run_command(\"npm test\") is forced through a real ASK, even in AUTO_SAFE mode", permissionRequests[0]?.type === "permission.request" && permissionRequests[0].decision === "ASK");
+    check("onApprovalNeeded was actually called for the model's own run_command", approvalRequests.length === 1);
+    check("a SECOND model-issued run_command(\"npm test\") this same task auto-allows without asking again", permissionRequests[1]?.type === "permission.request" && permissionRequests[1].decision === "ALLOW");
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
