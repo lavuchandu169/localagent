@@ -162,5 +162,39 @@ console.log("\nrevertToCheckpoint:");
   await fs.rm(repo, { recursive: true, force: true });
 }
 
+if (process.platform !== "win32") {
+  // Functional-correctness audit finding (agent core High #1):
+  // createCheckpoint's own doc comment promises it degrades to null on
+  // EVERY failure, so a caller never has to handle it throwing — but
+  // fs.mkdtemp was called BEFORE the try block that catches every other
+  // failure mode, so a tmpdir failure (e.g. a read-only/quota-exhausted
+  // TMPDIR, realistic in a sandboxed/containerized environment) threw
+  // instead, aborting the whole task in agent.ts rather than just
+  // skipping the checkpoint like every other failure path does.
+  const repo = await makeRepo();
+  await fs.writeFile(path.join(repo, "a.txt"), "hello\n", "utf-8");
+  await git(repo, ["add", "-A"]);
+  await git(repo, ["commit", "-q", "-m", "initial"]);
+
+  const unwritableTmp = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-checkpoints-unwritable-"));
+  await fs.chmod(unwritableTmp, 0o000);
+  const realTmpdir = process.env.TMPDIR;
+  process.env.TMPDIR = unwritableTmp;
+  let threw = false;
+  let result: string | null = null;
+  try {
+    result = await createCheckpoint(repo);
+  } catch {
+    threw = true;
+  } finally {
+    process.env.TMPDIR = realTmpdir;
+    await fs.chmod(unwritableTmp, 0o700);
+    await fs.rm(unwritableTmp, { recursive: true, force: true });
+  }
+  check("a tmpdir failure degrades to null rather than throwing, matching every other failure path", !threw && result === null);
+
+  await fs.rm(repo, { recursive: true, force: true });
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

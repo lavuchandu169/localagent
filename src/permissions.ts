@@ -45,6 +45,12 @@ export class PermissionEngine {
 
     if (this.mode === "PLAN") {
       // Plan mode may never write, execute, or touch network (Section 41).
+      // Caveat (functional-correctness audit, agent core Low #5): agent.ts
+      // creates a checkpoint BEFORE this check runs, for any non-READ tool
+      // call, regardless of the eventual DENY this produces. That's a real
+      // git object-database write (a dangling, unreferenced commit, never
+      // touching the working tree/HEAD/any ref) — harmless in practice,
+      // but a technical exception to "never write" worth knowing about.
       return "DENY";
     }
 

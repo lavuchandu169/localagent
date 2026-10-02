@@ -131,7 +131,7 @@ export class AgentSession {
   private cancelled = false;
   /** Paths read_file has been attempted on this session, success or not — evidence the model actually looked before writing. */
   private readPaths = new Set<string>();
-  /** The most recent task's checkpoint (see createCheckpoint) — one per task, not a deep undo stack. Overwritten the next time a task actually makes its first non-read tool call; a task that never writes anything leaves the previous task's checkpoint as the current "revert" target. */
+  /** The most recent task's checkpoint (see createCheckpoint) — one per task, not a deep undo stack. Overwritten the next time a task actually makes its first non-read tool call; a task that never writes anything leaves the previous task's checkpoint as the current "revert" target. A task that DOES attempt one but the attempt fails clears this to null instead of leaving the previous task's hash in place — otherwise "revert this task" would silently discard that earlier task's work too (final-review finding: agent core High #2). */
   private checkpointHash: string | null = null;
   /** Reported once, right after the first successful provider call —
    * never re-checked on later turns. Only the embedded provider sets
@@ -608,6 +608,16 @@ export class AgentSession {
           if (hash) {
             this.checkpointHash = hash;
             yield { type: "checkpoint.created", checkpointHash: hash };
+          } else {
+            // Functional-correctness audit finding (agent core High #2):
+            // this task is about to write real changes (that's why a
+            // checkpoint was attempted at all), but the attempt itself
+            // failed — leaving the PREVIOUS task's hash in place would
+            // make "revert this task" silently discard that earlier
+            // task's work too, with a success message that's factually
+            // wrong about what got reverted. Clearing it makes the revert
+            // affordance correctly unavailable for this task instead.
+            this.checkpointHash = null;
           }
         }
 

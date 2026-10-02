@@ -764,6 +764,71 @@ await (async () => {
     await fs.rm(nonGitDir, { recursive: true, force: true });
   }
 
+  {
+    // Functional-correctness audit finding (agent core High #2): a task
+    // whose OWN checkpoint attempt fails (but still goes on to write real
+    // changes) must not leave a PREVIOUS task's hash in place as the
+    // "revert this task" target — that would silently discard more work
+    // than the user asked for on revert. Task A succeeds and sets a real
+    // checkpoint; task B's attempt is forced to fail (HEAD corrupted,
+    // simulating a real git failure) while its own write still succeeds
+    // (edit_file never touches git) — getCheckpointHash() must come back
+    // null afterward, not task A's stale hash.
+    const repo2 = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-checkpoint-stale-test-"));
+    await git(repo2, ["init", "-q"]);
+    await git(repo2, ["config", "user.email", "test@example.com"]);
+    await git(repo2, ["config", "user.name", "Test"]);
+    await fs.writeFile(path.join(repo2, "a.js"), "v1\n", "utf-8");
+    await git(repo2, ["add", "-A"]);
+    await git(repo2, ["commit", "-q", "-m", "initial"]);
+
+    // One continuous script spanning both tasks — AgentSession.run()
+    // resets this.opts.provider back to the ORIGINAL provider at the
+    // start of every call (undoing any mid-task fallback swap from a
+    // previous task), so swapping in a second MockProvider between tasks
+    // doesn't work; a single provider instance's script naturally spans
+    // multiple run() calls since its own step counter just keeps
+    // incrementing regardless of which task logically owns each entry.
+    const combinedScript: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "eA", name: "edit_file", arguments: { path: "a.js", content: "v2\n" } }] } },
+      { turn: { type: "final", content: "task A done" } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "eB", name: "edit_file", arguments: { path: "b.js", content: "new file from task B\n" } }] } },
+      { turn: { type: "final", content: "task B done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: repo2,
+      model: "mock",
+      provider: new MockProvider(combinedScript),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+      onApprovalNeeded: async () => ({ approved: true }),
+    });
+    for await (const _event of session.run("task A")) {
+      /* drain */
+    }
+    const hashAfterTaskA = session.getCheckpointHash();
+    check("task A's checkpoint succeeded", typeof hashAfterTaskA === "string" && hashAfterTaskA.length > 0);
+
+    // Corrupt HEAD so createCheckpoint's own `rev-parse HEAD` fails for
+    // task B (the same failure path as "no commits yet") — isGitRepo()
+    // still returns true (it doesn't read HEAD), so this is a faithful
+    // real-world "checkpoint attempt failed, but write still succeeds"
+    // scenario, not a mock.
+    await fs.writeFile(path.join(repo2, ".git", "HEAD"), "corrupted\n", "utf-8");
+
+    for await (const _event of session.run("task B")) {
+      /* drain */
+    }
+    const writtenB = await fs.readFile(path.join(repo2, "b.js"), "utf-8").catch(() => null);
+    check("task B's write still succeeded despite the checkpoint attempt failing", writtenB === "new file from task B\n");
+    check(
+      "getCheckpointHash() is now null, NOT task A's stale hash — 'revert this task' must not silently wipe out task A too",
+      session.getCheckpointHash() === null
+    );
+
+    await fs.rm(repo2, { recursive: true, force: true });
+  }
+
   await fs.rm(repo, { recursive: true, force: true });
 })();
 
