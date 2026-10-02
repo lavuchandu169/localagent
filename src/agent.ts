@@ -430,6 +430,8 @@ export class AgentSession {
               yield { type: "tool_call.start", index: streamEvent.index, name: streamEvent.name };
             } else if (streamEvent.type === "tool_call_delta") {
               yield { type: "tool_call.delta", index: streamEvent.index, argumentsDelta: streamEvent.argumentsDelta };
+            } else if (streamEvent.type === "reset") {
+              yield { type: "stream.reset" };
             }
           }
           if (!gotDone) throw new Error("Provider's chatStream ended without a final 'done' event.");

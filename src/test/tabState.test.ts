@@ -108,6 +108,28 @@ console.log("\nrouteEvent:");
   check("an event for a session with no open tab is a harmless no-op", tabA.events.length === 1 && tabB.events.length === 0);
 }
 
+console.log("\nrouteEvent does not persist/replay ephemeral streaming deltas (final review I4):");
+{
+  // text.delta/tool_call.start/tool_call.delta/stream.reset are a UI-only
+  // side channel (see StreamEvent's own doc comment) — the final text/
+  // tool.start events already carry the complete, equivalent information.
+  // Storing every token doubles a long answer's or a whole-file edit_file
+  // call's footprint in tab.events (replayed on tab-switch) for no benefit.
+  const registry = createTabRegistry();
+  const tab = openNewTab(registry)!;
+  tab.sessionId = "session-deltas";
+
+  routeEvent(registry, "session-deltas", { type: "text.delta", text: "Hello" });
+  routeEvent(registry, "session-deltas", { type: "tool_call.start", index: 0, name: "read_file" });
+  routeEvent(registry, "session-deltas", { type: "tool_call.delta", index: 0, argumentsDelta: '{"path":"a.txt"}' });
+  routeEvent(registry, "session-deltas", { type: "stream.reset" });
+  check("none of the 4 delta/reset events are stored", tab.events.length === 0);
+
+  const finalText: AgentEvent = { type: "text", text: "Hello" };
+  routeEvent(registry, "session-deltas", finalText);
+  check("the terminal, non-ephemeral text event is still stored normally", tab.events.length === 1 && tab.events[0] === finalText);
+}
+
 console.log("\nlastEventStillRunning:");
 {
   check("no events at all -> not running (never sent a task)", lastEventStillRunning([]) === false);

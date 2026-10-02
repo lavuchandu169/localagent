@@ -201,5 +201,26 @@ console.log("\nagent.ts reports a provider's gpuStatus (if any) once, right afte
   check("a provider with no gpuStatus field never gets a spurious status event for it", !events.some((e) => e.type === "status" && (e as any).message?.startsWith("Embedded model ready")));
 }
 
+console.log("\nagent.ts forwards a provider's own StreamEvent 'reset' as AgentEvent stream.reset (final review I5):");
+{
+  // Distinct from the fallback-retry's own stream.reset (emitted by
+  // agent.ts's catch block): this is a provider signaling, on a
+  // successful completion, that streamed text it already showed turned
+  // out not to be real prose (the embedded provider's text-recovered-
+  // tool-call case) and must be discarded before the terminal done.
+  const response: ChatResponse = { turn: { type: "tool_calls", toolCalls: [{ id: "call_0", name: "read_file", arguments: { path: "a.txt" } }] } };
+  const provider = fakeStreamingProvider([
+    { type: "text", text: '{"name": "read_file"' },
+    { type: "reset" },
+    { type: "done", response },
+  ]);
+  const session = new AgentSession({ workspaceRoot: "/tmp", model: "fake-model", provider, tools: new ToolRegistry([]), permissionMode: "DEFAULT" });
+  const events = await collectEvents(session, "read a.txt");
+  const deltaIndex = events.findIndex((e) => e.type === "text.delta");
+  const resetIndex = events.findIndex((e) => e.type === "stream.reset");
+  check("the streamed (misidentified) text delta was yielded", deltaIndex !== -1);
+  check("stream.reset is yielded right after it, discarding it before done", resetIndex !== -1 && resetIndex > deltaIndex);
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -63,5 +63,30 @@ console.log("parseSseLines:");
   check("an empty body yields nothing, not a crash", lines.length === 0);
 }
 
+{
+  // Found in final review (C1): the SSE spec permits CRLF or bare-CR line
+  // endings, not just LF — a server (or proxy) that frames events this way
+  // previously yielded NOTHING, silently breaking every consumer.
+  const response = fakeSseResponse(['data: {"a":1}\r\n\r\n', 'data: {"a":2}\r\n\r\n']);
+  const lines = await collect(parseSseLines(response));
+  check("CRLF-framed events are parsed the same as LF-framed ones", JSON.stringify(lines) === JSON.stringify(['{"a":1}', '{"a":2}']));
+}
+
+{
+  // A final event with no trailing blank-line terminator (the stream just
+  // ends) must still be flushed, not silently dropped.
+  const response = fakeSseResponse(['data: {"a":1}\n\ndata: {"a":2}']);
+  const lines = await collect(parseSseLines(response));
+  check("a final event with no trailing \\n\\n is still flushed when the stream ends", JSON.stringify(lines) === JSON.stringify(['{"a":1}', '{"a":2}']));
+}
+
+{
+  // A bare keepalive ("data: \n\n", no payload) must not be handed to a
+  // caller expecting JSON.
+  const response = fakeSseResponse(["data: \n\n", 'data: {"a":1}\n\n']);
+  const lines = await collect(parseSseLines(response));
+  check("an empty 'data:' payload (keepalive) is skipped, not yielded", JSON.stringify(lines) === JSON.stringify(['{"a":1}']));
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

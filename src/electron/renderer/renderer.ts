@@ -1,4 +1,5 @@
 import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, PermissionMode, ProposedPlan, ToolCall } from "../../types.js";
+import { isEphemeralStreamEvent } from "../../types.js";
 import type { Change } from "diff";
 import { groupDiffIntoSegments } from "../../diffUtil.js";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
@@ -456,7 +457,7 @@ let hardwareInfo: HardwareInfo | null = null;
 const toolCards = new Map<string, HTMLElement>();
 let streamingTextEl: HTMLElement | null = null;
 const streamingToolCards: HTMLElement[] = [];
-let toolStartCallsSeenThisTurn = 0;
+let toolCallsSeenThisTurn = 0;
 const tabRegistry: TabRegistry = createTabRegistry();
 // Global launch behavior (see plan Global Constraints): the app always has
 // at least one tab, even though open tabs are never restored across a
@@ -1682,7 +1683,7 @@ function renderEvent(event: AgentEvent): void {
       if (/^Turn \d+: thinking\.\.\.$/.test(event.message)) {
         streamingTextEl = null;
         streamingToolCards.length = 0;
-        toolStartCallsSeenThisTurn = 0;
+        toolCallsSeenThisTurn = 0;
       }
       logLine(event.message, "log-status");
       break;
@@ -1730,19 +1731,12 @@ function renderEvent(event: AgentEvent): void {
       }
       for (const card of streamingToolCards) card?.remove();
       streamingToolCards.length = 0;
-      toolStartCallsSeenThisTurn = 0;
+      toolCallsSeenThisTurn = 0;
       break;
     }
-    case "tool.start": {
-      // Gemini and a whole-chunk custom-server call (Task 6/5) never streamed
-      // a tool_call.start/delta for this call at all, so there's nothing to
-      // remove in that case — toolCard() below runs exactly as it always has.
-      const building = streamingToolCards[toolStartCallsSeenThisTurn];
-      toolStartCallsSeenThisTurn++;
-      if (building) building.remove();
+    case "tool.start":
       toolCard(event.call);
       break;
-    }
     case "tool.result": {
       const card = toolCards.get(event.call.id) ?? toolCard(event.call);
       card.classList.remove("pending");
@@ -1755,6 +1749,17 @@ function renderEvent(event: AgentEvent): void {
       break;
     }
     case "permission.request": {
+      // permission.request fires exactly once per registered-tool call, in
+      // the same order as the turn's toolCalls — unlike tool.start, which
+      // never fires at all for a DENY or a rejected ASK. Using THIS event
+      // as the "this call's building card is now decided" signal (final
+      // review I3) correctly retires it in every case: DENY, ASK-rejected,
+      // or proceeding to tool.start — instead of a tool.start-only count
+      // that silently misaligns position whenever an earlier call never
+      // reached tool.start at all.
+      const building = streamingToolCards[toolCallsSeenThisTurn];
+      toolCallsSeenThisTurn++;
+      if (building) building.remove();
       const hasDiff = !!event.diff && event.diff.length > 0;
       if (event.decision !== "ASK" && !hasDiff) {
         logLine(`[permission] ${event.call.name} -> ${event.decision}`, "log-status");
@@ -1903,8 +1908,12 @@ window.agent.onEvent((incomingSessionId, event) => {
   }
   // Re-render the strip on every event regardless of which tab it belongs
   // to, so a backgrounded tab's dot (waiting-approval, done, error) updates
-  // live without needing to switch to it first.
-  renderTabStrip();
+  // live without needing to switch to it first. A streamed delta never
+  // changes a tab's dot state (it's already "running" throughout, same as
+  // before streaming existed) — re-rendering the whole strip per token
+  // would be pure overhead on exactly the path this feature exists to
+  // speed up.
+  if (!isEphemeralStreamEvent(event)) renderTabStrip();
 });
 
 function formatBytes(bytes: number): string {

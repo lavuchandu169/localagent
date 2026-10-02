@@ -190,6 +190,18 @@ export async function* streamOpenAIShapeResponse(response: Response): AsyncGener
 
   for await (const payload of parseSseLines(response)) {
     const chunk = JSON.parse(payload);
+
+    // An in-band upstream error frame (observed live from the bundled
+    // FreeLLMAPI proxy and from providers like Groq): a 200 SSE response
+    // that streamed some real content, then emits {"error": {...}} mid-
+    // stream because headers were already sent before the upstream
+    // failed. Treating this as a successful "done" would report a task
+    // as complete with silently truncated content.
+    if (chunk.error && !chunk.choices) {
+      const message = chunk.error?.message ?? "Provider returned an in-band stream error.";
+      throw new ProviderChatError(message, { retryable: false });
+    }
+
     const delta = chunk.choices?.[0]?.delta ?? {};
 
     if (typeof delta.content === "string" && delta.content.length > 0) {

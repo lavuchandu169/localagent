@@ -202,33 +202,34 @@ export class GeminiProvider implements ModelProvider {
       });
     }
 
-    let text = "";
-    const toolCalls: ToolCall[] = [];
+    // Accumulated verbatim and handed to fromGeminiResult at the end,
+    // rather than re-deriving ChatResponse here — the exact same converter
+    // chat() uses, so any future change to it (e.g. preserving a
+    // functionCall's thoughtSignature) automatically covers streaming too,
+    // with no second copy of the parsing logic to keep in sync.
+    const allParts: GeminiPart[] = [];
     for await (const payload of parseSseLines(res)) {
       const chunk = JSON.parse(payload);
+
+      // An in-band error chunk (Gemini's SSE stream can emit one mid-stream
+      // after a 200 response and real content already sent) — treating it
+      // as a successful "done" would report a task as complete with
+      // silently truncated content.
+      if (chunk.error) {
+        throw new ProviderChatError(chunk.error?.message ?? "Gemini returned an in-band stream error.", { retryable: false });
+      }
+
       const parts: GeminiPart[] = chunk?.candidates?.[0]?.content?.parts ?? [];
       for (const part of parts) {
-        if (part.text) {
-          text += part.text;
-          yield { type: "text", text: part.text };
-        } else if (part.functionCall) {
-          // Arrives fully formed — see Global Constraints. Not streamed as
-          // tool_call_start/tool_call_delta; folded straight into the
-          // terminal done event below, exactly like a non-streaming
-          // response.
-          toolCalls.push({
-            id: `call_${crypto.randomUUID()}`,
-            name: part.functionCall.name,
-            arguments: part.functionCall.args ?? {},
-          });
-        }
+        if (part.text) yield { type: "text", text: part.text };
+        // functionCall parts arrive fully formed — see Global Constraints.
+        // Not streamed as tool_call_start/tool_call_delta; folded straight
+        // into the terminal done event below via fromGeminiResult, exactly
+        // like a non-streaming response.
+        allParts.push(part);
       }
     }
 
-    if (toolCalls.length > 0) {
-      yield { type: "done", response: { turn: { type: "tool_calls", toolCalls, content: text || undefined } } };
-    } else {
-      yield { type: "done", response: { turn: { type: "final", content: text } } };
-    }
+    yield { type: "done", response: fromGeminiResult({ candidates: [{ content: { parts: allParts } }] }) };
   }
 }

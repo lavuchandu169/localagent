@@ -9,6 +9,15 @@
  * `[DONE]` payload (OpenAI's own stream-end sentinel) rather than hand
  * it to a caller expecting JSON.
  */
+function* eventsFromRawText(rawEvent: string): Generator<string> {
+  for (const line of rawEvent.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    const payload = line.slice("data: ".length);
+    if (payload === "" || payload === "[DONE]") continue;
+    yield payload;
+  }
+}
+
 export async function* parseSseLines(response: Response): AsyncGenerator<string> {
   const body = response.body;
   if (!body) return;
@@ -20,20 +29,22 @@ export async function* parseSseLines(response: Response): AsyncGenerator<string>
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      // The SSE wire format permits LF, CR, or CRLF line endings (not just
+      // LF) — normalize to LF before splitting so every framing style is
+      // parsed identically.
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n|\r/g, "\n");
 
       let separatorIndex: number;
       while ((separatorIndex = buffer.indexOf("\n\n")) !== -1) {
         const rawEvent = buffer.slice(0, separatorIndex);
         buffer = buffer.slice(separatorIndex + 2);
-        for (const line of rawEvent.split("\n")) {
-          if (!line.startsWith("data: ")) continue;
-          const payload = line.slice("data: ".length);
-          if (payload === "[DONE]") continue;
-          yield payload;
-        }
+        yield* eventsFromRawText(rawEvent);
       }
     }
+    // A final event isn't always terminated by a trailing blank line — the
+    // stream can simply end right after it. Flush whatever's left rather
+    // than silently dropping it.
+    if (buffer.length > 0) yield* eventsFromRawText(buffer);
   } finally {
     reader.releaseLock();
   }

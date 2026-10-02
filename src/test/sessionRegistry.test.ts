@@ -1088,6 +1088,42 @@ await (async () => {
     check("runTask's attachments argument reaches the session's actual message history", firstUserMessage?.images?.[0]?.name === "a.png");
   }
 
+  console.log("\ndoRunTask does not persist/replay ephemeral streaming deltas (final review I4):");
+  {
+    // A streaming provider's text.delta/tool_call.start/tool_call.delta
+    // events are a UI-only side channel — persisting every token would
+    // double a long answer's footprint in entry.events (saved to disk and
+    // uploaded via cloudSync, see persistSession).
+    const registry = createSessionRegistry(sessionsDir);
+    const fakeStreamingProvider = {
+      id: "fake-streaming",
+      async listModels() {
+        return [{ id: "fake-model", local: false }];
+      },
+      async healthCheck(): Promise<{ ok: true }> {
+        return { ok: true };
+      },
+      async chat(): Promise<ChatResponse> {
+        throw new Error("chat() should not be called when chatStream is present");
+      },
+      async *chatStream(): AsyncGenerator<{ type: "text"; text: string } | { type: "done"; response: ChatResponse }> {
+        yield { type: "text", text: "Hel" };
+        yield { type: "text", text: "lo" };
+        yield { type: "done", response: { turn: { type: "final", content: "Hello" } } };
+      },
+    };
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => fakeStreamingProvider }
+    );
+    await runTask(registry, sessionId, "say hello", () => {});
+
+    const snapshot = getLiveSessionSnapshot(registry, sessionId);
+    check("no text.delta events are persisted into the session's event history", !snapshot?.events.some((e) => e.type === "text.delta"));
+    check("the terminal, non-ephemeral text event is still persisted normally", !!snapshot?.events.some((e) => e.type === "text" && e.text === "Hello"));
+  }
+
   await fs.rm(sessionsDir, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

@@ -369,7 +369,16 @@ export class EmbeddedLlamaProvider implements ModelProvider {
       })
       .then(
         (result) => {
-          queue.push({ type: "done", response: fromLlamaResult(result) });
+          const response = fromLlamaResult(result);
+          // The ONLY way fromLlamaResult produces a tool_calls turn without
+          // result.functionCalls being populated is its own text-fallback
+          // recovery (tryParseFallbackToolCall) — a mis-flagged <tool_call>
+          // token streamed through onTextChunk as what looked like prose
+          // but was actually serialized call JSON. That streamed "text"
+          // was never real prose, so it must be discarded before done.
+          const usedTextFallback = response.turn.type === "tool_calls" && (!result.functionCalls || result.functionCalls.length === 0);
+          if (usedTextFallback) queue.push({ type: "reset" });
+          queue.push({ type: "done", response });
           queue.end();
         },
         (err) => {

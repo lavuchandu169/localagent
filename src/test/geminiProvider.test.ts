@@ -245,5 +245,56 @@ console.log("\nGeminiProvider.chatStream:");
   }
 }
 
+console.log("\nGeminiProvider.chatStream surfaces an in-band error chunk (final review I1):");
+{
+  // Gemini's SSE stream can also carry an {"error": {...}} chunk mid-stream
+  // after a 200 response and real content has already been sent.
+  const sseBody =
+    'data: {"candidates":[{"content":{"parts":[{"text":"Half an ans"}]}}]}\n\n' + 'data: {"error":{"message":"internal error","status":"INTERNAL"}}\n\n';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(sseBody, { status: 200 })) as typeof fetch;
+  try {
+    const provider = new GeminiProvider({ apiKey: "test-key" });
+    let threw: any = null;
+    const seen: any[] = [];
+    try {
+      for await (const e of provider.chatStream!({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "hi" }] })) seen.push(e);
+    } catch (err) {
+      threw = err;
+    }
+    check("an in-band error chunk throws instead of yielding a truncated 'done' as success", threw instanceof ProviderChatError);
+    check("the already-streamed partial text was still visible to the consumer before the throw", seen.some((e) => e.type === "text" && e.text === "Half an ans"));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+console.log("\nGeminiProvider.chatStream reuses fromGeminiResult instead of duplicating response parsing (final review I2):");
+{
+  // Builds the terminal response through the SAME converter chat() uses,
+  // by accumulating the raw parts across every chunk and handing them to
+  // fromGeminiResult as one synthetic response — so any future change to
+  // that converter (e.g. preserving a functionCall's thoughtSignature)
+  // automatically applies to the streaming path too, with no second copy
+  // of the parsing logic to keep in sync.
+  const sseBody =
+    'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file","args":{"path":"a.txt"},"thoughtSignature":"sig-123"}}]}}]}\n\n';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(sseBody, { status: 200 })) as typeof fetch;
+  try {
+    const provider = new GeminiProvider({ apiKey: "test-key" });
+    const seen: any[] = [];
+    for await (const e of provider.chatStream!({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "read a.txt" }], tools: [] })) seen.push(e);
+    const done = seen.find((e) => e.type === "done");
+    check("the terminal response carries raw, same as chat()'s own fromGeminiResult output", done?.response.raw !== undefined);
+    check(
+      "the terminal response's tool call has the same name/arguments fromGeminiResult itself would produce (ids are randomUUID, so not compared)",
+      done?.response.turn.type === "tool_calls" && done.response.turn.toolCalls[0]?.name === "read_file" && JSON.stringify(done.response.turn.toolCalls[0]?.arguments) === '{"path":"a.txt"}'
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

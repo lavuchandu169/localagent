@@ -95,5 +95,52 @@ console.log("\nEmbeddedLlamaProvider GPU-status diagnostic:");
   check("a GPU backend present but zero layers offloaded still reports CPU only (nothing is actually accelerated)", describeGpuStatus("cuda", 0) === "Embedded model ready — CPU only (no GPU backend detected)");
 }
 
+console.log("\nEmbeddedLlamaProvider.chatStream discards text recovered as a fallback tool call (final review I5):");
+{
+  // Some GGUF quantizations mis-flag their <tool_call> control token, so
+  // the model's intended tool call streams through onTextChunk looking
+  // like prose, but is actually serialized JSON — fromLlamaResult's own
+  // tryParseFallbackToolCall recovers the real call from it afterward.
+  // The streamed "text" was never real prose, so it must be discarded
+  // (via a StreamEvent "reset") before the terminal done, not left
+  // visible above the tool card that recovery produces.
+  const fallbackJson = '{"name": "read_file", "arguments": {"path": "a.txt"}}';
+  const fakeChat = {
+    generateResponse: async (_history: unknown, options: any) => {
+      options.onTextChunk?.(fallbackJson);
+      return { response: fallbackJson };
+    },
+  };
+  const provider = new EmbeddedLlamaProvider({ size: "fake-model" });
+  (provider as any).chatPromise = Promise.resolve(fakeChat);
+
+  const seen: any[] = [];
+  for await (const e of provider.chatStream!({ model: "fake-model", messages: [{ role: "user", content: "read a.txt" }] })) seen.push(e);
+
+  const textIndex = seen.findIndex((e) => e.type === "text");
+  const resetIndex = seen.findIndex((e) => e.type === "reset");
+  const done = seen.find((e) => e.type === "done");
+  check("the misidentified text was streamed", textIndex !== -1);
+  check("a reset event discards it before the terminal done", resetIndex !== -1 && resetIndex > textIndex);
+  check("the terminal done event still correctly surfaces the recovered tool call", done?.response.turn.type === "tool_calls" && done.response.turn.toolCalls[0]?.name === "read_file");
+}
+
+{
+  // A genuine final-text response (never matching the fallback shape)
+  // must NOT get a spurious reset — only the fallback-recovery case does.
+  const fakeChat = {
+    generateResponse: async (_history: unknown, options: any) => {
+      options.onTextChunk?.("Just a normal answer.");
+      return { response: "Just a normal answer." };
+    },
+  };
+  const provider = new EmbeddedLlamaProvider({ size: "fake-model" });
+  (provider as any).chatPromise = Promise.resolve(fakeChat);
+
+  const seen: any[] = [];
+  for await (const e of provider.chatStream!({ model: "fake-model", messages: [{ role: "user", content: "hi" }] })) seen.push(e);
+  check("a genuine text response never gets a spurious reset", !seen.some((e) => e.type === "reset"));
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -1,4 +1,5 @@
 import type { AgentEvent, PermissionMode } from "../../types.js";
+import { isEphemeralStreamEvent } from "../../types.js";
 import type { PickedAttachment } from "../attachments.js"; // same import renderer.ts already uses
 import type { ProviderConfig } from "../sessionRegistry.js";
 
@@ -132,6 +133,7 @@ export function lastEventStillRunning(events: AgentEvent[]): boolean {
 export function routeEvent(registry: TabRegistry, sessionId: string, event: AgentEvent): void {
   const tab = findTabForSession(registry, sessionId);
   if (!tab) return;
+  if (isEphemeralStreamEvent(event)) return;
   tab.events.push(event);
   tab.running = lastEventStillRunning(tab.events);
 }

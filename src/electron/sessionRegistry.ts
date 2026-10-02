@@ -12,6 +12,7 @@ import { isEmbeddedModelId } from "../models.js";
 import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode, PermissionResponse, Tool } from "../types.js";
+import { isEphemeralStreamEvent } from "../types.js";
 import { revertToCheckpoint } from "../checkpoints.js";
 import { getChanges, type FileChangeWithDiff } from "../changesSince.js";
 import { resolveFallbackOrder, DEFAULT_MODEL_BY_KIND as DEFAULT_MODEL_BY_CLOUD_KIND, type CloudProviderKind } from "./providerFallback.js";
@@ -416,7 +417,7 @@ async function doRunTask(
     // "error" (when present) yielded immediately before it. Persisting on
     // both would just save the same final state twice.
     for await (const event of entry.session.run(task, attachments)) {
-      entry.events.push(event);
+      if (!isEphemeralStreamEvent(event)) entry.events.push(event);
       onEvent(event);
       if (event.type === "done") {
         await persistSession(registry, sessionId, entry).catch(() => {});

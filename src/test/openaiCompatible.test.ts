@@ -164,5 +164,36 @@ console.log("\nOpenAICompatibleProvider.chatStream:");
   }
 }
 
+console.log("\nOpenAICompatibleProvider.chatStream surfaces an in-band error frame (final review I1):");
+{
+  // The bundled FreeLLMAPI proxy (and some upstream providers like Groq)
+  // can write a 200 SSE response, stream some real content, then emit
+  // `{"error":{...}}` mid-stream (headers already sent, so it can't
+  // retroactively send a different status code) before [DONE]. Silently
+  // treating this as a successful "final" response with truncated content
+  // would report a task as done when it actually failed partway through.
+  const sseBody =
+    'data: {"choices":[{"delta":{"content":"Half an ans"}}]}\n\n' +
+    'data: {"error":{"message":"upstream provider failed","type":"stream_error"}}\n\n' +
+    "data: [DONE]\n\n";
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(sseBody, { status: 200 })) as typeof fetch;
+  try {
+    const provider = new OpenAICompatibleProvider({ baseUrl: "http://localhost:11434/v1", local: true });
+    let threw: any = null;
+    const seen: any[] = [];
+    try {
+      for await (const e of provider.chatStream!({ model: "qwen2.5-coder", messages: [{ role: "user", content: "hi" }] })) seen.push(e);
+    } catch (err) {
+      threw = err;
+    }
+    check("an in-band error frame throws instead of yielding a truncated 'done' as success", threw instanceof ProviderChatError);
+    check("the already-streamed partial text was still visible to the consumer before the throw", seen.some((e) => e.type === "text" && e.text === "Half an ans"));
+    check("no 'done' event is yielded after the error frame", !seen.some((e) => e.type === "done"));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
