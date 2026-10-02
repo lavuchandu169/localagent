@@ -481,8 +481,12 @@ console.log("\nreconcileSessions: a remote tombstone (correctness audit: session
   // tombstone, not absent), and must delete its own local copy instead of
   // treating "present remotely" as license to push/pull like a normal
   // record.
+  //
+  // Local genuinely hasn't changed since the last sync (its checkpoint's
+  // localUpdatedAt matches) — a plain delete is safe, nothing to preserve.
   const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
-  await saveSession(sessionsDir, makeRecord("deleted-elsewhere", 100));
+  const checkpoint = { remoteModifiedTime: "2024-01-01T00:00:00.000Z", localUpdatedAt: 100 };
+  await saveSession(sessionsDir, makeRecord("deleted-elsewhere", 100, checkpoint));
 
   const uploaded: SessionRecord[] = [];
   const result = await reconcileSessions(sessionsDir, "tok", {
@@ -497,7 +501,36 @@ console.log("\nreconcileSessions: a remote tombstone (correctness audit: session
   });
   const local = await loadSessionRecord(sessionsDir, "deleted-elsewhere");
   check("the local copy is deleted, not re-pushed", local === null && uploaded.length === 0);
-  check("reports it as a local deletion, not a pull or push", result.deletedLocal === 1 && result.pulled === 0 && result.pushed === 0);
+  check("reports it as a local deletion, not a pull, push, or conflict", result.deletedLocal === 1 && result.pulled === 0 && result.pushed === 0 && result.conflicts === 0);
+}
+{
+  // Final-review finding I7: local WAS edited since the last sync (no
+  // checkpoint at all, in this case — never synced before) when the
+  // tombstone arrived — this device was genuinely still using the
+  // session when it was deleted elsewhere. Deleting it outright would
+  // silently destroy that work; it must be preserved under a
+  // conflict-suffixed id instead, same as a genuine concurrent-edit
+  // conflict.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  await saveSession(sessionsDir, makeRecord("deleted-but-edited", 500));
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "deleted-but-edited", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
+      downloadSession: async () => ({ tombstone: true as const, sessionId: "deleted-but-edited", deletedAt: new Date().toISOString() }),
+      uploadSession: async () => {
+        throw new Error("should not be called — a locally-edited-since-sync tombstone preserves, it doesn't push");
+      },
+    },
+  });
+  const local = await loadSessionRecord(sessionsDir, "deleted-but-edited");
+  check("the original id is still gone (deleted, not left in place)", local === null);
+  check("reports it as a conflict, not a plain local deletion", result.conflicts === 1 && result.deletedLocal === 0);
+  const allIds = (await listSessions(sessionsDir)).map((e) => e.id);
+  const conflictCopyId = allIds.find((id) => id !== "deleted-but-edited");
+  check("a conflict-suffixed copy preserving the local work was created", conflictCopyId !== undefined);
+  const conflictCopy = conflictCopyId ? await loadSessionRecord(sessionsDir, conflictCopyId) : null;
+  check("the preserved copy carries the local content (updatedAt 500)", conflictCopy?.updatedAt === 500);
 }
 {
   // The tombstone exists remotely but nothing local ever knew about this

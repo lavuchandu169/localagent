@@ -296,16 +296,30 @@ export async function reconcileSessions(
           return "pulled";
         }
         const remoteData = await ops.downloadSession(accessToken, remote.driveFileId);
+        const checkpoint = localRecord.lastSyncCheckpoint;
         if (isTombstone(remoteData)) {
           // Deleted on another device since this local copy was last
           // synced — delete it here too instead of treating "present
           // locally, present remotely" as license to push/pull like a
           // normal record, which would silently resurrect it.
+          //
+          // Final-review finding I7: but only ever a PLAIN delete when
+          // local hasn't itself changed since the last sync. A local edit
+          // made after that point (or a checkpoint that was never
+          // established at all) means this device was genuinely still
+          // using the session when it was deleted elsewhere — deleting it
+          // outright would silently destroy that work. Preserve it under
+          // a conflict-suffixed id instead, same mechanism as a genuine
+          // concurrent-edit conflict below.
+          const localChangedSinceSync = checkpoint === null || checkpoint.localUpdatedAt !== localRecord.updatedAt;
+          if (localChangedSinceSync) {
+            const conflictId = `${localRecord.id}-conflict-${Date.now()}`;
+            await saveSession(sessionsDir, { ...localRecord, id: conflictId, title: `${localRecord.title} (conflict copy)`, lastSyncCheckpoint: null });
+          }
           await deleteSession(sessionsDir, remote.sessionId);
-          return "deletedLocal";
+          return localChangedSinceSync ? "conflict" : "deletedLocal";
         }
         const remoteRecord = remoteData;
-        const checkpoint = localRecord.lastSyncCheckpoint;
 
         if (checkpoint === null) {
           // No robust history yet — fall back to the previous behavior for
