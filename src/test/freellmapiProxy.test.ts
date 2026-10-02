@@ -124,5 +124,56 @@ console.log("\nFreellmapiProxyProvider.chat surfaces a 429 as a retryable Provid
   }
 }
 
+console.log("\nFreellmapiProxyProvider.chat treats other 'free tier unusable' status codes as retryable too (correctness audit: FreeLLMAPI Medium #3):");
+for (const status of [502, 413, 404, 503]) {
+  const fakeDeps = {
+    startFreellmapiServer: async (_deps: any) => ({ port: 18885 }),
+    getFreellmapiUnifiedApiKey: () => "test-key",
+  };
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("free tier temporarily unusable", { status })) as typeof fetch;
+
+  try {
+    const provider = new FreellmapiProxyProvider({ userDataDir: "/tmp/does-not-matter" }, fakeDeps as any);
+    await provider.healthCheck();
+    try {
+      await provider.chat({ model: "auto", messages: [{ role: "user", content: "hi" }] });
+      check(`a ${status} response throws`, false);
+    } catch (err) {
+      check(`a ${status} response throws a ProviderChatError`, err instanceof ProviderChatError);
+      check(`a ${status} response is retryable, triggering agent.ts's fallback-to-cloud-provider path`, err instanceof ProviderChatError && err.retryable === true);
+      check(`a ${status} response still carries its real status`, err instanceof ProviderChatError && err.status === status);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+{
+  // A genuinely unrelated server error (never one of FreeLLMAPI's documented
+  // "free tier unusable" codes) must NOT be swept into retryable — that
+  // would silently mask a real bug behind a provider switch.
+  const fakeDeps = {
+    startFreellmapiServer: async (_deps: any) => ({ port: 18884 }),
+    getFreellmapiUnifiedApiKey: () => "test-key",
+  };
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("internal error", { status: 500 })) as typeof fetch;
+
+  try {
+    const provider = new FreellmapiProxyProvider({ userDataDir: "/tmp/does-not-matter" }, fakeDeps as any);
+    await provider.healthCheck();
+    try {
+      await provider.chat({ model: "auto", messages: [{ role: "user", content: "hi" }] });
+      check("a 500 response throws", false);
+    } catch (err) {
+      check("a 500 response is NOT retryable", err instanceof ProviderChatError && err.retryable === false);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -3,6 +3,28 @@ import { ProviderChatError } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
 import { parseSseLines } from "./sseLines.js";
 
+/** Correctness audit finding (FreeLLMAPI Medium #4): an OpenAI-shape error
+ * body is almost always JSON with a real, human-readable message buried
+ * inside ({error:{message}} or, less commonly, a bare {message}) — before
+ * this, the thrown ProviderChatError's message was the ENTIRE raw body
+ * dumped verbatim, which is what actually reached the user on a task
+ * failure. Falls back to the raw text untouched for a body that isn't
+ * JSON, or JSON with no message field, so a malformed/unexpected error
+ * shape is never a crash — the whole call is already behind .catch(() =>
+ * "") at its one call site. */
+function formatErrorMessage(status: number, text: string): string {
+  try {
+    const parsed = JSON.parse(text);
+    const message = parsed?.error?.message ?? parsed?.message;
+    if (typeof message === "string" && message.length > 0) {
+      return `Provider error ${status}: ${message}`;
+    }
+  } catch {
+    // Not JSON — fall through to the raw text below.
+  }
+  return `Provider error ${status}: ${text}`;
+}
+
 /**
  * Builds one message's `content` for the wire request — a plain string
  * when there are no attachments (unchanged from before this feature
@@ -125,7 +147,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // anthropicProvider.ts, geminiProvider.ts). A local server
       // (openai-compatible kind) never has fallbackProviders configured, so
       // this is a no-op behavior change for that existing caller.
-      throw new ProviderChatError(`Provider error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
+      throw new ProviderChatError(formatErrorMessage(res.status, text), { status: res.status, retryable: res.status === 429 });
     }
 
     const data: any = await res.json();
@@ -145,7 +167,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new ProviderChatError(`Provider error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
+      throw new ProviderChatError(formatErrorMessage(res.status, text), { status: res.status, retryable: res.status === 429 });
     }
 
     yield* streamOpenAIShapeResponse(res);

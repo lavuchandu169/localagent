@@ -99,6 +99,50 @@ console.log("\nOpenAICompatibleProvider classifies a 429 as retryable:");
   }
 }
 
+console.log("\nOpenAICompatibleProvider surfaces a parsed error message instead of a raw JSON blob (correctness audit: FreeLLMAPI Medium #4):");
+{
+  // FreeLLMAPI's error responses (like most OpenAI-shape servers) carry a
+  // real human-readable message inside {error:{message}} — before this
+  // fix, the thrown ProviderChatError's .message was the ENTIRE raw JSON
+  // body dumped verbatim, which is what a user actually saw on screen for
+  // a task failure.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ error: { message: "no provider key configured for any model", code: "needsKey" } }), {
+      status: 400,
+      statusText: "Bad Request",
+    })) as typeof fetch;
+  try {
+    const provider = new OpenAICompatibleProvider({ baseUrl: "http://127.0.0.1:8687/v1", local: false });
+    try {
+      await provider.chat({ model: "auto", messages: [{ role: "user", content: "hi" }] });
+      check("a 400 response throws", false);
+    } catch (err) {
+      check("the thrown message contains the real, human-readable error", err instanceof Error && err.message.includes("no provider key configured for any model"));
+      check("the thrown message does NOT dump the raw JSON blob verbatim", err instanceof Error && !err.message.includes('{"error":'));
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+{
+  // A non-JSON (or JSON with no message field) error body still falls back
+  // to the raw text — never a crash on malformed/unexpected error shapes.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("<html>502 Bad Gateway</html>", { status: 502, statusText: "Bad Gateway" })) as typeof fetch;
+  try {
+    const provider = new OpenAICompatibleProvider({ baseUrl: "http://127.0.0.1:8687/v1", local: false });
+    try {
+      await provider.chat({ model: "auto", messages: [{ role: "user", content: "hi" }] });
+      check("a 502 response throws", false);
+    } catch (err) {
+      check("a non-JSON error body still surfaces the raw text, not a crash", err instanceof Error && err.message.includes("502 Bad Gateway"));
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log("\nOpenAICompatibleProvider does NOT mark a 500 as retryable:");
 {
   const realFetch = globalThis.fetch;
