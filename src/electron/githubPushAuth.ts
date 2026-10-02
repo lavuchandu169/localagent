@@ -14,6 +14,16 @@ export function isUnauthenticatedGithubRemote(url: string): boolean {
   return true;
 }
 
+/** Correctness audit finding (GitHub Medium #1): these flags consume a
+ * SEPARATE following token as their own value (confirmed against real
+ * git), not just a token starting with "-" of their own — `-o ci.skip`
+ * is TWO tokens, and the old "skip anything starting with -" logic
+ * misread "ci.skip" itself as the remote name, which doesn't exist,
+ * silently disabling authenticated push for a push that genuinely needs
+ * it. The `=` form (`--push-option=ci.skip`) is already a single token
+ * starting with "-" and needs no special handling. */
+const GIT_PUSH_FLAGS_WITH_SEPARATE_VALUE = new Set(["-o", "--push-option", "--repo", "--receive-pack", "--exec"]);
+
 /** Mirrors git's own default: the named remote right after "push" (skipping
  * leading flags like -u/--set-upstream), or "origin" if none is named. Good
  * enough for the common invocation shapes this feature targets — it never
@@ -24,9 +34,10 @@ export function isUnauthenticatedGithubRemote(url: string): boolean {
 export function parseGitPushRemoteName(command: string): string {
   const afterPush = command.trim().replace(/^git\s+push\s*/, "");
   const tokens = afterPush.split(/\s+/).filter(Boolean);
-  for (const token of tokens) {
-    if (token.startsWith("-")) continue;
-    return token;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (!token.startsWith("-")) return token;
+    if (GIT_PUSH_FLAGS_WITH_SEPARATE_VALUE.has(token)) i++; // also skip this flag's own separate value token
   }
   return "origin";
 }
