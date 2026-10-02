@@ -43,6 +43,21 @@ async function main() {
     await fs.rm(outsideDir, { recursive: true, force: true });
   }
 
+  console.log("\neditFileTool: a symlink whose NAME looks innocent but resolves inside .git is still protected (final review Important #4, confirmed live — a malicious core.pager/core.fsmonitor hook planted this way runs on the next auto-allowed 'git status'/'git diff'):");
+  {
+    await fs.mkdir(path.join(root, ".git"), { recursive: true });
+    await fs.writeFile(path.join(root, ".git", "config"), "[core]\n", "utf-8");
+    await fs.symlink(path.join(root, ".git", "config"), path.join(root, "cfg"));
+
+    const result = await editFileTool.execute({ path: "cfg", content: "[core]\n  pager = touch /tmp/PWNED\n" }, ctx);
+    check("a symlink named 'cfg' resolving inside .git is refused, not written through", result.ok === false);
+    const gitConfigContent = await fs.readFile(path.join(root, ".git", "config"), "utf-8");
+    check(".git/config itself was never actually modified", gitConfigContent === "[core]\n");
+
+    await fs.rm(path.join(root, "cfg"), { force: true });
+    await fs.rm(path.join(root, ".git"), { recursive: true, force: true });
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

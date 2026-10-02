@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import type { Tool, ToolContext } from "../types.js";
 import { isProtectedPath, redactSecrets } from "../protected.js";
 import { resolveWithinWorkspace } from "../workspacePath.js";
@@ -26,6 +27,20 @@ export const readFileTool: Tool<Input, { path: string; content: string }> = {
       return { ok: false, output: null, error: resolved.error };
     }
     const abs = resolved.abs;
+    // Final review Important #4, confirmed live: a symlink whose own NAME
+    // ("cfg") looks innocent but RESOLVES inside .git (or any other
+    // protected pattern) bypassed the check above entirely, since it only
+    // ever looked at the requested string, never where the path actually
+    // points. Re-check isProtectedPath against the resolved, workspace-
+    // relative target too, normalized to forward slashes so the `.git/`
+    // pattern still matches on Windows (path.relative there uses `\`).
+    const resolvedRoot = await resolveWithinWorkspace(ctx.workspaceRoot, ".");
+    if (resolvedRoot.ok) {
+      const resolvedRel = path.relative(resolvedRoot.abs, abs).split(path.sep).join("/");
+      if (isProtectedPath(resolvedRel)) {
+        return { ok: false, output: null, error: `Refusing to read protected path: ${rel}` };
+      }
+    }
     try {
       const content = await fs.readFile(abs, "utf8");
       const MAX = 20000;

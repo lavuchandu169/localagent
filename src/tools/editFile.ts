@@ -30,6 +30,20 @@ export const editFileTool: Tool<Input, { path: string; bytesWritten: number; cre
       return { ok: false, output: null, error: resolved.error };
     }
     const abs = resolved.abs;
+    // Final review Important #4, confirmed live: a symlink named "cfg"
+    // pointing at .git/config bypassed the isProtectedPath check above
+    // entirely (it only ever looked at the requested string "cfg", never
+    // the resolved target) — the write then landed inside .git/config,
+    // a planted core.pager/core.fsmonitor hook running on the next
+    // auto-allowed "git status"/"git diff". Re-check against the
+    // resolved, workspace-relative target too.
+    const resolvedRoot = await resolveWithinWorkspace(ctx.workspaceRoot, ".");
+    if (resolvedRoot.ok) {
+      const resolvedRel = path.relative(resolvedRoot.abs, abs).split(path.sep).join("/");
+      if (isProtectedPath(resolvedRel)) {
+        return { ok: false, output: null, error: `Refusing to write protected path: ${input.path}` };
+      }
+    }
     let created = false;
     try {
       await fs.access(abs);

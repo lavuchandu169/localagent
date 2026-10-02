@@ -49,6 +49,24 @@ async function main() {
     await fs.rm(siblingRoot, { recursive: true, force: true });
   }
 
+  console.log("\nreadFileTool: a symlink whose NAME looks innocent but resolves inside .git is still protected (final review Important #4, confirmed live):");
+  {
+    // isProtectedPath previously only ever checked the REQUESTED relative
+    // path string ("cfg") — a symlink literally named "cfg" pointing at
+    // .git/config sailed straight past it, since "cfg" itself matches no
+    // protected pattern. Only the RESOLVED, workspace-relative target
+    // ("​.git/config") is what isProtectedPath needs to see.
+    await fs.mkdir(path.join(root, ".git"), { recursive: true });
+    await fs.writeFile(path.join(root, ".git", "config"), "[core]\n", "utf-8");
+    await fs.symlink(path.join(root, ".git", "config"), path.join(root, "cfg"));
+
+    const result = await readFileTool.execute({ path: "cfg" }, ctx);
+    check("a symlink named 'cfg' resolving inside .git is refused, not read", result.ok === false);
+
+    await fs.rm(path.join(root, "cfg"), { force: true });
+    await fs.rm(path.join(root, ".git"), { recursive: true, force: true });
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
