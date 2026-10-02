@@ -107,11 +107,23 @@ export async function uploadSession(accessToken: string, record: SessionRecord, 
   // Security audit finding M3: a session's own history can carry file
   // contents the agent read mid-task (e.g. a .env value quoted in a
   // run_command/read_file tool result) — redact the same way
-  // runCommand.ts/readFile.ts already do for their own output, applied
-  // to the whole serialized record since redaction is a plain string
-  // replace that's safe to run on JSON text (it only ever touches
-  // characters inside a string value, never JSON structural syntax).
-  const content = redactSecrets(JSON.stringify(stripAttachmentsForUpload(record)));
+  // runCommand.ts/readFile.ts already do for their own output.
+  //
+  // Final review Important #3, confirmed live: redacting the FINAL,
+  // already-JSON-escaped text (the earlier version of this line) is
+  // unsafe — the KEY=VALUE pattern's greedy `(\S+)` only stops at real
+  // whitespace, but compact JSON.stringify output has none at all, so a
+  // real newline inside the ORIGINAL string becomes the literal two
+  // characters `\n` in the escaped text (themselves non-whitespace),
+  // and the match silently runs on through every following field and
+  // even subsequent message objects — producing either invalid JSON or,
+  // worse, syntactically VALID JSON with later content silently deleted.
+  // A `JSON.stringify` replacer redacts each string value in isolation,
+  // on its raw (not yet escaped) text — where a real newline IS
+  // whitespace to `\S`, so the match correctly stops at the end of the
+  // actual secret — before JSON.stringify ever escapes or assembles the
+  // surrounding structure.
+  const content = JSON.stringify(stripAttachmentsForUpload(record), (_key, value) => (typeof value === "string" ? redactSecrets(value) : value));
 
   if (existingFileId) {
     const response = await fetchImpl(`${DRIVE_UPLOAD_ENDPOINT}/${existingFileId}?uploadType=media`, {

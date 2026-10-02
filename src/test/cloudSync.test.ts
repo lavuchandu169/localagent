@@ -89,10 +89,20 @@ console.log("\nuploadSession — update path (existing file):");
 console.log("\nuploadSession — redacts secrets before upload (security audit M3 — a session's own history can carry file contents the agent read, e.g. a .env value, which previously went to the user's Drive verbatim):");
 {
   const secretKey = "sk-" + "h".repeat(36);
+  // A trailing field AFTER the secret in the same string, and a second
+  // message after this one — final review Important #3, confirmed live:
+  // redacting the whole serialized JSON with the KEY=VALUE pattern's
+  // greedy (\S+) consumed every non-whitespace character onward (compact
+  // JSON.stringify output has NO whitespace at all), eating the rest of
+  // the document and leaving invalid, unparseable JSON. A real .env
+  // dump with more than one line (the common case) hits this every time.
   const record: SessionRecord = {
     id: "s-secret",
     title: "has a secret",
-    messages: [{ role: "tool", content: `cat .env output: API_KEY=${secretKey}`, name: "run_command" } as ChatMessage],
+    messages: [
+      { role: "tool", content: `API_KEY=${secretKey}\nOTHER=1`, name: "run_command" } as ChatMessage,
+      { role: "assistant", content: "done reading .env" } as ChatMessage,
+    ],
     events: [],
     createdAt: 100,
     updatedAt: 100,
@@ -109,7 +119,17 @@ console.log("\nuploadSession — redacts secrets before upload (security audit M
   await uploadSession("tok", record, fakeFetch);
   check("the secret value never reaches the uploaded body", !!uploadedBody && !uploadedBody.includes(secretKey));
   check("the redaction marker is present in its place", !!uploadedBody && uploadedBody.includes("[REDACTED]"));
-  check("the rest of the message content is still intact", !!uploadedBody && uploadedBody.includes("cat .env output: API_KEY="));
+
+  let parsed: SessionRecord | undefined;
+  let parseError: unknown;
+  try {
+    parsed = uploadedBody ? JSON.parse(uploadedBody) : undefined;
+  } catch (err) {
+    parseError = err;
+  }
+  check("the uploaded body is still valid, parseable JSON (not corrupted by redaction eating the rest of the document)", parsed !== undefined && parseError === undefined);
+  check("content AFTER the secret on the same line survived", parsed?.messages[0]?.content.includes("OTHER=1") ?? false);
+  check("a later message after the redacted one survived intact", parsed?.messages[1]?.content === "done reading .env");
 }
 
 console.log("\nuploadSession — strips image/text attachments before upload:");
