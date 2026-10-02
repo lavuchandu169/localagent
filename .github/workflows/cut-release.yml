@@ -128,9 +128,16 @@ jobs:
           if [ -z "$TITLE" ]; then
             TITLE=$(git log -1 --format=%s | sed -E 's/ \(#[0-9]+\)$//')
           fi
-          echo "changelog_entry<<CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+          # A static delimiter here is a known GITHUB_OUTPUT injection
+          # pattern (security audit) — TITLE is an external contributor's
+          # own PR title, and if it happened to contain the literal line
+          # "CHANGELOG_EOF" it could terminate this heredoc early and
+          # inject extra key=value pairs into this step's outputs. A
+          # fresh random delimiter per run can't be predicted in advance.
+          DELIM="CHANGELOG_EOF_$(openssl rand -hex 8)"
+          echo "changelog_entry<<$DELIM" >> "$GITHUB_OUTPUT"
           echo "$TITLE" >> "$GITHUB_OUTPUT"
-          echo "CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+          echo "$DELIM" >> "$GITHUB_OUTPUT"
 
       - name: Bump version and update CHANGELOG.md
         id: bump
