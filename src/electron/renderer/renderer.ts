@@ -72,6 +72,14 @@ interface SessionIndexEntry {
   ownerEmail: string | null;
 }
 
+/** Mirrors sessionStore.ts's PersistedProviderConfig — deliberately never carries an apiKey (see that type's own doc comment). */
+interface PersistedProviderConfig {
+  kind: "openai-compatible" | "embedded" | "anthropic" | "openai" | "gemini" | "freellmapi";
+  model?: string;
+  baseUrl?: string;
+  size?: string;
+}
+
 interface SessionRecord {
   id: string;
   title: string;
@@ -80,6 +88,11 @@ interface SessionRecord {
   createdAt: number;
   updatedAt: number;
   ownerEmail: string | null;
+  /** Correctness audit finding (session High #1, #2) — see sessionStore.ts's SessionRecord for why these exist and why they're nullable. */
+  provider: PersistedProviderConfig | null;
+  mode: PermissionMode | null;
+  planFirst: boolean;
+  checkpointHash: string | null;
 }
 
 interface ResumePayload {
@@ -89,6 +102,7 @@ interface ResumePayload {
   title: string;
   createdAt: number;
   ownerEmail: string | null;
+  checkpointHash: string | null;
 }
 
 /** The live, in-memory shape of an active session — see getLiveSessionSnapshot in sessionRegistry.ts. Unlike SessionRecord, this is available even for a session that hasn't run a task (and so hasn't hit disk) yet. */
@@ -1998,6 +2012,27 @@ function captureFormIntoTab(): void {
  */
 const startedSessionConfigs = new Map<string, { provider: ProviderConfig; mode: PermissionMode; planFirst: boolean }>();
 
+/** Converts a persisted, apiKey-free provider config back into a real ProviderConfig for resumeSession — null if the persisted shape is missing a field its own kind requires (a record saved before this existed, or any other unexpected shape), so the caller can fall back to the tab's current default rather than guessing wrong (correctness audit: session High #1). */
+function providerConfigFromPersisted(persisted: PersistedProviderConfig | null): ProviderConfig | null {
+  if (!persisted) return null;
+  switch (persisted.kind) {
+    case "openai-compatible":
+      return typeof persisted.baseUrl === "string" && typeof persisted.model === "string"
+        ? { kind: "openai-compatible", baseUrl: persisted.baseUrl, model: persisted.model }
+        : null;
+    case "embedded":
+      return typeof persisted.size === "string" ? { kind: "embedded", size: persisted.size } : null;
+    case "anthropic":
+    case "openai":
+    case "gemini":
+      return { kind: persisted.kind, model: persisted.model };
+    case "freellmapi":
+      return { kind: "freellmapi" };
+    default:
+      return null;
+  }
+}
+
 /** True only while `tab` is the one the shared DOM is currently painting. Every DOM write in beginSession that happens AFTER an await has to ask this first: the user is free to switch tabs while an embedded model spends 30s loading, and painting "Session started"/an unlocked composer/a collapsed setup form into whatever tab they switched to is exactly the leak this guards. The tab's OWN fields (sessionId, activeProvider, …) are still updated unconditionally, so switching back to it later renders the right state through the normal syncFormFromTab/clearAndReplayEventLog path. */
 function isActiveTab(tab: TabState): boolean {
   return tab.tabId === tabRegistry.activeTabId;
@@ -2355,6 +2390,15 @@ async function applySessionEdits(): Promise<void> {
       if (isActiveTab(tab)) startError.textContent = "Couldn't read the current session to apply changes.";
       return;
     }
+    // Read BEFORE cancelSession disposes this session — the checkpoint
+    // itself is a git commit in the workspace, independent of which
+    // provider/model is editing it, so switching provider/model here
+    // must not silently drop "Revert this task" the same way an
+    // unrelated app-restart resume could (correctness audit: session
+    // High #2 — this is the same AgentSession continuing under a new
+    // provider, not a resume-after-restart, but the exact same
+    // checkpoint-preservation principle applies).
+    const checkpointHash = await window.agent.getCheckpoint(idBeingEdited);
     await window.agent.cancelSession(idBeingEdited);
     tab.sessionId = null;
     tab.running = false;
@@ -2370,6 +2414,7 @@ async function applySessionEdits(): Promise<void> {
       title: snapshot.title,
       createdAt: snapshot.createdAt,
       ownerEmail: snapshot.ownerEmail,
+      checkpointHash,
     });
   } finally {
     tab.editingSession = false;
@@ -2693,6 +2738,17 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
     const diskRecord = record!;
     tab.events = [...diskRecord.events];
     tab.title = diskRecord.title;
+    // Correctness audit finding (session High #1): without this, resuming
+    // a session after an app restart silently fell back to whatever the
+    // setup form currently showed — including a PLAN-mode/no-planFirst
+    // session silently resuming in DEFAULT mode with no plan gating.
+    // Falls back to the tab's current value (not a hardcoded default) for
+    // any field the disk record doesn't have (a legacy record, or a
+    // provider shape providerConfigFromPersisted couldn't convert).
+    const restoredProvider = providerConfigFromPersisted(diskRecord.provider);
+    if (restoredProvider) tab.provider = restoredProvider;
+    if (diskRecord.mode) tab.mode = diskRecord.mode;
+    tab.planFirst = diskRecord.planFirst;
     renderTabStrip();
     focusTab(tabRegistry, tab.tabId);
     renderTabStrip();
@@ -2706,6 +2762,10 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
       title: diskRecord.title,
       createdAt: diskRecord.createdAt,
       ownerEmail: diskRecord.ownerEmail,
+      // Correctness audit finding (session High #2): without this, a
+      // checkpoint never survives an app restart — "Revert this task"
+      // silently becomes unavailable with no indication to the user.
+      checkpointHash: diskRecord.checkpointHash,
     });
     tab.title = diskRecord.title;
     renderTabStrip();
