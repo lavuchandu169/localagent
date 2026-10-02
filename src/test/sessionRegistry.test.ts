@@ -528,7 +528,7 @@ await (async () => {
       { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
       {
         providerFactory: () => new MockProvider([]),
-        resume: { sessionId, initialMessages: [{ role: "system", content: "sys" }], priorEvents: [], title: "t", createdAt: Date.now(), ownerEmail: null },
+        resume: { sessionId, initialMessages: [{ role: "system", content: "sys" }], priorEvents: [], title: "t", createdAt: Date.now(), ownerEmail: null, checkpointHash: null },
       }
     );
     check("starting a new session under the same just-cancelled id succeeds", restarted.sessionId === sessionId);
@@ -635,6 +635,7 @@ await (async () => {
           title: "earlier task title",
           createdAt: 12345,
           ownerEmail: null,
+          checkpointHash: null,
         },
       }
     );
@@ -870,6 +871,7 @@ await (async () => {
           title: "resumed",
           createdAt: Date.now(),
           ownerEmail: "original-owner@example.com",
+          checkpointHash: null,
         },
       }
     );
@@ -1122,6 +1124,91 @@ await (async () => {
     const snapshot = getLiveSessionSnapshot(registry, sessionId);
     check("no text.delta events are persisted into the session's event history", !snapshot?.events.some((e) => e.type === "text.delta"));
     check("the terminal, non-ephemeral text event is still persisted normally", !!snapshot?.events.some((e) => e.type === "text" && e.text === "Hello"));
+  }
+
+  console.log("\npersistSession writes real provider/mode/planFirst/checkpointHash to disk, and resuming restores them (correctness audit: session High #1, #2):");
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessionregistry-checkpoint-test-"));
+    const execFileAsync2 = promisify(execFile);
+    const git2 = async (args: string[]) => (await execFileAsync2("git", args, { cwd: repo })).stdout.trim();
+    await git2(["init", "-q"]);
+    await git2(["config", "user.email", "t@t.com"]);
+    await git2(["config", "user.name", "T"]);
+    await fs.writeFile(path.join(repo, "a.txt"), "v1\n", "utf-8");
+    await git2(["add", "-A"]);
+    await git2(["commit", "-q", "-m", "initial"]);
+
+    // read_file first, matching the pattern this file's other tests use —
+    // edit_file on a path never read this session gets ASKed even in
+    // ACCEPT_EDITS (the read-before-write override), and this test has no
+    // onApprovalNeeded wired up to ever answer that ask.
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "a.txt" } },
+            { id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v2\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot: repo, provider: { kind: "anthropic", model: "claude-opus-4" }, mode: "DEFAULT", planFirst: true },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    // A live mode change before the task runs, to prove persistSession
+    // reads mode LIVE (entry.session.getPermissionMode()) rather than
+    // whatever mode the session originally started with.
+    updateLiveSessionSettings(registry, sessionId, { mode: "ACCEPT_EDITS" });
+    // planFirst holds the task's first turn for approval — respond to it
+    // so this task can actually reach completion (and take its
+    // checkpoint) rather than hanging indefinitely. setImmediate (not a
+    // synchronous call here) matches this file's own established pattern
+    // elsewhere: respondPlan is called from the SAME onEvent callback
+    // that's still synchronously processing the just-yielded
+    // "plan.proposed" event, before agent.ts's generator has resumed
+    // past the yield to actually register pendingPlanApproval.resolve —
+    // calling it synchronously here is a no-op race that hangs forever.
+    await runTask(registry, sessionId, "bump the file", (event) => {
+      if (event.type === "plan.proposed") setImmediate(() => respondPlan(registry, sessionId, true));
+    });
+
+    const saved = await loadSessionRecord(sessionsDir, sessionId);
+    check("the persisted record's provider.kind matches what the session was started with", saved?.provider?.kind === "anthropic");
+    check("the persisted record's provider.model matches what the session was started with", (saved?.provider as any)?.model === "claude-opus-4");
+    check("the persisted record's mode reflects the LIVE mode (after updateLiveSessionSettings), not the original DEFAULT", saved?.mode === "ACCEPT_EDITS");
+    check("the persisted record's planFirst matches what the session was started with", saved?.planFirst === true);
+    check("the persisted record's checkpointHash matches the live session's real checkpoint", typeof saved?.checkpointHash === "string" && saved.checkpointHash === registry.sessions.get(sessionId)?.session.getCheckpointHash());
+
+    // Full round trip: resume a NEW registry (simulating an app restart)
+    // from the persisted record and confirm settings/checkpoint restore.
+    const registry2 = createSessionRegistry(sessionsDir);
+    await startSession(
+      registry2,
+      { workspaceRoot: repo, provider: saved!.provider as any, mode: saved!.mode as any, planFirst: saved!.planFirst },
+      {
+        providerFactory: () => new MockProvider([{ turn: { type: "final", content: "resumed" } }]),
+        resume: {
+          sessionId,
+          initialMessages: saved!.messages,
+          priorEvents: saved!.events,
+          title: saved!.title,
+          createdAt: saved!.createdAt,
+          ownerEmail: saved!.ownerEmail,
+          checkpointHash: saved!.checkpointHash,
+        },
+      }
+    );
+    check(
+      "resuming from the persisted record restores getCheckpointHash() to the real checkpoint, not null",
+      registry2.sessions.get(sessionId)?.session.getCheckpointHash() === saved?.checkpointHash
+    );
+
+    await fs.rm(repo, { recursive: true, force: true });
   }
 
   await fs.rm(sessionsDir, { recursive: true, force: true });

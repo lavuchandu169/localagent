@@ -347,6 +347,50 @@ await (async () => {
     "without initialMessages, a session still starts with just the system prompt",
     freshSession.getMessages().length === 1 && freshSession.getMessages()[0]?.role === "system"
   );
+
+  // Correctness audit finding (session High #2): resuming a session with a
+  // real prior checkpoint hash must restore getCheckpointHash() to it —
+  // without this, "Revert this task" silently becomes unavailable the
+  // moment a session is resumed, with no indication to the user.
+  const resumedWithCheckpoint = new AgentSession({
+    workspaceRoot,
+    model: "mock",
+    provider: new MockProvider([{ turn: { type: "final", content: "x" } }]),
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN",
+    initialMessages: seeded,
+    initialCheckpointHash: "abc123fakehash",
+  });
+  check("initialCheckpointHash seeds getCheckpointHash() on a resumed session", resumedWithCheckpoint.getCheckpointHash() === "abc123fakehash");
+
+  const resumedWithoutCheckpoint = new AgentSession({
+    workspaceRoot,
+    model: "mock",
+    provider: new MockProvider([{ turn: { type: "final", content: "x" } }]),
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN",
+    initialCheckpointHash: null,
+  });
+  check("a null/absent initialCheckpointHash leaves getCheckpointHash() at null, same as today", resumedWithoutCheckpoint.getCheckpointHash() === null);
+
+  // Correctness audit: getPermissionMode()/getPlanFirst() must reflect the
+  // LIVE setting (after a mid-session edit), not just the value a session
+  // started with — sessionRegistry.ts's persistSession relies on this to
+  // never persist stale provider/mode/planFirst.
+  const liveSettingsSession = new AgentSession({
+    workspaceRoot,
+    model: "mock",
+    provider: new MockProvider([{ turn: { type: "final", content: "x" } }]),
+    tools: defaultToolRegistry(),
+    permissionMode: "DEFAULT",
+    planFirst: false,
+  });
+  check("getPermissionMode() reflects the mode the session started with", liveSettingsSession.getPermissionMode() === "DEFAULT");
+  check("getPlanFirst() reflects the planFirst the session started with", liveSettingsSession.getPlanFirst() === false);
+  liveSettingsSession.setPermissionMode("PLAN");
+  liveSettingsSession.setPlanFirst(true);
+  check("getPermissionMode() reflects a live setPermissionMode call, not the original value", liveSettingsSession.getPermissionMode() === "PLAN");
+  check("getPlanFirst() reflects a live setPlanFirst call, not the original value", liveSettingsSession.getPlanFirst() === true);
 })();
 
 console.log("\nMid-turn cancellation backfill doesn't over-scope to earlier turns:");

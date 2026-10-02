@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ChatMessage, AgentEvent } from "./types.js";
+import type { ChatMessage, AgentEvent, PermissionMode } from "./types.js";
 
 export interface SessionIndexEntry {
   id: string;
@@ -8,6 +8,22 @@ export interface SessionIndexEntry {
   updatedAt: number;
   /** The Google account email that owns this session, or null for a session saved before ownership existed (or one that's never been signed-in-tagged). */
   ownerEmail: string | null;
+}
+
+/**
+ * Just enough to rebuild a ModelProvider config on resume — deliberately
+ * NEVER includes an API key. Every cloud-provider API key is re-resolved
+ * fresh from its own encrypted settings file at session-start time
+ * regardless of what's in this config (see main.ts's "agent:start-session"
+ * handler, which the renderer's own provider config never carries a key
+ * for either) — persisting one here would duplicate a secret into every
+ * session record and cloud-synced copy for no benefit.
+ */
+export interface PersistedProviderConfig {
+  kind: "openai-compatible" | "embedded" | "anthropic" | "openai" | "gemini" | "freellmapi";
+  model?: string;
+  baseUrl?: string;
+  size?: string;
 }
 
 export interface SessionRecord {
@@ -19,6 +35,12 @@ export interface SessionRecord {
   updatedAt: number;
   /** The Google account email that owns this session, or null. See SessionIndexEntry. */
   ownerEmail: string | null;
+  /** Correctness audit finding (session High #1): without these, resuming a session after an app restart silently fell back to whatever the setup form currently showed — including a PLAN-mode/no-planFirst session silently resuming in DEFAULT mode with no plan gating. Null on a record saved before these fields existed; the resume caller falls back to its own default in that case, same as ownerEmail's existing `?? null` pattern. */
+  provider: PersistedProviderConfig | null;
+  mode: PermissionMode | null;
+  planFirst: boolean;
+  /** Correctness audit finding (session High #2): without this, a checkpoint never survives an app restart — "Revert this task" silently becomes unavailable the moment the app is closed and reopened, with no indication to the user that the capability (and the now-or-never window to use it) just disappeared. */
+  checkpointHash: string | null;
 }
 
 function indexPath(sessionsDir: string): string {
@@ -122,6 +144,10 @@ export async function loadSessionRecord(sessionsDir: string, id: string): Promis
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
       ownerEmail: r.ownerEmail ?? null,
+      provider: r.provider ?? null,
+      mode: r.mode ?? null,
+      planFirst: r.planFirst ?? false,
+      checkpointHash: r.checkpointHash ?? null,
     };
   } catch {
     return null;

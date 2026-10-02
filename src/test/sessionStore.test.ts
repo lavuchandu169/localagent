@@ -29,7 +29,20 @@ function makeRecord(id: string, title: string, updatedAt: number, extra: Partial
     { role: "user", content: title },
   ];
   const events: AgentEvent[] = [{ type: "text", text: `response mentioning ${title}` }];
-  return { id, title, messages, events, createdAt: updatedAt, updatedAt, ownerEmail: null, ...extra };
+  return {
+    id,
+    title,
+    messages,
+    events,
+    createdAt: updatedAt,
+    updatedAt,
+    ownerEmail: null,
+    provider: null,
+    mode: null,
+    planFirst: false,
+    checkpointHash: null,
+    ...extra,
+  };
 }
 
 console.log("Session store (explicit path):");
@@ -147,6 +160,49 @@ async function runTests() {
 }
 
 await runTests();
+
+console.log("\nSessionRecord persists provider/mode/planFirst/checkpointHash, so resuming a session can restore them instead of silently falling back to defaults (correctness audit: session High #1, #2):");
+{
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessions-persist-test-"));
+  const record = makeRecord("persist-1", "has real config", 100, {
+    provider: { kind: "anthropic", model: "claude-opus-4" },
+    mode: "PLAN",
+    planFirst: true,
+    checkpointHash: "abc123def456",
+  });
+  await saveSession(sessionsDir, record);
+  const loaded = await loadSessionRecord(sessionsDir, "persist-1");
+  check("provider round-trips", loaded?.provider?.kind === "anthropic" && (loaded?.provider as any).model === "claude-opus-4");
+  check("mode round-trips", loaded?.mode === "PLAN");
+  check("planFirst round-trips", loaded?.planFirst === true);
+  check("checkpointHash round-trips", loaded?.checkpointHash === "abc123def456");
+  await fs.rm(sessionsDir, { recursive: true, force: true });
+}
+{
+  // A session saved before these fields existed (or one missing them for
+  // any other reason) must still load cleanly, with sane defaults rather
+  // than being treated as corrupt.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessions-legacy-test-"));
+  const legacyRaw = {
+    id: "legacy-1",
+    title: "old session",
+    messages: [],
+    events: [],
+    createdAt: 1,
+    updatedAt: 1,
+    ownerEmail: null,
+    // no provider/mode/planFirst/checkpointHash at all
+  };
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await fs.writeFile(path.join(sessionsDir, "legacy-1.json"), JSON.stringify(legacyRaw), "utf-8");
+  const loaded = await loadSessionRecord(sessionsDir, "legacy-1");
+  check("a legacy record with no provider field still loads (not treated as corrupt)", loaded !== null);
+  check("provider defaults to null (caller falls back to its own default) rather than throwing", loaded?.provider === null);
+  check("mode defaults to null", loaded?.mode === null);
+  check("planFirst defaults to false", loaded?.planFirst === false);
+  check("checkpointHash defaults to null", loaded?.checkpointHash === null);
+  await fs.rm(sessionsDir, { recursive: true, force: true });
+}
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

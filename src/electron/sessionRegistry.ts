@@ -9,7 +9,7 @@ import { OpenAIProvider } from "../providers/openaiProvider.js";
 import { GeminiProvider } from "../providers/geminiProvider.js";
 import { FreellmapiProxyProvider } from "../providers/freellmapiProxy.js";
 import { isEmbeddedModelId } from "../models.js";
-import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
+import { saveSession, deleteSession, type SessionRecord, type PersistedProviderConfig } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode, PermissionResponse, Tool } from "../types.js";
 import { isEphemeralStreamEvent } from "../types.js";
@@ -51,6 +51,8 @@ export interface ResumePayload {
   title: string;
   createdAt: number;
   ownerEmail: string | null;
+  /** Correctness audit finding (session High #2): without this, a resumed session always starts with no checkpoint — "Revert this task" silently disappears across an app restart. Null for a session that never took one. */
+  checkpointHash: string | null;
 }
 
 /** Best-effort cloud sync wiring, supplied by main.ts. uploadSession/deleteRemoteSession default to the real Drive-backed implementations — tests override them directly instead of faking fetch. */
@@ -77,6 +79,24 @@ interface SessionEntry {
   running: Promise<void> | null;
   /** Fixed once at session creation (or carried over from a resumed session's prior record) — never re-derived from "whoever's currently signed in" on every save, so signing out or switching accounts mid-conversation can't silently strip ownership from an already-owned session. */
   ownerEmail: string | null;
+  /** Fixed once at session creation — the provider/model never change for a live session's lifetime (editing either requires cancelSession + startSession(resume) instead, per updateLiveSessionSettings's own doc comment), so caching this here (rather than trying to derive it from the live ModelProvider instance, which has no clean way back to the original ProviderConfig "kind") is always accurate. Correctness audit finding (session High #1): persisted alongside mode/planFirst so resuming a session restores its real settings instead of silently falling back to a form's current defaults. */
+  providerConfig: PersistedProviderConfig;
+}
+
+/** Strips the API key (if any) before caching/persisting — see PersistedProviderConfig's own doc comment for why a key never belongs here. */
+function toPersistedProviderConfig(config: ProviderConfig): PersistedProviderConfig {
+  switch (config.kind) {
+    case "openai-compatible":
+      return { kind: "openai-compatible", baseUrl: config.baseUrl, model: config.model };
+    case "embedded":
+      return { kind: "embedded", size: config.size };
+    case "anthropic":
+    case "openai":
+    case "gemini":
+      return { kind: config.kind, model: config.model };
+    case "freellmapi":
+      return { kind: "freellmapi" };
+  }
 }
 
 export interface SessionRegistry {
@@ -222,6 +242,7 @@ export async function startSession(
       }),
     fallbackProviders,
     providerLabel,
+    initialCheckpointHash: deps.resume?.checkpointHash ?? null,
   });
 
   // Fixed once here: a resumed session keeps its original owner regardless
@@ -241,6 +262,7 @@ export async function startSession(
     deleted: false,
     running: null,
     ownerEmail,
+    providerConfig: toPersistedProviderConfig(config.provider),
   });
   return { sessionId, workspaceRoot };
 }
@@ -359,6 +381,15 @@ async function persistSession(registry: SessionRegistry, sessionId: string, entr
     createdAt: entry.createdAt,
     updatedAt: Date.now(),
     ownerEmail: entry.ownerEmail,
+    // Correctness audit finding (session High #1, #2): provider/model are
+    // fixed for the entry's lifetime (see providerConfig's own doc
+    // comment); mode/planFirst/checkpointHash are read LIVE off the
+    // session so a mid-session "Edit settings…" change or a later
+    // checkpoint is never persisted stale.
+    provider: entry.providerConfig,
+    mode: entry.session.getPermissionMode(),
+    planFirst: entry.session.getPlanFirst(),
+    checkpointHash: entry.session.getCheckpointHash(),
   };
   await saveSession(registry.sessionsDir, record);
   // Fire-and-forget: syncUploadToCloud never rejects (it catches everything

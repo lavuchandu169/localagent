@@ -32,6 +32,8 @@ export interface AgentSessionOptions {
   systemPrompt?: string;
   /** Seeds the conversation from a prior session's history instead of starting fresh with just the system prompt — used to resume a saved session. */
   initialMessages?: ChatMessage[];
+  /** Seeds checkpointHash from a prior session's persisted value — without this, resuming a session after an app restart always starts with no checkpoint (getCheckpointHash() === null), silently making "Revert this task" unavailable with no indication the capability (and the now-or-never window to use it) just disappeared (correctness audit: session High #2). */
+  initialCheckpointHash?: string | null;
   /** Called when a tool call needs ASK approval. Return `{ approved: true }` to allow; add `approvedHunkIds` to apply only some of an edit_file diff's hunks. */
   onApprovalNeeded?: (call: ToolCall) => Promise<PermissionResponse>;
   /**
@@ -204,6 +206,7 @@ export class AgentSession {
     } else {
       this.messages.push({ role: "system", content: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT });
     }
+    if (opts.initialCheckpointHash) this.checkpointHash = opts.initialCheckpointHash;
   }
 
   /** A copy of the current conversation history, safe to persist or inspect without risking mutation of the live session. */
@@ -234,6 +237,16 @@ export class AgentSession {
   /** Updates whether the next task's first turn gets held for approval before executing — same in-place, between-tasks-only contract as setWorkspaceRoot/setPermissionMode. */
   setPlanFirst(planFirst: boolean): void {
     this.opts.planFirst = planFirst;
+  }
+
+  /** Reads the live permission mode — same never-stale contract as getWorkspaceRoot, so a caller persisting session state (sessionRegistry.ts) always sees the result of the most recent setPermissionMode, not whatever mode the session started with. */
+  getPermissionMode(): PermissionMode {
+    return this.permissions.getMode();
+  }
+
+  /** Reads the live planFirst setting — same never-stale contract as getPermissionMode. */
+  getPlanFirst(): boolean {
+    return this.opts.planFirst ?? false;
   }
 
   cancel() {

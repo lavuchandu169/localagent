@@ -17,7 +17,19 @@ function check(name: string, cond: boolean) {
 }
 
 function makeRecord(id: string, updatedAt: number): SessionRecord {
-  return { id, title: `title-${id}`, messages: [], events: [], createdAt: updatedAt, updatedAt, ownerEmail: null };
+  return {
+    id,
+    title: `title-${id}`,
+    messages: [],
+    events: [],
+    createdAt: updatedAt,
+    updatedAt,
+    ownerEmail: null,
+    provider: null,
+    mode: null,
+    planFirst: false,
+    checkpointHash: null,
+  };
 }
 
 console.log("cloudSync (fake fetch):");
@@ -108,6 +120,10 @@ console.log("\nuploadSession — strips image/text attachments before upload:");
     createdAt: 100,
     updatedAt: 100,
     ownerEmail: null,
+    provider: null,
+    mode: null,
+    planFirst: false,
+    checkpointHash: null,
   };
 
   let capturedBody: string | undefined;
@@ -154,6 +170,10 @@ console.log("\nuploadSession — a message with no attachments round-trips unaff
     createdAt: 100,
     updatedAt: 100,
     ownerEmail: null,
+    provider: null,
+    mode: null,
+    planFirst: false,
+    checkpointHash: null,
   };
 
   let capturedBody: string | undefined;
