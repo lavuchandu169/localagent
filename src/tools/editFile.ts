@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Tool, ToolContext } from "../types.js";
 import { isProtectedPath } from "../protected.js";
+import { resolveWithinWorkspace } from "../workspacePath.js";
 
 interface Input {
   path: string;
@@ -24,10 +25,11 @@ export const editFileTool: Tool<Input, { path: string; bytesWritten: number; cre
     if (isProtectedPath(input.path)) {
       return { ok: false, output: null, error: `Refusing to write protected path: ${input.path}` };
     }
-    const abs = path.resolve(ctx.workspaceRoot, input.path);
-    if (!abs.startsWith(path.resolve(ctx.workspaceRoot))) {
-      return { ok: false, output: null, error: "Path escapes workspace root." };
+    const resolved = await resolveWithinWorkspace(ctx.workspaceRoot, input.path);
+    if (!resolved.ok) {
+      return { ok: false, output: null, error: resolved.error };
     }
+    const abs = resolved.abs;
     let created = false;
     try {
       await fs.access(abs);
