@@ -155,8 +155,15 @@ export async function startSession(
     /** Lets the caller cancel an in-progress embedded-model download — see buildProvider. */
     signal?: AbortSignal;
     resume?: ResumePayload;
-    /** Currently-connected MCP servers' tools, supplied by main.ts — see mcpClient.ts/mcpToolAdapter.ts. Defaults to none, so every existing caller/test is unaffected. */
-    extraTools?: Tool[];
+    /** Live getter for currently-connected MCP servers' tools (plus the
+     * GitHub tools), supplied by main.ts — see mcpClient.ts/mcpToolAdapter.ts.
+     * A function, not a snapshot array (correctness audit finding, MCP
+     * Medium): ToolRegistry re-calls this on every lookup rather than
+     * caching its result once, so an MCP server disconnected or removed
+     * after this session starts stops being callable on the very next
+     * turn instead of staying stale for the session's whole life. Defaults
+     * to none, so every existing caller/test is unaffected. */
+    getExtraTools?: () => Tool[];
     /** Directory holding anthropic-settings.json/openai-settings.json/gemini-settings.json — passed so startSession can resolve fallback candidates via providerFallback.ts. Undefined (every existing caller/test that doesn't care about fallback) means no fallback is ever configured, exactly like today's behavior. */
     settingsDir?: string;
     storageCrypto?: StorageCrypto;
@@ -227,7 +234,7 @@ export async function startSession(
             ? "auto"
             : config.provider.size,
     provider,
-    tools: defaultToolRegistry(deps.extraTools ?? []),
+    tools: defaultToolRegistry(deps.getExtraTools ?? (() => [])),
     getGithubToken: deps.getGithubToken,
     permissionMode: config.mode,
     initialMessages: deps.resume?.initialMessages,

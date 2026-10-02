@@ -107,12 +107,57 @@ await (async () => {
     await startSession(
       registry,
       { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
-      { providerFactory: () => provider, extraTools: [extraTool] }
+      { providerFactory: () => provider, getExtraTools: () => [extraTool] }
     );
     const sessionId = [...registry.sessions.keys()][0]!;
     await runTask(registry, sessionId, "anything", () => {});
     const toolNames = provider.receivedRequests[0]?.tools?.map((t) => t.name) ?? [];
     check("extraTools passed to startSession reach the model's tool list", toolNames.includes("mcp__github__ping"));
+  }
+
+  {
+    // Correctness audit finding (MCP Medium): an already-started session
+    // previously kept whatever extraTools snapshot existed at
+    // agent:start-session time for its entire life — an MCP server
+    // disconnected or removed afterward stayed fully callable (and a newly
+    // added one stayed invisible) until the session was restarted. A live
+    // getExtraTools() closure, re-called on every turn rather than
+    // snapshotted once, fixes that: this session starts with the tool
+    // present, the test then removes it from the SAME live source the
+    // registry was given, and the session's very next task must no longer
+    // see it — with no restart in between.
+    const registry = createSessionRegistry(sessionsDir);
+    const extraTool = {
+      name: "mcp__github__ping",
+      description: "[MCP: github] Replies with pong",
+      permission: "DANGEROUS" as const,
+      inputSchema: { type: "object", properties: {} },
+      async execute() {
+        return { ok: true, output: { content: "pong" } };
+      },
+    };
+    let liveTools = [extraTool];
+    const provider = new MockProvider([
+      { turn: { type: "final", content: "first" } },
+      { turn: { type: "final", content: "second" } },
+    ]);
+    await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => provider, getExtraTools: () => liveTools }
+    );
+    const sessionId = [...registry.sessions.keys()][0]!;
+    await runTask(registry, sessionId, "first task", () => {});
+    const firstToolNames = provider.receivedRequests[0]?.tools?.map((t) => t.name) ?? [];
+    check("the tool is visible on the first task, before anything changes", firstToolNames.includes("mcp__github__ping"));
+
+    liveTools = []; // simulates the MCP server being disconnected/removed mid-session, with no restart
+    await runTask(registry, sessionId, "second task", () => {});
+    const secondToolNames = provider.receivedRequests[1]?.tools?.map((t) => t.name) ?? [];
+    check(
+      "the already-started session's NEXT task no longer sees the removed tool, with no restart",
+      !secondToolNames.includes("mcp__github__ping")
+    );
   }
 
   {

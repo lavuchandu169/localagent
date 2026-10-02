@@ -341,7 +341,7 @@ app.whenReady().then(async () => {
         onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
         signal: controller.signal,
         resume,
-        extraTools: [...currentMcpTools(), createGithubCreateRepoTool(getGithubToken, onGithubUnauthorized), createGithubCreatePrTool(getGithubToken, onGithubUnauthorized)],
+        getExtraTools: () => [...currentMcpTools(), createGithubCreateRepoTool(getGithubToken, onGithubUnauthorized), createGithubCreatePrTool(getGithubToken, onGithubUnauthorized)],
         settingsDir: app.getPath("userData"),
         storageCrypto,
         getGithubToken,
