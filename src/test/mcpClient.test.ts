@@ -148,6 +148,32 @@ await (async () => {
     check("a hanging server resolves with status failed rather than hanging forever", connection.status.state === "failed");
     check("resolves close to the short override timeout, not the SDK's 60s default", elapsedMs < 5000);
   }
+
+  {
+    // Correctness audit finding (MCP Medium): a server that adds a tool
+    // AFTER the initial handshake (a plugin loaded later, a dynamic
+    // capability toggle, etc.) sends the spec's own
+    // notifications/tools/list_changed for exactly this — before this fix,
+    // nothing here ever listened for it, so `connection.tools` stayed
+    // stuck at its startup snapshot for the rest of the connection's life.
+    const statuses: McpServerStatus[] = [];
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = new McpServer({ name: "dynamic-test-server", version: "1.0.0" });
+    server.registerTool("ping", { description: "Replies with pong" }, async () => ({ content: [{ type: "text" as const, text: "pong" }] }));
+    await server.connect(serverTransport);
+
+    const connection = await connectMcpServer(makeConfig({ name: "dynamic-server" }), (s) => statuses.push(s), { createTransport: () => clientTransport });
+    check("starts with just the one tool registered at connect time", connection.tools.length === 1 && connection.tools[0]!.name === "ping");
+
+    server.registerTool("pong", { description: "Replies with ping" }, async () => ({ content: [{ type: "text" as const, text: "ping" }] }));
+    server.sendToolListChanged();
+    // The notification round-trips over the in-memory transport asynchronously.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    check("the SAME connection object's tools array now includes the newly-registered tool, with no reconnect", connection.tools.length === 2 && connection.tools.some((t) => t.name === "pong"));
+    check("onStatusChange fired again reporting the updated tool count", statuses[statuses.length - 1]!.state === "connected" && (statuses[statuses.length - 1] as { toolCount: number }).toolCount === 2);
+    await disconnectMcpServer(connection);
+  }
 })();
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { McpServerConfig } from "./mcpSettings.js";
 import type { McpToolDescriptor } from "../mcpToolAdapter.js";
@@ -57,8 +58,34 @@ export async function connectMcpServer(
     await client.connect(transport, { timeout });
     const listed = await client.listTools(undefined, { timeout });
     const status: McpServerStatus = { state: "connected", toolCount: listed.tools.length };
+    const connection: McpConnection = { config, status, client, tools: listed.tools };
     onStatusChange(status);
-    return { config, status, client, tools: listed.tools };
+
+    // Correctness audit finding (MCP Medium): a server that adds/removes
+    // tools after the initial handshake (a plugin loaded later, a dynamic
+    // capability toggle) sends this notification for exactly that reason —
+    // nothing here ever listened for it before, so `connection.tools`
+    // stayed stuck at its startup snapshot for the connection's whole
+    // life. Mutates `connection` IN PLACE (never replaces the object), so
+    // every existing holder of this reference (main.ts's mcpConnections
+    // array, and in turn currentMcpTools()'s live per-call read of it —
+    // see toolRegistry.ts's getExtraTools) sees the update with no extra
+    // wiring needed.
+    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      try {
+        const relisted = await client.listTools(undefined, { timeout });
+        connection.tools = relisted.tools;
+        connection.status = { state: "connected", toolCount: relisted.tools.length };
+        onStatusChange(connection.status);
+      } catch {
+        // A failed re-list leaves the connection's previous tool list in
+        // place rather than guessing - matches this function's own
+        // "never throws" posture; the connection itself stays open and
+        // usable even if this one refresh failed.
+      }
+    });
+
+    return connection;
   } catch (err) {
     // connect() may have already spawned the child process and completed
     // the handshake before a later step (e.g. listTools()) failed — close
