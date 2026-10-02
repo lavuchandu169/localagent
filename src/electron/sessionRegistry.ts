@@ -9,7 +9,7 @@ import { OpenAIProvider } from "../providers/openaiProvider.js";
 import { GeminiProvider } from "../providers/geminiProvider.js";
 import { FreellmapiProxyProvider } from "../providers/freellmapiProxy.js";
 import { isEmbeddedModelId } from "../models.js";
-import { saveSession, deleteSession, loadSessionRecord, type SessionRecord, type PersistedProviderConfig } from "../sessionStore.js";
+import { saveSession, deleteSession, loadSessionRecord, type SessionRecord, type PersistedProviderConfig, type SessionIndexEntry } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode, PermissionResponse, Tool } from "../types.js";
 import { isEphemeralStreamEvent } from "../types.js";
@@ -128,6 +128,39 @@ export function getSessionIdsWithPendingApproval(registry: SessionRegistry): Set
     if (entry.pendingApprovals.size > 0 || entry.pendingPlanApproval.resolve !== null) ids.add(id);
   }
   return ids;
+}
+
+export type SessionIndexEntryWithApproval = SessionIndexEntry & { waitingForApproval: boolean };
+
+/**
+ * Merges live waitingForApproval state onto a disk-backed session list —
+ * a session can have a dangling, unanswerable approval with no tab open
+ * for it at all, so this can't be derived from anything the renderer
+ * already tracks per-tab.
+ *
+ * Final-review finding I4: a session's disk record is only ever written
+ * once a task completes (persistSession) — a BRAND NEW session whose
+ * very first task is still waiting on an approval has no disk record at
+ * all yet, so flagging only EXISTING entries left it invisible no matter
+ * what. Synthesizes a minimal row straight from the live registry for
+ * exactly that case, filtered by the same owner (and, when `query` is
+ * given, the same title-substring match) the disk-backed list already
+ * applies, so it never leaks across accounts or defeats a search.
+ */
+export function withPendingApprovalEntries(registry: SessionRegistry, entries: SessionIndexEntry[], email: string | null, query?: string): SessionIndexEntryWithApproval[] {
+  const pendingIds = getSessionIdsWithPendingApproval(registry);
+  const flagged: SessionIndexEntryWithApproval[] = entries.map((e) => ({ ...e, waitingForApproval: pendingIds.has(e.id) }));
+  const existingIds = new Set(entries.map((e) => e.id));
+  const trimmedQuery = query?.trim().toLowerCase();
+  for (const id of pendingIds) {
+    if (existingIds.has(id)) continue;
+    const liveEntry = registry.sessions.get(id);
+    if (!liveEntry || liveEntry.ownerEmail !== email) continue;
+    const title = liveEntry.title ?? "(untitled)";
+    if (trimmedQuery && !title.toLowerCase().includes(trimmedQuery)) continue;
+    flagged.push({ id, title, updatedAt: liveEntry.createdAt, ownerEmail: liveEntry.ownerEmail, waitingForApproval: true });
+  }
+  return flagged;
 }
 
 /** Mirrors the provider construction in cli.ts's --base-url branch. `signal` only matters for the embedded provider — it's the model download's cancellation handle; the other two providers make no download, so they simply ignore it. */

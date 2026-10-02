@@ -19,9 +19,10 @@ import {
   getSessionChanges,
   respondPlan,
   getSessionIdsWithPendingApproval,
+  withPendingApprovalEntries,
 } from "../electron/sessionRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
-import { loadSessionRecord } from "../sessionStore.js";
+import { loadSessionRecord, listSessions, searchSessions } from "../sessionStore.js";
 import { DriveScopeError } from "../cloudSync.js";
 import { groupDiffIntoSegments } from "../diffUtil.js";
 import type { AgentEvent, ChatResponse } from "../types.js";
@@ -537,6 +538,43 @@ await (async () => {
     await cancelSession(registry, sessionId);
     await runPromise.catch(() => {});
     check("cancelSession sweeps the dangling approval — no longer reported as pending", !getSessionIdsWithPendingApproval(registry).has(sessionId));
+  }
+
+  console.log("\nwithPendingApprovalEntries synthesizes a row for a brand-new, never-persisted session (final-review finding I4):");
+  {
+    // A session's disk record is only ever written once a task completes
+    // (persistSession) — a session whose very FIRST task is still waiting
+    // on an approval has no disk record at all yet, so flagging only
+    // entries the disk-backed list already returned left it invisible no
+    // matter what. agent:list-sessions must synthesize a row for it.
+    const registry = createSessionRegistry(sessionsDir);
+    const script: ChatResponse[] = [{ turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "echo hi" } }] } }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    const runPromise = runTask(registry, sessionId, "a brand new session's first task", () => {});
+    await waitFor(() => getSessionIdsWithPendingApproval(registry).has(sessionId));
+
+    check("this session genuinely has no disk record yet", (await loadSessionRecord(sessionsDir, sessionId)) === null);
+
+    const entries = withPendingApprovalEntries(registry, await listSessions(sessionsDir, null), null);
+    const synthesized = entries.find((e) => e.id === sessionId);
+    check("a synthetic row is included even though nothing is on disk", synthesized !== undefined);
+    check("its waitingForApproval flag is true", synthesized?.waitingForApproval === true);
+    check("its title comes from the live entry (derived from the task text)", synthesized?.title === "a brand new session's first task");
+
+    // A DIFFERENT account's view must never see another account's pending session.
+    const otherAccountEntries = withPendingApprovalEntries(registry, await listSessions(sessionsDir, "someone-else@example.com"), "someone-else@example.com");
+    check("a different signed-in account never sees it", otherAccountEntries.every((e) => e.id !== sessionId));
+
+    // A search for unrelated text must not surface it either.
+    const searchMiss = withPendingApprovalEntries(registry, await searchSessions(sessionsDir, "unrelated query", null), null, "unrelated query");
+    check("an unrelated search query doesn't surface it", searchMiss.every((e) => e.id !== sessionId));
+
+    await cancelSession(registry, sessionId);
+    await runPromise.catch(() => {});
   }
 
   {

@@ -13,7 +13,7 @@ import os from "node:os";
 import fsPromises from "node:fs/promises";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, getSessionIdsWithPendingApproval } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import type { AttachedImage, AttachedText, PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
@@ -735,22 +735,17 @@ app.whenReady().then(async () => {
   // Session history is gated by the signed-in account: signed out (or no
   // account ever stored) shows nothing, matching the app's per-account
   // model rather than exposing every local session unconditionally.
-  // Correctness audit finding (session Medium #4): merges live
-  // waitingForApproval state (see getSessionIdsWithPendingApproval) onto
-  // the disk-backed list — a session can have a dangling, unanswerable
-  // approval with no tab open for it at all, so this can't be derived from
-  // anything the renderer already tracks per-tab.
-  function withPendingApprovalFlag<T extends { id: string }>(entries: T[]): (T & { waitingForApproval: boolean })[] {
-    const pendingIds = getSessionIdsWithPendingApproval(registry);
-    return entries.map((e) => ({ ...e, waitingForApproval: pendingIds.has(e.id) }));
-  }
+  // withPendingApprovalEntries (correctness audit: session Medium #4;
+  // final-review finding I4) merges live waitingForApproval state onto
+  // the disk-backed list and synthesizes a row for a brand-new session
+  // that has no disk record yet.
   ipcMain.handle("agent:list-sessions", async () => {
     const email = await getStoredEmail(authFilePath, storageCrypto);
-    return email ? withPendingApprovalFlag(await listSessions(sessionsDir, email)) : [];
+    return email ? withPendingApprovalEntries(registry, await listSessions(sessionsDir, email), email) : [];
   });
   ipcMain.handle("agent:search-sessions", async (_event, query: string) => {
     const email = await getStoredEmail(authFilePath, storageCrypto);
-    return email ? withPendingApprovalFlag(await searchSessions(sessionsDir, query, email)) : [];
+    return email ? withPendingApprovalEntries(registry, await searchSessions(sessionsDir, query, email), email, query) : [];
   });
   ipcMain.handle("agent:load-session", async (_event, id: string) => {
     try {
