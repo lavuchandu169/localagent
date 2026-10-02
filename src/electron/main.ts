@@ -208,6 +208,21 @@ app.whenReady().then(async () => {
   }
 
   async function connectAndTrack(config: McpServerConfig): Promise<McpConnection> {
+    // Correctness audit finding (MCP Low/Medium): a server's entry used to
+    // appear in mcpConnections (and therefore in agent:list-mcp-servers'
+    // response) only once connectMcpServer's whole promise resolved —
+    // connecting or failed both arrive in the SAME resolution, so there
+    // was never a window where a caller could observe "connecting" for a
+    // server that hadn't finished yet. At app startup, where every enabled
+    // server connects without anything awaiting the result (see the
+    // fire-and-forget chain below), that meant opening the MCP panel
+    // during the first several seconds after launch showed a server as
+    // simply MISSING rather than "connecting" — it would then pop into
+    // existence once the connect settled. Seeding a "connecting" entry
+    // synchronously, before the first await, closes that window: it's the
+    // same object connectMcpServer's onStatusChange callback already looks
+    // up and mutates in place below.
+    mcpConnections = mcpConnections.filter((c) => c.config.id !== config.id).concat({ config, status: { state: "connecting" }, client: undefined, tools: [] });
     const connection = await connectMcpServer(config, (status: McpServerStatus) => {
       const existing = mcpConnections.find((c) => c.config.id === config.id);
       if (existing) existing.status = status;
