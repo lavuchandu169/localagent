@@ -2241,19 +2241,34 @@ revertCheckpointBtn.addEventListener("click", () => {
   const tab = activeTab(tabRegistry);
   if (!tab?.sessionId) return;
   const idToRevert = tab.sessionId;
+  // Final-review finding I2: a revert and a new task share the SAME
+  // entry.running lock server-side (sessionRegistry.ts) — runTask now
+  // throws if a revert is still in flight. Disabling Send for the
+  // duration closes the race at the source, on top of the run-task
+  // handler's own defensive catch for any case that still slips through
+  // (e.g. a request already in flight the instant this click happens).
+  runTaskBtn.disabled = true;
   void withBusyLabel(revertCheckpointBtn, "Reverting…", async () => {
-    const result = await window.agent.revertCheckpoint(idToRevert);
-    if (result.ok) {
-      logLine("[checkpoint] Reverted — the workspace is back to how it was before this task.", "log-done");
-      revertCheckpointBtn.hidden = true;
-      // Nothing's changed anymore — reverting undid it all.
-      viewChangesBtn.hidden = true;
-      changesPanel.hidden = true;
-    } else {
-      // Same graceful-failure posture as everywhere else in this app: show
-      // the real reason (most likely "a task is running") rather than
-      // silently doing nothing or throwing.
-      logLine(`[checkpoint] Couldn't revert: ${result.error ?? "unknown error"}`, "log-error");
+    try {
+      const result = await window.agent.revertCheckpoint(idToRevert);
+      if (result.ok) {
+        logLine("[checkpoint] Reverted — the workspace is back to how it was before this task.", "log-done");
+        revertCheckpointBtn.hidden = true;
+        // Nothing's changed anymore — reverting undid it all.
+        viewChangesBtn.hidden = true;
+        changesPanel.hidden = true;
+      } else {
+        // Same graceful-failure posture as everywhere else in this app: show
+        // the real reason (most likely "a task is running") rather than
+        // silently doing nothing or throwing.
+        logLine(`[checkpoint] Couldn't revert: ${result.error ?? "unknown error"}`, "log-error");
+      }
+    } finally {
+      // Same "nothing past an await paints the shared DOM unless this tab
+      // is still the one it's showing" rule used elsewhere in this file
+      // (e.g. applySessionEdits) — the user may have switched tabs during
+      // the revert.
+      if (isActiveTab(tab) && !tab.running) runTaskBtn.disabled = false;
     }
   });
 });
@@ -2918,8 +2933,25 @@ runTaskBtn.addEventListener("click", async () => {
   tab.draftTask = "";
   taskInput.value = "";
   renderAttachmentChips();
-  await window.agent.runTask(tab.sessionId, task, attachments);
-  await refreshSessionList(sessionSearchInput.value.trim());
+  try {
+    await window.agent.runTask(tab.sessionId, task, attachments);
+    await refreshSessionList(sessionSearchInput.value.trim());
+  } catch (err) {
+    // Final-review finding I2: runTask now throws (rather than silently
+    // proceeding) when a revert is already in progress for this session —
+    // correct for sessionRegistry.ts's own in-flight-work guard, but
+    // nothing here used to catch it. Left unhandled, the tab stayed
+    // "running" forever (the button that would reset it never runs past
+    // the throwing await) with no way to send another task or tell what
+    // happened — restore the UI to a sendable state and surface why,
+    // matching this app's existing "show the real reason" posture (e.g.
+    // the revert button's own error path just above).
+    tab.running = false;
+    if (isActiveTab(tab)) {
+      runTaskBtn.disabled = false;
+      logLine(`✗ ${err instanceof Error ? err.message : String(err)}`, "log-error");
+    }
+  }
 });
 
 taskInput.addEventListener("keydown", (e) => {
