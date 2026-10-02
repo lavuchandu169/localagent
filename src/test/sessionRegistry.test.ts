@@ -1134,6 +1134,66 @@ await (async () => {
   }
 
   {
+    // Correctness audit finding (session Medium #2): the OPPOSITE
+    // direction of the guard above — a runTask call started WHILE a
+    // revert is still mid-flight must be refused too, not race a live
+    // agent write against the revert's own checkout+cleanup. Before this
+    // fix, revertSessionCheckpoint only checked entry.running ONCE
+    // (synchronously) then ran several awaited git subprocess calls with
+    // no lock held across that window — nothing stopped a runTask call
+    // issued during that window from starting a real task concurrently.
+    const registry = createSessionRegistry(sessionsDir);
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessionregistry-revertrace-test-"));
+    const execFileAsync2 = promisify(execFile);
+    const git2 = async (args: string[]) => (await execFileAsync2("git", args, { cwd: repo })).stdout.trim();
+    await git2(["init", "-q"]);
+    await git2(["config", "user.email", "t@t.com"]);
+    await git2(["config", "user.name", "T"]);
+    await fs.writeFile(path.join(repo, "a.txt"), "v1\n", "utf-8");
+    await git2(["add", "-A"]);
+    await git2(["commit", "-q", "-m", "initial"]);
+
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "a.txt" } },
+            { id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v2\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot: repo, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    await runTask(registry, sessionId, "bump the file", () => {});
+    check("a real checkpoint exists before the race", typeof getCheckpointHash(registry, sessionId) === "string");
+
+    // entry.running is set synchronously inside revertSessionCheckpoint
+    // too (this fix), before its first await — so a runTask call made
+    // immediately after, without awaiting the revert first, reliably
+    // lands while the revert is still "running" from the registry's
+    // view, same reliability guarantee the existing test above already
+    // relies on for the opposite direction.
+    const revertPromise = revertSessionCheckpoint(registry, sessionId);
+    let rejected = false;
+    try {
+      await runTask(registry, sessionId, "a second task racing the revert", () => {});
+    } catch {
+      rejected = true;
+    }
+    check("runTask refuses to start while a revert is mid-flight for this session", rejected);
+    const revertResult = await revertPromise;
+    check("the revert itself still completed successfully, undisturbed", revertResult.ok === true);
+
+    await fs.rm(repo, { recursive: true, force: true });
+  }
+
+  {
     // Real end-to-end: attachments passed to runTask actually reach the
     // first pushed message, proving the plumbing through doRunTask ->
     // AgentSession.run is wired, not just type-compatible.

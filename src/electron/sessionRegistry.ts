@@ -345,19 +345,35 @@ export async function revertSessionCheckpoint(registry: SessionRegistry, session
   if (entry.running) return { ok: false, error: "Can't revert while a task is running." };
   const hash = entry.session.getCheckpointHash();
   if (!hash) return { ok: false, error: "No checkpoint available for this session." };
-  // Correctness audit finding (session Medium #3): a checkpoint is a
-  // deliberately dangling, unreferenced git commit (see checkpoints.ts's
-  // own doc comment — "eventually GC'd"), so revertToCheckpoint can
-  // genuinely fail for reasons outside this function's control (the
-  // commit got pruned, a git subprocess error) — same shape of failure
-  // getSessionChanges below already guards against. Without this, that
-  // failure propagated as an unhandled rejection instead of the clear
-  // {ok:false, error} this function's own return type promises.
-  try {
+  // Correctness audit finding (session Medium #2): the entry.running
+  // check just above was the ONLY guard against a task starting mid-revert
+  // — checked once, synchronously, then several awaited git subprocess
+  // calls ran with no lock held across that window, leaving a real
+  // check-then-act race (a runTask call issued during that window
+  // started a real task concurrently with the revert's own checkout).
+  // Claiming the SAME entry.running lock revertSessionCheckpoint already
+  // reads from — synchronously, before the first await below — closes it
+  // symmetrically: runTask now refuses while this is set, exactly like
+  // this function already refuses while a task is running.
+  const revertPromise = (async () => {
+    // Correctness audit finding (session Medium #3): a checkpoint is a
+    // deliberately dangling, unreferenced git commit (see checkpoints.ts's
+    // own doc comment — "eventually GC'd"), so revertToCheckpoint can
+    // genuinely fail for reasons outside this function's control (the
+    // commit got pruned, a git subprocess error) — same shape of failure
+    // getSessionChanges below already guards against. Without this, that
+    // failure propagated as an unhandled rejection instead of the clear
+    // {ok:false, error} this function's own return type promises.
     await revertToCheckpoint(entry.session.getWorkspaceRoot(), hash);
+  })();
+  entry.running = revertPromise;
+  try {
+    await revertPromise;
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    if (entry.running === revertPromise) entry.running = null;
   }
 }
 
@@ -485,6 +501,13 @@ export async function runTask(
 ): Promise<void> {
   const entry = registry.sessions.get(sessionId);
   if (!entry) throw new Error(`Unknown session: ${sessionId}`);
+  // Correctness audit finding (session Medium #2): the OPPOSITE direction
+  // of revertSessionCheckpoint's own "can't revert while a task is
+  // running" guard — entry.running is now the single shared lock between
+  // a running task AND a mid-flight revert (see that function), so a
+  // runTask call during either refuses the same way, rather than racing
+  // a live agent write against the revert's own checkout+cleanup.
+  if (entry.running) throw new Error("A task or revert is already in progress for this session.");
 
   const runPromise = doRunTask(registry, sessionId, entry, task, onEvent, attachments);
   entry.running = runPromise;
