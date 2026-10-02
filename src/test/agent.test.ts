@@ -165,14 +165,23 @@ console.log("\nEmbedded llama provider conversion:");
   );
 }
 {
+  // Correctness audit finding (provider Medium #2): fromLlamaResult used
+  // to silently DROP this explanatory text entirely (no `content` field
+  // at all on the recovered tool_calls turn) — tryParseFallbackToolCall's
+  // own doc comment says prose before/after the recovered call is
+  // expected, so it must survive as `content`, not vanish from the
+  // transcript.
   const { turn } = fromLlamaResult({
     response: 'I\'ll check the project structure first.\n\n{"name": "list_directory", "arguments": {"path": "."}}',
     functionCalls: undefined,
   });
   check(
     "fromLlamaResult recovers a tool call preceded by explanatory prose",
-    JSON.stringify(turn) ===
-      JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "call_0", name: "list_directory", arguments: { path: "." } }] })
+    turn.type === "tool_calls" && JSON.stringify(turn.toolCalls) === JSON.stringify([{ id: "call_0", name: "list_directory", arguments: { path: "." } }])
+  );
+  check(
+    "...and keeps the preceding prose as content instead of silently dropping it",
+    turn.type === "tool_calls" && turn.content === "I'll check the project structure first."
   );
 }
 {
@@ -182,8 +191,11 @@ console.log("\nEmbedded llama provider conversion:");
   });
   check(
     "fromLlamaResult recovers a fenced tool call surrounded by prose on both sides",
-    JSON.stringify(turn) ===
-      JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "call_0", name: "read_file", arguments: { path: "a.js" } }] })
+    turn.type === "tool_calls" && JSON.stringify(turn.toolCalls) === JSON.stringify([{ id: "call_0", name: "read_file", arguments: { path: "a.js" } }])
+  );
+  check(
+    "...and keeps BOTH the preceding and following prose as content, joined, with the fence markers themselves excluded",
+    turn.type === "tool_calls" && turn.content === "Let me look at that file.\n\nOne moment."
   );
 }
 {
