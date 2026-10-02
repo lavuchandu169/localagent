@@ -136,6 +136,11 @@ app.whenReady().then(async () => {
   }
 
   const getGithubToken = () => getGithubAccessToken(githubAuthFilePath, storageCrypto);
+  // Correctness audit finding (GitHub Medium #2): a 401 from a GitHub tool
+  // call means the stored token itself is dead (revoked on GitHub's side,
+  // most likely) — clear the stored identity so Settings stops claiming
+  // "Connected as @x" and the user gets a real path back to reconnecting.
+  const onGithubUnauthorized = () => clearStoredGithubIdentity(githubAuthFilePath);
 
   // Broadcasts to every live window rather than a single captured `win`
   // reference: on macOS, closing the window destroys that BrowserWindow
@@ -336,7 +341,7 @@ app.whenReady().then(async () => {
         onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
         signal: controller.signal,
         resume,
-        extraTools: [...currentMcpTools(), createGithubCreateRepoTool(getGithubToken), createGithubCreatePrTool(getGithubToken)],
+        extraTools: [...currentMcpTools(), createGithubCreateRepoTool(getGithubToken, onGithubUnauthorized), createGithubCreatePrTool(getGithubToken, onGithubUnauthorized)],
         settingsDir: app.getPath("userData"),
         storageCrypto,
         getGithubToken,
