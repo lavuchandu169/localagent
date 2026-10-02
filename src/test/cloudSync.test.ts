@@ -86,6 +86,32 @@ console.log("\nuploadSession — update path (existing file):");
   );
 }
 
+console.log("\nuploadSession — redacts secrets before upload (security audit M3 — a session's own history can carry file contents the agent read, e.g. a .env value, which previously went to the user's Drive verbatim):");
+{
+  const secretKey = "sk-" + "h".repeat(36);
+  const record: SessionRecord = {
+    id: "s-secret",
+    title: "has a secret",
+    messages: [{ role: "tool", content: `cat .env output: API_KEY=${secretKey}`, name: "run_command" } as ChatMessage],
+    events: [],
+    createdAt: 100,
+    updatedAt: 100,
+    ownerEmail: null,
+  };
+  let uploadedBody: string | undefined;
+  const fakeFetch: typeof fetch = async (url, init) => {
+    if (!init?.method) {
+      return new Response(JSON.stringify({ files: [{ id: "existing-file" }] }), { status: 200 });
+    }
+    if (init.method === "PATCH") uploadedBody = init.body as string;
+    return new Response("{}", { status: 200 });
+  };
+  await uploadSession("tok", record, fakeFetch);
+  check("the secret value never reaches the uploaded body", !!uploadedBody && !uploadedBody.includes(secretKey));
+  check("the redaction marker is present in its place", !!uploadedBody && uploadedBody.includes("[REDACTED]"));
+  check("the rest of the message content is still intact", !!uploadedBody && uploadedBody.includes("cat .env output: API_KEY="));
+}
+
 console.log("\nuploadSession — strips image/text attachments before upload:");
 {
   // Uses the update (PATCH) path — its request body is the raw JSON record,

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { listSessions, loadSessionRecord, saveSession, type SessionRecord } from "./sessionStore.js";
+import { redactSecrets } from "./protected.js";
 
 export interface RemoteSessionMeta {
   sessionId: string;
@@ -103,7 +104,14 @@ function stripAttachmentsForUpload(record: SessionRecord): SessionRecord {
 /** Creates or updates (by sessionId lookup) the Drive file for this session record. */
 export async function uploadSession(accessToken: string, record: SessionRecord, fetchImpl: FetchImpl = fetch): Promise<void> {
   const existingFileId = await findRemoteFile(accessToken, record.id, fetchImpl);
-  const content = JSON.stringify(stripAttachmentsForUpload(record));
+  // Security audit finding M3: a session's own history can carry file
+  // contents the agent read mid-task (e.g. a .env value quoted in a
+  // run_command/read_file tool result) — redact the same way
+  // runCommand.ts/readFile.ts already do for their own output, applied
+  // to the whole serialized record since redaction is a plain string
+  // replace that's safe to run on JSON text (it only ever touches
+  // characters inside a string value, never JSON structural syntax).
+  const content = redactSecrets(JSON.stringify(stripAttachmentsForUpload(record)));
 
   if (existingFileId) {
     const response = await fetchImpl(`${DRIVE_UPLOAD_ENDPOINT}/${existingFileId}?uploadType=media`, {
