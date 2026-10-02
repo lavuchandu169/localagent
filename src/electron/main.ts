@@ -130,8 +130,15 @@ app.whenReady().then(async () => {
   // secret-service/keyring daemon running (some minimal Linux setups).
   const storageCrypto = isSecureStorageAvailable() ? electronStorageCrypto : undefined;
   if (!storageCrypto) {
+    // Security audit finding M4: this one `storageCrypto` value governs
+    // EVERY secret this app stores — not just the Google identity file:
+    // the Anthropic/OpenAI/Gemini API keys, the GitHub OAuth token, and
+    // MCP server configs all fall back to plain text (still 0600) the
+    // same way. The warning said only "the Google identity file", which
+    // understated the real scope of what's affected on a system with no
+    // OS keychain/DPAPI/libsecret available.
     console.warn(
-      "[auth] OS-native secure storage isn't available on this system — the Google identity file will be stored as plain text (0600 permissions) instead of OS-encrypted."
+      "[auth] OS-native secure storage isn't available on this system — every credential this app stores (provider API keys, the GitHub token, the Google identity file, MCP server configs) will be saved as plain text (0600 permissions) instead of OS-encrypted."
     );
   }
 
