@@ -241,5 +241,152 @@ console.log("\nA non-rate-limit Anthropic error is NOT retryable:");
   }
 }
 
+console.log("\nAnthropicProvider.chatStream:");
+{
+  // Minimal fake of the SDK's MessageStream: async-iterable over the given
+  // raw events, with finalMessage() resolving to the given final message —
+  // mirrors exactly what @anthropic-ai/sdk's real stream() return value
+  // offers (verified against its own type definitions).
+  function fakeMessageStream(events: any[], finalMessage: any) {
+    return {
+      [Symbol.asyncIterator]: async function* () {
+        for (const e of events) yield e;
+      },
+      finalMessage: async () => finalMessage,
+    };
+  }
+
+  const provider = new AnthropicProvider({ apiKey: "test-key" });
+  const fakeStream = fakeMessageStream(
+    [
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: " there" } },
+      { type: "content_block_stop", index: 0 },
+    ],
+    {
+      content: [{ type: "text", text: "Hello there" }],
+      usage: { input_tokens: 10, output_tokens: 2 },
+    }
+  );
+  (provider as any).client = { messages: { stream: () => fakeStream } };
+
+  const seen: any[] = [];
+  for await (const e of provider.chatStream!({ model: "claude-sonnet-5", messages: [{ role: "user", content: "hi" }] })) seen.push(e);
+
+  check(
+    "yields a text StreamEvent per text_delta",
+    seen.filter((e) => e.type === "text").length === 2 && seen[0].text === "Hello" && seen[1].text === " there"
+  );
+  const done = seen.find((e) => e.type === "done");
+  check("the terminal done event's response matches what fromAnthropicResponse would produce from finalMessage()", done?.response.turn.type === "final" && done.response.turn.content === "Hello there");
+}
+
+{
+  // A tool_use block: content_block_start carries the name immediately;
+  // input_json_delta fragments carry the arguments.
+  function fakeMessageStream(events: any[], finalMessage: any) {
+    return {
+      [Symbol.asyncIterator]: async function* () {
+        for (const e of events) yield e;
+      },
+      finalMessage: async () => finalMessage,
+    };
+  }
+
+  const provider = new AnthropicProvider({ apiKey: "test-key" });
+  const fakeStream = fakeMessageStream(
+    [
+      { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "read_file", input: {} } },
+      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"path"' } },
+      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: ':"a.txt"}' } },
+      { type: "content_block_stop", index: 0 },
+    ],
+    {
+      content: [{ type: "tool_use", id: "toolu_1", name: "read_file", input: { path: "a.txt" } }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }
+  );
+  (provider as any).client = { messages: { stream: () => fakeStream } };
+
+  const seen: any[] = [];
+  for await (const e of provider.chatStream!({ model: "claude-sonnet-5", messages: [{ role: "user", content: "read a.txt" }] })) seen.push(e);
+
+  const start = seen.find((e) => e.type === "tool_call_start");
+  check("tool_call_start fires with index 0 and the real tool name, from content_block_start alone", start?.index === 0 && start?.name === "read_file");
+  const deltas = seen.filter((e) => e.type === "tool_call_delta");
+  check(
+    "tool_call_delta fires once per input_json_delta fragment, same index, in order",
+    deltas.length === 2 && deltas[0].index === 0 && deltas[0].argumentsDelta === '{"path"' && deltas[1].argumentsDelta === ':"a.txt"}'
+  );
+  const done = seen.find((e) => e.type === "done");
+  check("the terminal done event's tool call matches fromAnthropicResponse's own parsing", done?.response.turn.type === "tool_calls" && done.response.turn.toolCalls[0]?.name === "read_file");
+}
+
+{
+  // Anthropic's own content_block index counts EVERY block (text and
+  // tool_use alike) — our StreamEvent.index must count only tool_use
+  // blocks, starting fresh at 0, matching the position those calls will
+  // have in response.turn.toolCalls.
+  function fakeMessageStream(events: any[], finalMessage: any) {
+    return {
+      [Symbol.asyncIterator]: async function* () {
+        for (const e of events) yield e;
+      },
+      finalMessage: async () => finalMessage,
+    };
+  }
+
+  const provider = new AnthropicProvider({ apiKey: "test-key" });
+  const fakeStream = fakeMessageStream(
+    [
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sure, reading it now." } },
+      { type: "content_block_stop", index: 0 },
+      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_2", name: "read_file", input: {} } },
+      { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"path":"b.txt"}' } },
+      { type: "content_block_stop", index: 1 },
+    ],
+    {
+      content: [
+        { type: "text", text: "Sure, reading it now." },
+        { type: "tool_use", id: "toolu_2", name: "read_file", input: { path: "b.txt" } },
+      ],
+      usage: { input_tokens: 10, output_tokens: 8 },
+    }
+  );
+  (provider as any).client = { messages: { stream: () => fakeStream } };
+
+  const seen: any[] = [];
+  for await (const e of provider.chatStream!({ model: "claude-sonnet-5", messages: [{ role: "user", content: "read b.txt" }] })) seen.push(e);
+
+  const start = seen.find((e) => e.type === "tool_call_start");
+  check("the tool call's StreamEvent index is 0 even though it's Anthropic's SECOND content block (text was first)", start?.index === 0);
+}
+
+console.log("\nAnthropicProvider.chatStream surfaces a ProviderChatError the same way chat() does:");
+{
+  const provider = new AnthropicProvider({ apiKey: "test-key" });
+  (provider as any).client = {
+    messages: {
+      stream: () => {
+        const err: any = new Error("rate limited");
+        err.status = 429;
+        throw err;
+      },
+    },
+  };
+  let threw: any = null;
+  try {
+    for await (const _e of provider.chatStream!({ model: "claude-sonnet-5", messages: [{ role: "user", content: "hi" }] })) {
+      // no-op
+    }
+  } catch (err) {
+    threw = err;
+  }
+  check("throws a ProviderChatError", threw instanceof ProviderChatError);
+  check("marks a 429 as retryable, same as chat()", threw instanceof ProviderChatError && threw.retryable === true);
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

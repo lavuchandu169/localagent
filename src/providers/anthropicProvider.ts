@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, StreamEvent, ToolCall } from "../types.js";
 import { ProviderChatError } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
 
@@ -167,6 +167,53 @@ export class AnthropicProvider implements ModelProvider {
         tools: toAnthropicTools(request.tools),
       });
       return fromAnthropicResponse(response);
+    } catch (err: any) {
+      if (err instanceof ProviderChatError) throw err;
+      const status = typeof err?.status === "number" ? err.status : undefined;
+      throw new ProviderChatError(err instanceof Error ? err.message : String(err), {
+        status,
+        retryable: status === 429,
+      });
+    }
+  }
+
+  async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
+    const { system, messages } = toAnthropicMessages(request.messages);
+    try {
+      const stream = this.client.messages.stream({
+        model: this.model,
+        max_tokens: request.maxTokens ?? 8192,
+        system,
+        messages,
+        tools: toAnthropicTools(request.tools),
+      });
+
+      // Anthropic's own content_block index counts every block (text AND
+      // tool_use alike) — StreamEvent.index must count only tool_use
+      // blocks, since that's what lines up with response.turn.toolCalls'
+      // own positions. This map translates one to the other.
+      const toolIndexByBlockIndex = new Map<number, number>();
+      let nextToolIndex = 0;
+
+      for await (const event of stream) {
+        if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
+          const toolIndex = nextToolIndex++;
+          toolIndexByBlockIndex.set(event.index, toolIndex);
+          yield { type: "tool_call_start", index: toolIndex, name: event.content_block.name };
+        } else if (event.type === "content_block_delta") {
+          if (event.delta.type === "text_delta") {
+            yield { type: "text", text: event.delta.text };
+          } else if (event.delta.type === "input_json_delta") {
+            const toolIndex = toolIndexByBlockIndex.get(event.index);
+            if (toolIndex !== undefined) {
+              yield { type: "tool_call_delta", index: toolIndex, argumentsDelta: event.delta.partial_json };
+            }
+          }
+        }
+      }
+
+      const message = await stream.finalMessage();
+      yield { type: "done", response: fromAnthropicResponse(message) };
     } catch (err: any) {
       if (err instanceof ProviderChatError) throw err;
       const status = typeof err?.status === "number" ? err.status : undefined;
