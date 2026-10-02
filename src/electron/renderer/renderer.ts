@@ -1378,6 +1378,17 @@ for (const chip of document.querySelectorAll<HTMLButtonElement>(".example-prompt
 
 const WHATS_NEW_SEEN_KEY = "localagent:whats-new-seen-version";
 
+/** Correctness audit finding (updateManager Low/Medium): on an unsigned Mac
+ * build, Squirrel.Mac's in-place apply step fails every time (the download
+ * itself succeeds, only the apply fails — see UpdateStatus's "fallback"
+ * doc comment), which resets updateReadyToInstall and lets the periodic
+ * 4-hour re-check (updateManager.ts) re-detect the SAME version and run
+ * through the whole cycle again. Before this, that re-detection forced the
+ * banner back open (see the state-transition check below) for a version
+ * the user already saw and dismissed, with nothing new to tell them.
+ * Per-viewer UI preference only, same reasoning as WHATS_NEW_SEEN_KEY. */
+const UPDATE_FALLBACK_DISMISSED_VERSION_KEY = "localagent:update-fallback-dismissed-version";
+
 /** Turns a changelog bullet's `` `code span` `` markdown into a real <code> element, leaving everything else as plain text — built via DOM nodes rather than innerHTML since this text ultimately comes from a file in the repo, not a trusted-but-still-worth-being-careful-with input. */
 function renderWhatsNewBullet(text: string): DocumentFragment {
   const fragment = document.createDocumentFragment();
@@ -3018,12 +3029,34 @@ window.agent.onCloudSyncScopeWarning(() => {
   authError.textContent = "Sign in again to keep backing up your sessions to Google Drive.";
 });
 
+let lastUpdateStatus: UpdateStatus | null = null;
+let lastKnownUpdateVersion: string | null = null;
+
+function readDismissedUpdateVersion(): string | null {
+  try {
+    return localStorage.getItem(UPDATE_FALLBACK_DISMISSED_VERSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
 updateBannerDismiss.addEventListener("click", () => {
   // Hides the banner only — a background download in progress keeps
   // downloading, and an already-downloaded update still applies itself on
   // the next natural quit either way. Dismiss is a view-layer action; the
   // state that matters lives in the main process, not the DOM.
   updateBanner.hidden = true;
+  // Only remembered for a "fallback" dismiss — "ready"/"downloading" are
+  // still actionable (or self-resolving) and should always be able to
+  // reopen; "fallback" on an unsigned build is the one case that just
+  // repeats the same unactionable message every periodic re-check.
+  if (lastUpdateStatus?.state === "fallback") {
+    try {
+      localStorage.setItem(UPDATE_FALLBACK_DISMISSED_VERSION_KEY, lastUpdateStatus.version);
+    } catch {
+      // Best-effort — worst case the banner just reopens again next re-check; not worth surfacing an error for.
+    }
+  }
 });
 
 updateBannerRestartBtn.addEventListener("click", () => {
@@ -3037,6 +3070,15 @@ updateBannerOpenFileBtn.addEventListener("click", () => {
 let lastRenderedUpdateState: string | null = null;
 
 window.agent.onUpdateStatus((status) => {
+  lastUpdateStatus = status;
+  // "downloading" carries no version of its own — the most recently known
+  // version (from this same run's last "ready"/"fallback") is the best
+  // available signal for "is this still the same already-dismissed cycle
+  // restarting", since a periodic re-check re-detecting an unsigned
+  // build's stuck version runs through downloading → fallback again with
+  // no new information in between.
+  if (status.state !== "downloading") lastKnownUpdateVersion = status.version;
+
   if (status.state === "downloading") {
     updateBannerText.textContent = `Downloading update… (${status.percent}%)`;
     updateBannerRestartBtn.hidden = true;
@@ -3068,7 +3110,14 @@ window.agent.onUpdateStatus((status) => {
   // download-progress tick re-broadcasts "downloading" many times a
   // second, and forcing hidden=false on every one of those made the
   // dismiss button impossible to use for the duration of a download.
-  if (status.state !== lastRenderedUpdateState) {
+  // "ready" always reopens regardless (still actionable); "downloading"/
+  // "fallback" don't, when the version involved is one the user already
+  // dismissed a fallback banner for — correctness audit finding
+  // (updateManager Low/Medium): without this, an unsigned Mac build's
+  // periodic re-check re-opened this exact dismissed banner every 4 hours
+  // with nothing new to tell the user.
+  const alreadyDismissedVersion = status.state !== "ready" && lastKnownUpdateVersion !== null && lastKnownUpdateVersion === readDismissedUpdateVersion();
+  if (status.state !== lastRenderedUpdateState && !alreadyDismissedVersion) {
     updateBanner.hidden = false;
   }
   lastRenderedUpdateState = status.state;
