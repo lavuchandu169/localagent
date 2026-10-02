@@ -221,7 +221,16 @@ export class AgentSession {
    * already in flight is undefined).
    */
   setWorkspaceRoot(workspaceRoot: string): void {
+    // Final-review finding I1: renderer.ts's applySessionEdits ("Edit
+    // settings…") always passes the CURRENT workspaceRoot through to this
+    // call, even when the user only changed mode/planFirst and never
+    // touched the workspace field — so this must only clear the
+    // checkpoint for an ACTUAL path change, or a plain mode-only edit
+    // silently wipes Revert/"View changes" with no workspace switch
+    // having happened at all.
+    const changed = workspaceRoot !== this.opts.workspaceRoot;
     this.opts.workspaceRoot = workspaceRoot;
+    if (!changed) return;
     // Correctness audit finding (session Medium #3): a checkpoint hash is
     // a commit inside a SPECIFIC git repo — carrying it over into a
     // different workspace would make a later revert try to check out

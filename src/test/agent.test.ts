@@ -994,6 +994,48 @@ await (async () => {
   await fs.rm(repoB, { recursive: true, force: true });
 })();
 
+console.log("\nsetWorkspaceRoot is a no-op on the checkpoint when the path hasn't actually changed (final-review finding I1):");
+await (async () => {
+  // renderer.ts's applySessionEdits ("Edit settings…") always passes
+  // workspaceRoot to updateLiveSessionSettings, even when the user only
+  // changed mode/planFirst and the path is identical to what it already
+  // was — so setWorkspaceRoot gets called on every settings apply, not
+  // just an actual workspace switch. Unconditionally clearing the
+  // checkpoint there wiped Revert/"View changes" after a PLAIN mode
+  // change, with no workspace switch involved at all.
+  const execFileAsync = promisify(execFile);
+  const git = async (cwd: string, args: string[]) => (await execFileAsync("git", args, { cwd })).stdout.trim();
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-workspace-samepath-"));
+  await git(repo, ["init", "-q"]);
+  await git(repo, ["config", "user.email", "t@t.com"]);
+  await git(repo, ["config", "user.name", "T"]);
+  await fs.writeFile(path.join(repo, "a.txt"), "v1\n", "utf-8");
+  await git(repo, ["add", "-A"]);
+  await git(repo, ["commit", "-q", "-m", "initial"]);
+
+  const script: ChatResponse[] = [
+    { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v2\n" } }] } },
+    { turn: { type: "final", content: "done" } },
+  ];
+  const session = new AgentSession({
+    workspaceRoot: repo,
+    model: "mock",
+    provider: new MockProvider(script),
+    tools: defaultToolRegistry(),
+    permissionMode: "ACCEPT_EDITS",
+    onApprovalNeeded: async () => ({ approved: true }),
+  });
+  for await (const _event of session.run("edit a.txt")) {
+    /* drain */
+  }
+  check("a real checkpoint exists before the settings apply", typeof session.getCheckpointHash() === "string");
+
+  session.setWorkspaceRoot(repo); // identical path — simulates applySessionEdits' redundant pass-through
+  check("the checkpoint survives setWorkspaceRoot when the path is unchanged", session.getCheckpointHash() !== null);
+
+  await fs.rm(repo, { recursive: true, force: true });
+})();
+
 console.log("\nCorrective nudge — a 'create X' task answered with code-in-prose instead of a real edit_file call:");
 await (async () => {
   // A throwaway temp dir, not fixture-repo — this scenario actually writes
