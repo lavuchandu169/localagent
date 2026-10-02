@@ -124,7 +124,7 @@ type McpServerStatus = { state: "connecting" } | { state: "connected"; toolCount
 type McpServerView = { id: string; name: string; command: string; args: string[]; status: McpServerStatus };
 
 interface AgentBridge {
-  startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string }>;
+  startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string; checkpointHash: string | null }>;
   runTask(sessionId: string, task: string, attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }): Promise<void>;
   pickAttachments(limit?: number): Promise<{ attachments: PickedAttachment[]; errors: { name: string; error: string }[]; skipped: number }>;
   respondPermission(sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]): Promise<void>;
@@ -2187,8 +2187,16 @@ async function beginSession(tab: TabState, resume?: ResumePayload): Promise<void
       setSetupControlsDisabled(true);
       editSettingsBtn.textContent = "Edit settings…";
       editSettingsBtn.hidden = false;
-      revertCheckpointBtn.hidden = true; // a fresh/resumed/edited session has no checkpoint of its own yet — see the checkpoint.created event handler
-      viewChangesBtn.hidden = true;
+      // Final-review finding I3: a fresh session genuinely has no
+      // checkpoint yet (hidden, until the checkpoint.created event
+      // handler below shows it for real) — but a RESUMED session can
+      // already have one restored (see session High #2 / final-review
+      // C3), and hiding it unconditionally here left it invisible until
+      // a later tab-switch happened to replay the old task's
+      // checkpoint.created event from history. result.checkpointHash is
+      // the real, post-restore answer.
+      revertCheckpointBtn.hidden = result.checkpointHash === null;
+      viewChangesBtn.hidden = result.checkpointHash === null;
       // Chat-first once a session is running: the setup form collapses out of
       // the way, and Edit settings… brings it back (see editSettingsBtn's
       // handler for the reverse, and resetToSetup for the full teardown).

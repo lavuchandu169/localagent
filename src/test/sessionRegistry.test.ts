@@ -1548,7 +1548,7 @@ await (async () => {
     // Full round trip: resume a NEW registry (simulating an app restart)
     // from the persisted record and confirm settings/checkpoint restore.
     const registry2 = createSessionRegistry(sessionsDir);
-    await startSession(
+    const resumeResult = await startSession(
       registry2,
       { workspaceRoot: repo, provider: saved!.provider as any, mode: saved!.mode as any, planFirst: saved!.planFirst },
       {
@@ -1568,6 +1568,10 @@ await (async () => {
     check(
       "resuming from the persisted record restores getCheckpointHash() to the real checkpoint, not null",
       registry2.sessions.get(sessionId)?.session.getCheckpointHash() === saved?.checkpointHash
+    );
+    check(
+      "startSession's own return value also carries the restored checkpointHash (final-review finding I3) — the renderer uses this to show Revert immediately on resume, not just after a later tab-switch replay",
+      resumeResult.checkpointHash === saved?.checkpointHash && resumeResult.checkpointHash !== null
     );
     check(
       "the persisted record's checkpointWorkspaceRoot matches the workspace the checkpoint was actually made in (final-review finding C3)",

@@ -223,7 +223,7 @@ export async function startSession(
     storageCrypto?: StorageCrypto;
     getGithubToken?: () => Promise<string | null>;
   } = {}
-): Promise<{ sessionId: string; workspaceRoot: string }> {
+): Promise<{ sessionId: string; workspaceRoot: string; checkpointHash: string | null }> {
   const provider = (deps.providerFactory ?? buildProvider)(config.provider, deps.onDownloadProgress, deps.signal);
   const health = await provider.healthCheck();
   if (!health.ok) {
@@ -338,7 +338,13 @@ export async function startSession(
     ownerEmail,
     providerConfig: toPersistedProviderConfig(config.provider),
   });
-  return { sessionId, workspaceRoot };
+  // Final-review finding I3: lets the renderer show "Revert this task"
+  // immediately on a successful resume with a real, workspace-matching
+  // checkpoint, instead of only after a later tab-switch happens to
+  // replay a stale checkpoint.created event from the old task's history
+  // (beginSession's own "fresh session" code otherwise unconditionally
+  // hides the button, assuming there's nothing to revert yet).
+  return { sessionId, workspaceRoot, checkpointHash: session.getCheckpointHash() };
 }
 
 /**
