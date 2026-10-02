@@ -152,12 +152,27 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 }
 
+/** Extracts real token usage from an OpenAI-shape response body, when it
+ * carries one — correctness audit finding (provider High #1): this was
+ * previously only ever populated for AnthropicProvider, so the renderer's
+ * cost badge silently never appeared for OpenAI/OpenAI-compatible/
+ * FreeLLMAPI sessions even though the real counts are sitting right in
+ * the response already in hand, free to extract. Some OpenAI-compatible
+ * local servers omit `usage` entirely — undefined in that case, not a
+ * fabricated 0. */
+function usageFromOpenAIResponse(raw: any): ChatResponse["usage"] {
+  const usage = raw?.usage;
+  if (!usage || typeof usage.prompt_tokens !== "number" || typeof usage.completion_tokens !== "number") return undefined;
+  return { inputTokens: usage.prompt_tokens, outputTokens: usage.completion_tokens };
+}
+
 /** Converts one OpenAI/OpenAI-compatible chat-completion response message
  * into this app's ChatResponse — the exact parsing both OpenAIProvider and
  * OpenAICompatibleProvider's non-streaming chat() already did inline,
  * pulled out once so the new streaming accumulation path (Task 5) can
  * reuse it instead of a third copy. */
 export function fromOpenAIChatMessage(message: any, raw: unknown): ChatResponse {
+  const usage = usageFromOpenAIResponse(raw);
   if (message.tool_calls && message.tool_calls.length > 0) {
     const toolCalls: ToolCall[] = message.tool_calls.map((tc: any, i: number) => {
       let args: Record<string, unknown> = {};
@@ -168,9 +183,9 @@ export function fromOpenAIChatMessage(message: any, raw: unknown): ChatResponse 
       }
       return { id: tc.id ?? `call_${i}`, name: tc.function?.name ?? "unknown", arguments: args };
     });
-    return { turn: { type: "tool_calls", toolCalls, content: message.content ?? undefined }, raw };
+    return { turn: { type: "tool_calls", toolCalls, content: message.content ?? undefined }, raw, usage };
   }
-  return { turn: { type: "final", content: message.content ?? "" }, raw };
+  return { turn: { type: "final", content: message.content ?? "" }, raw, usage };
 }
 
 /** Drives an OpenAI-shape SSE chat-completions stream (shared by
@@ -187,6 +202,15 @@ export async function* streamOpenAIShapeResponse(response: Response): AsyncGener
   const nameByIndex = new Map<number, string>();
   const idByIndex = new Map<number, string>();
   let content = "";
+  // Correctness audit finding (provider High #1): OpenAI only includes a
+  // `usage` field on a chunk when the request set
+  // `stream_options.include_usage: true` (see chatStream's own body
+  // below), delivered on the LAST chunk alongside an empty delta — opts
+  // in for the real OpenAI API, but read opportunistically here
+  // regardless, so OpenAICompatibleProvider/FreeLLMAPI get it for free
+  // too if their own upstream happens to forward it, with zero risk for
+  // a server that doesn't (the field is just absent).
+  let usage: ChatResponse["usage"];
 
   for await (const payload of parseSseLines(response)) {
     const chunk = JSON.parse(payload);
@@ -201,6 +225,9 @@ export async function* streamOpenAIShapeResponse(response: Response): AsyncGener
       const message = chunk.error?.message ?? "Provider returned an in-band stream error.";
       throw new ProviderChatError(message, { retryable: false });
     }
+
+    const chunkUsage = usageFromOpenAIResponse(chunk);
+    if (chunkUsage) usage = chunkUsage;
 
     const delta = chunk.choices?.[0]?.delta ?? {};
 
@@ -239,8 +266,8 @@ export async function* streamOpenAIShapeResponse(response: Response): AsyncGener
         }
         return { id: idByIndex.get(index)!, name: nameByIndex.get(index)!, arguments: args };
       });
-    yield { type: "done", response: { turn: { type: "tool_calls", toolCalls, content: content || undefined } } };
+    yield { type: "done", response: { turn: { type: "tool_calls", toolCalls, content: content || undefined }, usage } };
   } else {
-    yield { type: "done", response: { turn: { type: "final", content } } };
+    yield { type: "done", response: { turn: { type: "final", content }, usage } };
   }
 }

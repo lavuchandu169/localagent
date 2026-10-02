@@ -1,4 +1,4 @@
-import { buildChatBody, OpenAICompatibleProvider } from "../providers/openaiCompatible.js";
+import { buildChatBody, OpenAICompatibleProvider, fromOpenAIChatMessage } from "../providers/openaiCompatible.js";
 import type { ChatMessage } from "../types.js";
 import { ProviderChatError } from "../types.js";
 
@@ -193,6 +193,24 @@ console.log("\nOpenAICompatibleProvider.chatStream surfaces an in-band error fra
   } finally {
     globalThis.fetch = realFetch;
   }
+}
+
+console.log("\nfromOpenAIChatMessage reports real usage from the response, not just Anthropic (correctness audit: provider High #1):");
+{
+  const raw = {
+    choices: [{ message: { content: "hello" } }],
+    usage: { prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 },
+  };
+  const response = fromOpenAIChatMessage(raw.choices[0]!.message, raw);
+  check("inputTokens comes from the real prompt_tokens", response.usage?.inputTokens === 12);
+  check("outputTokens comes from the real completion_tokens", response.usage?.outputTokens === 7);
+}
+{
+  // A response with no usage field at all (some OpenAI-compatible local
+  // servers omit it) must not crash or fabricate numbers.
+  const raw = { choices: [{ message: { content: "hello" } }] };
+  const response = fromOpenAIChatMessage(raw.choices[0]!.message, raw);
+  check("no usage field in the response means no usage on the ChatResponse either, not a crash or a fabricated 0", response.usage === undefined);
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

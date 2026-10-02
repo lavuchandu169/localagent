@@ -225,5 +225,29 @@ console.log("\nOpenAIProvider.chatStream:");
   }
 }
 
+console.log("\nOpenAIProvider.chatStream reports real usage, not just chat() (correctness audit: provider High #1):");
+{
+  const sseBody =
+    'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n' +
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}\n\n' +
+    "data: [DONE]\n\n";
+  let capturedBody: any;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    capturedBody = JSON.parse(init!.body as string);
+    return new Response(sseBody, { status: 200 });
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider({ apiKey: "test-key" });
+    const seen: any[] = [];
+    for await (const e of provider.chatStream!({ model: "gpt-5.5", messages: [{ role: "user", content: "hi" }] })) seen.push(e);
+    const done = seen.find((e) => e.type === "done");
+    check("the terminal done event carries real usage from the stream's final chunk", done?.response.usage?.inputTokens === 10 && done.response.usage?.outputTokens === 2);
+    check("the request opts in to usage reporting via stream_options.include_usage", capturedBody?.stream_options?.include_usage === true);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
