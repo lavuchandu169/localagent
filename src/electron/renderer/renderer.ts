@@ -454,6 +454,9 @@ const DOT_GLYPH: Record<ReturnType<typeof tabDotState>, string> = {
 
 let hardwareInfo: HardwareInfo | null = null;
 const toolCards = new Map<string, HTMLElement>();
+let streamingTextEl: HTMLElement | null = null;
+const streamingToolCards: HTMLElement[] = [];
+let toolStartCallsSeenThisTurn = 0;
 const tabRegistry: TabRegistry = createTabRegistry();
 // Global launch behavior (see plan Global Constraints): the app always has
 // at least one tab, even though open tabs are never restored across a
@@ -1676,11 +1679,70 @@ function renderPlanProposal(plan: ProposedPlan): HTMLElement {
 function renderEvent(event: AgentEvent): void {
   switch (event.type) {
     case "status":
+      if (/^Turn \d+: thinking\.\.\.$/.test(event.message)) {
+        streamingTextEl = null;
+        streamingToolCards.length = 0;
+        toolStartCallsSeenThisTurn = 0;
+      }
       logLine(event.message, "log-status");
       break;
-    case "tool.start":
+    case "text.delta": {
+      if (!streamingTextEl) {
+        emptyState.hidden = true;
+        streamingTextEl = document.createElement("div");
+        streamingTextEl.className = "log-text";
+        eventLog.appendChild(streamingTextEl);
+      }
+      streamingTextEl.textContent += event.text;
+      eventLog.scrollTop = eventLog.scrollHeight;
+      break;
+    }
+    case "tool_call.start": {
+      emptyState.hidden = true;
+      const card = document.createElement("div");
+      card.className = "tool-card pending building";
+      const header = document.createElement("div");
+      header.className = "tool-card-header";
+      const dot = document.createElement("span");
+      dot.className = "pulse-dot";
+      header.appendChild(dot);
+      header.appendChild(document.createTextNode(`${event.name}(`));
+      const argsSpan = document.createElement("span");
+      argsSpan.className = "tool-card-building-args";
+      header.appendChild(argsSpan);
+      header.appendChild(document.createTextNode(")"));
+      card.appendChild(header);
+      eventLog.appendChild(card);
+      streamingToolCards[event.index] = card;
+      eventLog.scrollTop = eventLog.scrollHeight;
+      break;
+    }
+    case "tool_call.delta": {
+      const card = streamingToolCards[event.index];
+      const argsSpan = card?.querySelector(".tool-card-building-args");
+      if (argsSpan) argsSpan.textContent += event.argumentsDelta;
+      break;
+    }
+    case "stream.reset": {
+      if (streamingTextEl) {
+        streamingTextEl.remove();
+        streamingTextEl = null;
+      }
+      for (const card of streamingToolCards) card?.remove();
+      streamingToolCards.length = 0;
+      toolStartCallsSeenThisTurn = 0;
+      break;
+    }
+    case "tool.start": {
+      // Gemini and a whole-chunk custom-server call (Task 6/5) never streamed
+      // a tool_call.start/delta for this call at all, so there's nothing to
+      // remove in that case — toolCard() below runs exactly as it always has.
+      const building = streamingToolCards[toolStartCallsSeenThisTurn];
+      toolStartCallsSeenThisTurn++;
+      if (building) building.remove();
       toolCard(event.call);
       break;
+    }
     case "tool.result": {
       const card = toolCards.get(event.call.id) ?? toolCard(event.call);
       card.classList.remove("pending");
@@ -1808,7 +1870,10 @@ function renderEvent(event: AgentEvent): void {
       break;
     }
     case "text":
-      logLine(event.text, "log-text");
+      // Already fully rendered incrementally via text.delta — just stop
+      // tracking it as "live" rather than logging a second, duplicate line.
+      if (streamingTextEl) streamingTextEl = null;
+      else logLine(event.text, "log-text");
       break;
     case "task.sent":
       // Renderer-only synthetic event — see its own doc comment in

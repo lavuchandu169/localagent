@@ -1856,6 +1856,11 @@ label .hint-text {
   animation: card-in 0.15s ease;
 }
 
+.tool-card-building-args {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
 @keyframes card-in {
   from {
     opacity: 0;
