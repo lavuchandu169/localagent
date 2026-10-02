@@ -13,7 +13,7 @@ import os from "node:os";
 import fsPromises from "node:fs/promises";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, getSessionIdsWithPendingApproval } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import type { AttachedImage, AttachedText, PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
@@ -294,14 +294,26 @@ app.whenReady().then(async () => {
     broadcastToAllWindows("agent:cloud-sync-scope-warning");
   }
 
-  const registry = createSessionRegistry(sessionsDir, {
-    getAccessToken: async () => {
-      const { clientId, clientSecret } = await resolveGoogleCredentials(settingsFilePath, storageCrypto);
-      return getFreshAccessToken(authFilePath, clientId, clientSecret, storageCrypto);
+  const registry = createSessionRegistry(
+    sessionsDir,
+    {
+      getAccessToken: async () => {
+        const { clientId, clientSecret } = await resolveGoogleCredentials(settingsFilePath, storageCrypto);
+        return getFreshAccessToken(authFilePath, clientId, clientSecret, storageCrypto);
+      },
+      onScopeError: notifyScopeWarning,
+      getOwnerEmail: () => getStoredEmail(authFilePath, storageCrypto),
     },
-    onScopeError: notifyScopeWarning,
-    getOwnerEmail: () => getStoredEmail(authFilePath, storageCrypto),
-  });
+    // Correctness audit finding (session Medium #4): rebroadcasts the
+    // existing sessions-changed signal whenever any session's pending
+    // approval starts, gets answered, or is swept on cancel/delete — the
+    // renderer's own onSessionsChanged listener already refreshes the
+    // sidebar on this event, so this is the only wiring needed to keep the
+    // "waiting for approval" indicator (agent:list-sessions' new
+    // waitingForApproval field) live, including for a session with no tab
+    // currently open.
+    () => broadcastToAllWindows("agent:sessions-changed")
+  );
 
   // Tracks the AbortController for whichever agent:start-session call is
   // currently in flight, so agent:cancel-download has something to abort.
@@ -723,13 +735,22 @@ app.whenReady().then(async () => {
   // Session history is gated by the signed-in account: signed out (or no
   // account ever stored) shows nothing, matching the app's per-account
   // model rather than exposing every local session unconditionally.
+  // Correctness audit finding (session Medium #4): merges live
+  // waitingForApproval state (see getSessionIdsWithPendingApproval) onto
+  // the disk-backed list — a session can have a dangling, unanswerable
+  // approval with no tab open for it at all, so this can't be derived from
+  // anything the renderer already tracks per-tab.
+  function withPendingApprovalFlag<T extends { id: string }>(entries: T[]): (T & { waitingForApproval: boolean })[] {
+    const pendingIds = getSessionIdsWithPendingApproval(registry);
+    return entries.map((e) => ({ ...e, waitingForApproval: pendingIds.has(e.id) }));
+  }
   ipcMain.handle("agent:list-sessions", async () => {
     const email = await getStoredEmail(authFilePath, storageCrypto);
-    return email ? listSessions(sessionsDir, email) : [];
+    return email ? withPendingApprovalFlag(await listSessions(sessionsDir, email)) : [];
   });
   ipcMain.handle("agent:search-sessions", async (_event, query: string) => {
     const email = await getStoredEmail(authFilePath, storageCrypto);
-    return email ? searchSessions(sessionsDir, query, email) : [];
+    return email ? withPendingApprovalFlag(await searchSessions(sessionsDir, query, email)) : [];
   });
   ipcMain.handle("agent:load-session", async (_event, id: string) => {
     try {

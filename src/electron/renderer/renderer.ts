@@ -70,6 +70,8 @@ interface SessionIndexEntry {
   title: string;
   updatedAt: number;
   ownerEmail: string | null;
+  /** Correctness audit finding (session Medium #4): true while this session has an unanswered permission/plan approval no tab may be open to answer — e.g. its tab was closed mid-task. */
+  waitingForApproval: boolean;
 }
 
 /** Mirrors sessionStore.ts's PersistedProviderConfig — deliberately never carries an apiKey (see that type's own doc comment). */
@@ -2810,8 +2812,24 @@ function renderSessionList(entries: SessionIndexEntry[]): void {
     label.type = "button";
     label.className = "session-item-label";
     label.textContent = entry.title;
-    label.title = entry.title;
     label.addEventListener("click", () => void resumeSession(entry.id, label));
+
+    // Correctness audit finding (session Medium #4): a session whose tab
+    // was closed mid-task while it was waiting on a permission/plan
+    // approval has no tab left that could ever answer it — it just sits
+    // blocked forever with nothing else in the UI showing that. This is
+    // the only place that state is visible regardless of whether any tab
+    // is open for the session.
+    if (entry.waitingForApproval) {
+      const badge = document.createElement("span");
+      badge.className = "session-item-pending-approval";
+      badge.textContent = "⏸";
+      badge.title = "Waiting for approval — reopen this session to respond";
+      item.appendChild(badge);
+      label.title = `${entry.title} (waiting for approval — reopen to respond)`;
+    } else {
+      label.title = entry.title;
+    }
 
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";

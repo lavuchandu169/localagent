@@ -18,6 +18,7 @@ import {
   revertSessionCheckpoint,
   getSessionChanges,
   respondPlan,
+  getSessionIdsWithPendingApproval,
 } from "../electron/sessionRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { loadSessionRecord } from "../sessionStore.js";
@@ -466,6 +467,76 @@ await (async () => {
       "respondPermission unblocks a pending ASK and the run completes",
       events.some((e) => e.type === "tool.result" && e.result.ok) && events[events.length - 1]?.type === "done"
     );
+  }
+
+  console.log("\ngetSessionIdsWithPendingApproval (correctness audit: session Medium #4):");
+  {
+    // Closing a tab for a session with an in-flight permission ASK never
+    // cancels that approval — the task just sits there forever, waiting
+    // for a click nothing can send it again. This is the mechanism a
+    // sidebar "waiting for approval" indicator reads from, independent of
+    // whether any tab is currently open for the session.
+    let changeNotifications = 0;
+    const registry = createSessionRegistry(sessionsDir, undefined, () => {
+      changeNotifications++;
+    });
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "echo hi" } }] } },
+      { turn: { type: "final", content: "ran it" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+
+    check("before the task starts, nothing is pending", !getSessionIdsWithPendingApproval(registry).has(sessionId));
+
+    let sawPendingDuringRun = false;
+    const events: AgentEvent[] = [];
+    const runPromise = runTask(registry, sessionId, "run echo", (e: AgentEvent) => {
+      events.push(e);
+      if (e.type === "permission.request" && e.decision === "ASK") {
+        // The generator yields this event BEFORE it actually calls
+        // onApprovalNeeded() and registers the pending resolve function —
+        // same ordering subtlety as every other deferred-respond test in
+        // this file — so the pending-check must be deferred too, not read
+        // synchronously in this same tick.
+        setImmediate(() => {
+          sawPendingDuringRun = getSessionIdsWithPendingApproval(registry).has(sessionId);
+          respondPermission(registry, sessionId, e.call.id, true);
+        });
+      }
+    });
+    await runPromise;
+
+    check("the session id is reported as pending while the ASK is unanswered", sawPendingDuringRun);
+    check("once answered, it's no longer reported as pending", !getSessionIdsWithPendingApproval(registry).has(sessionId));
+    check("onPendingApprovalsChanged fired at least once for the start and once for the answer", changeNotifications >= 2);
+  }
+  {
+    // The abandoned-tab scenario itself: a task is left hanging on an
+    // unanswered ASK (no respondPermission ever called, simulating the
+    // tab that would have sent it being closed), and the session is then
+    // cancelled (closeFreellmapiFallbackPanel's "Can't revert while a task
+    // is running" guard aside, this mirrors what closing a session's tab
+    // actually invokes server-side). The pending approval must be swept
+    // and the indicator cleared, not left dangling forever.
+    const registry = createSessionRegistry(sessionsDir);
+    const script: ChatResponse[] = [{ turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "echo hi" } }] } }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+
+    const runPromise = runTask(registry, sessionId, "run echo", () => {});
+    await waitFor(() => getSessionIdsWithPendingApproval(registry).has(sessionId));
+    check("the abandoned task is reported as pending before cleanup", getSessionIdsWithPendingApproval(registry).has(sessionId));
+
+    await cancelSession(registry, sessionId);
+    await runPromise.catch(() => {});
+    check("cancelSession sweeps the dangling approval — no longer reported as pending", !getSessionIdsWithPendingApproval(registry).has(sessionId));
   }
 
   {

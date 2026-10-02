@@ -103,10 +103,29 @@ export interface SessionRegistry {
   sessions: Map<string, SessionEntry>;
   sessionsDir: string;
   cloudSync?: CloudSyncConfig;
+  /** Correctness audit finding (session Medium #4): fired whenever any session's pending permission/plan approval starts, gets answered, or is swept away (session cancelled/deleted) — lets main.ts rebroadcast agent:sessions-changed so the sidebar's "waiting for approval" indicator (see getSessionIdsWithPendingApproval) stays live even for a session with no tab currently open. */
+  onPendingApprovalsChanged?: () => void;
 }
 
-export function createSessionRegistry(sessionsDir: string, cloudSync?: CloudSyncConfig): SessionRegistry {
-  return { sessions: new Map(), sessionsDir, cloudSync };
+export function createSessionRegistry(sessionsDir: string, cloudSync?: CloudSyncConfig, onPendingApprovalsChanged?: () => void): SessionRegistry {
+  return { sessions: new Map(), sessionsDir, cloudSync, onPendingApprovalsChanged };
+}
+
+/**
+ * Correctness audit finding (session Medium #4): closing the tab for a
+ * session with an in-flight permission or plan approval doesn't cancel
+ * that approval — the task just sits there forever, waiting for a click
+ * nothing can ever send again, with no record of this anywhere the user
+ * would see it. Surfaces exactly which live sessions are in that state
+ * right now, so callers (main.ts's agent:list-sessions) can flag them for
+ * the sidebar, independent of whether any tab is open for them.
+ */
+export function getSessionIdsWithPendingApproval(registry: SessionRegistry): Set<string> {
+  const ids = new Set<string>();
+  for (const [id, entry] of registry.sessions) {
+    if (entry.pendingApprovals.size > 0 || entry.pendingPlanApproval.resolve !== null) ids.add(id);
+  }
+  return ids;
 }
 
 /** Mirrors the provider construction in cli.ts's --base-url branch. `signal` only matters for the embedded provider — it's the model download's cancellation handle; the other two providers make no download, so they simply ignore it. */
@@ -186,7 +205,7 @@ export async function startSession(
   // leak the old entry's model — tear it down first.
   const existing = registry.sessions.get(sessionId);
   if (existing) {
-    await finalizeEntry(existing);
+    await finalizeEntry(registry, existing);
   }
 
   const CLOUD_KINDS: CloudProviderKind[] = ["anthropic", "openai", "gemini"];
@@ -241,11 +260,13 @@ export async function startSession(
     onApprovalNeeded: (call) =>
       new Promise<PermissionResponse>((resolve) => {
         pendingApprovals.set(call.id, resolve);
+        registry.onPendingApprovalsChanged?.();
       }),
     planFirst: config.planFirst,
     onPlanApprovalNeeded: () =>
       new Promise<boolean>((resolve) => {
         pendingPlanApproval.resolve = resolve;
+        registry.onPendingApprovalsChanged?.();
       }),
     fallbackProviders,
     providerLabel,
@@ -551,6 +572,7 @@ export function respondPermission(registry: SessionRegistry, sessionId: string, 
   const resolve = entry.pendingApprovals.get(callId);
   if (!resolve) return;
   entry.pendingApprovals.delete(callId);
+  registry.onPendingApprovalsChanged?.();
   resolve({ approved, approvedHunkIds });
 }
 
@@ -561,6 +583,7 @@ export function respondPlan(registry: SessionRegistry, sessionId: string, approv
   const resolve = entry.pendingPlanApproval.resolve;
   if (!resolve) return;
   entry.pendingPlanApproval.resolve = null;
+  registry.onPendingApprovalsChanged?.();
   resolve(approved);
 }
 
@@ -572,13 +595,15 @@ export function respondPlan(registry: SessionRegistry, sessionId: string, approv
  * actually finish (so the model's native resources are never freed mid
  * generation), then disposes the provider's local resources.
  */
-async function finalizeEntry(entry: SessionEntry): Promise<void> {
+async function finalizeEntry(registry: SessionRegistry, entry: SessionEntry): Promise<void> {
+  const hadPending = entry.pendingApprovals.size > 0 || entry.pendingPlanApproval.resolve !== null;
   for (const resolve of entry.pendingApprovals.values()) resolve({ approved: false });
   entry.pendingApprovals.clear();
   if (entry.pendingPlanApproval.resolve) {
     entry.pendingPlanApproval.resolve(false);
     entry.pendingPlanApproval.resolve = null;
   }
+  if (hadPending) registry.onPendingApprovalsChanged?.();
   entry.session.cancel();
   await entry.running?.catch(() => {});
   await entry.provider.dispose?.().catch(() => {});
@@ -608,7 +633,7 @@ async function finalizeEntry(entry: SessionEntry): Promise<void> {
 export async function cancelSession(registry: SessionRegistry, sessionId: string): Promise<void> {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return;
-  await finalizeEntry(entry);
+  await finalizeEntry(registry, entry);
   // Only remove if this is still the same entry — in principle a caller
   // could already have started a new session under this id while this
   // cancel's async teardown was in flight; that newer entry must survive.
@@ -627,7 +652,7 @@ export async function removeSession(registry: SessionRegistry, sessionId: string
   const entry = registry.sessions.get(sessionId);
   if (entry) {
     entry.deleted = true;
-    await finalizeEntry(entry);
+    await finalizeEntry(registry, entry);
   }
   await deleteSession(registry.sessionsDir, sessionId);
   registry.sessions.delete(sessionId);
