@@ -58,14 +58,23 @@ async function main() {
       hasRealRipgrep = false;
     }
     if (hasRealRipgrep) {
+      // Final review Important #7: rg's --pre=<program> runs a single
+      // PROGRAM (by name/path), not a shell string — the original test's
+      // payload `sh -c "touch X"` as ONE argv element is a program name
+      // literally containing spaces, which rg can't find and fails to
+      // start, so it passed even with the pre-fix vulnerable code. A real
+      // exploit needs an actual executable file for rg to invoke.
       const payloadMarker = path.join(root, "PWNED_MARKER");
+      const scriptPath = path.join(root, "pwn.sh");
       await fs.rm(payloadMarker, { force: true });
-      await grepTool.execute({ pattern: `--pre=sh -c "touch ${payloadMarker}"` }, ctx);
+      await fs.writeFile(scriptPath, `#!/bin/sh\ntouch "${payloadMarker}"\n`, { mode: 0o755 });
+      await grepTool.execute({ pattern: `--pre=${scriptPath}` }, ctx);
       const exists = await fs
         .access(payloadMarker)
         .then(() => true)
         .catch(() => false);
-      check("[live rg binary] a pattern shaped like an rg flag never gets interpreted as one — no command executed", !exists);
+      check("[live rg binary] a pattern shaped like an rg flag never gets interpreted as one — no script executed", !exists);
+      await fs.rm(scriptPath, { force: true });
     } else {
       console.log("  (skipped: no real rg binary on PATH in this environment — buildRipgrepArgs test above already covers this)");
     }
@@ -86,6 +95,35 @@ async function main() {
     const result = await grepTool.execute({ pattern: "API_KEY" }, ctx);
     check("matched output has the secret value redacted, not the raw key", result.ok && !result.output?.matches.includes("sk-abcdefghijklmnopqrstuvwxyz123456"));
     check("the redaction marker is present", result.ok && !!result.output?.matches.includes("[REDACTED]"));
+  }
+
+  console.log("\ngrepTool: the JS fallback never follows a symlink outside the workspace (final review Important #5, confirmed live — the common path for most users, since ripgrep is rarely installed):");
+  {
+    // Forces the JS fallback deterministically, regardless of whether a
+    // real rg binary happens to be installed wherever this test runs: a
+    // lookbehind assertion is valid JS RegExp syntax (what jsFallbackGrep
+    // uses) but unsupported by ripgrep's underlying Rust regex engine,
+    // which exits with its own "invalid pattern" error (code 2) —
+    // tryRipgrep treats any code > 1 as "couldn't run it", falling
+        // through to the JS path exactly like a missing rg binary would.
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-grep-jsfallback-outside-"));
+    await fs.writeFile(path.join(outsideDir, "s.txt"), "findmeSECRETOUT\n", "utf-8");
+    const linkPath = path.join(root, "link.txt");
+    await fs.symlink(path.join(outsideDir, "s.txt"), linkPath);
+
+    const result = await grepTool.execute({ pattern: "(?<=findme)SECRETOUT" }, ctx);
+    check("a symlink pointing outside the workspace is never read by the JS fallback", result.ok && !result.output?.matches.includes("SECRETOUT"));
+
+    await fs.rm(linkPath, { force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  }
+
+  console.log("\ngrepTool: the JS fallback skips protected paths (.env, id_rsa, etc.), matching read_file's own posture:");
+  {
+    await fs.writeFile(path.join(root, ".env"), "aaaFINDABLE_ENV_SECRET\n", "utf-8");
+    const result = await grepTool.execute({ pattern: "(?<=aaa)FINDABLE_ENV_SECRET" }, ctx);
+    check("a protected file (.env) is never searched/matched by the JS fallback", result.ok && !result.output?.matches.includes("FINDABLE_ENV_SECRET"));
+    await fs.rm(path.join(root, ".env"), { force: true });
   }
 
   await fs.rm(root, { recursive: true, force: true });

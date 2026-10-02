@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { Tool, ToolContext } from "../types.js";
-import { redactSecrets } from "../protected.js";
+import { redactSecrets, isProtectedPath } from "../protected.js";
 import { resolveWithinWorkspace } from "../workspacePath.js";
 
 interface Input {
@@ -45,6 +45,17 @@ function tryRipgrep(pattern: string, cwd: string): Promise<string | null> {
   });
 }
 
+/**
+ * Security audit final-review Important #5, confirmed live: this is the
+ * COMMON path for most users (ripgrep is rarely pre-installed), and it
+ * previously followed any symlink it happened to walk into — Dirent's
+ * own isDirectory()/isFile() reflect the LINK itself (lstat semantics),
+ * not its target, so a symlink to a file fell into the `else` branch
+ * below and fs.readFile happily followed it straight outside the
+ * workspace. It also never skipped protected paths at all, unlike
+ * read_file's isProtectedPath check — searching ".env"/"id_rsa"/etc. and
+ * handing a match's surrounding text into model context.
+ */
 async function jsFallbackGrep(pattern: string, root: string): Promise<string> {
   const re = new RegExp(pattern);
   const lines: string[] = [];
@@ -52,7 +63,10 @@ async function jsFallbackGrep(pattern: string, root: string): Promise<string> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const e of entries) {
       if (IGNORE.has(e.name)) continue;
+      if (e.isSymbolicLink()) continue;
       const abs = path.join(dir, e.name);
+      const rel = path.relative(root, abs).split(path.sep).join("/");
+      if (isProtectedPath(rel)) continue;
       if (e.isDirectory()) {
         await walk(abs);
       } else {
@@ -60,7 +74,7 @@ async function jsFallbackGrep(pattern: string, root: string): Promise<string> {
           const content = await fs.readFile(abs, "utf8");
           content.split("\n").forEach((line, i) => {
             if (lines.length < 200 && re.test(line)) {
-              lines.push(`${path.relative(root, abs)}:${i + 1}:${line}`);
+              lines.push(`${rel}:${i + 1}:${line}`);
             }
           });
         } catch {
