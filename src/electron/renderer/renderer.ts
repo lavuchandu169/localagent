@@ -1095,6 +1095,13 @@ async function openSettingsPanel(): Promise<void> {
   geminiApiKeyInput.placeholder = currentGemini.hasKey ? "•••• saved" : "";
   geminiEnvOverrideNotice.hidden = !currentGemini.envOverride;
 
+  // Correctness audit finding (GitHub Medium #3): every other credential
+  // section above re-reads its real stored state on every open — GitHub's
+  // was only ever fetched once at launch, so a revocation detected mid-
+  // session (see onGithubUnauthorized in main.ts) or a connect/disconnect
+  // from another window never showed up here until the next app restart.
+  await refreshGithubStatus();
+
   await refreshDownloadedModelsList();
 }
 
