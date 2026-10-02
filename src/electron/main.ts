@@ -106,6 +106,16 @@ function createWindow(): BrowserWindow {
     shell.openExternal(url);
     return { action: "deny" };
   });
+  // Security audit finding M1: with no guard, dropping an untrusted HTML
+  // file onto the window (or any other in-page navigation away from the
+  // app's own bundled page) would load that page with the SAME preload
+  // bridge still attached — including addMcpServer, which spawns an
+  // arbitrary command. This window never legitimately navigates anywhere
+  // after its one loadFile() call below, so every will-navigate is denied
+  // unconditionally rather than trying to allowlist specific targets.
+  win.webContents.on("will-navigate", (event) => {
+    event.preventDefault();
+  });
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
   return win;
 }
