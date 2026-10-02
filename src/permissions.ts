@@ -48,6 +48,42 @@ export function hasShellMetacharacters(cmd: string): boolean {
   return SHELL_METACHARACTERS.test(cmd);
 }
 
+/**
+ * Final review Important #6, confirmed live: a SAFE_READ command can
+ * read or write OUTSIDE the workspace through its own arguments, with
+ * zero shell metacharacters needed — `cat /etc/passwd`, `cat
+ * ~/.ssh/id_rsa`, `git diff --no-index <abs> /dev/null` (reads an
+ * arbitrary file), `git diff --output=../../x` / `git log --output=…`
+ * (WRITES an arbitrary file), `git diff -O<path>` (points at an
+ * attacker-chosen external diff-driver config). None of these need a
+ * shell at all, so hasShellMetacharacters never catches them.
+ *
+ * `~` is only checked at the START of a token — that's the one position
+ * a POSIX shell actually expands it from, which is exactly what makes
+ * `~/.ssh/id_rsa` dangerous but leaves git's own revision syntax
+ * (`HEAD~1`, `HEAD~3`) alone, since `~` there is never the first
+ * character of its token.
+ *
+ * `..` is checked anywhere, which also flags ordinary git revision-range
+ * syntax (`git diff v2..v3`) as a false positive — accepted deliberately:
+ * downgrading an occasional legitimate command to ASK is a usability
+ * cost, not a safety one, and it's the same tradeoff hasShellMetacharacters
+ * already makes for compound shell commands.
+ */
+const ESCAPING_ARGUMENT_PATTERNS = [
+  /(^|\s)\/\S*/, // an absolute path token (starts with /)
+  /(^|\s)~\S*/, // a token starting with ~ — shell-expands from HOME
+  /\.\./, // parent-directory traversal, or a git revision range (false positive, see above)
+  /(^|\s)--output(=|\s)/, // git diff/log --output=<path> — writes an arbitrary file
+  /(^|\s)--no-index(\s|$)/, // git diff --no-index — compares two arbitrary filesystem paths, not repo content
+  /(^|\s)--ext-diff(\s|$)/, // git diff --ext-diff — invokes an external diff driver from config
+  /(^|\s)-O\S*/, // git diff -O<orderfile> / an attacker-chosen diff-driver config path
+];
+
+export function hasEscapingArguments(cmd: string): boolean {
+  return ESCAPING_ARGUMENT_PATTERNS.some((r) => r.test(cmd));
+}
+
 export class PermissionEngine {
   constructor(private mode: PermissionMode) {}
 
@@ -74,9 +110,10 @@ export class PermissionEngine {
       if (risk === "DESTRUCTIVE") return "ASK";
       if (risk === "NETWORK") return "ASK";
       // A SAFE_READ prefix match says nothing about what a shell does with
-      // everything after it — only auto-allow a command with no shell
-      // metacharacters at all (see hasShellMetacharacters's doc comment).
-      if (risk === "SAFE_READ") return hasShellMetacharacters(command) ? "ASK" : "ALLOW";
+      // everything after it, NOR about what the command's own arguments
+      // point at — only auto-allow a command with no shell metacharacters
+      // (hasShellMetacharacters) AND no escaping argument (hasEscapingArguments).
+      if (risk === "SAFE_READ") return hasShellMetacharacters(command) || hasEscapingArguments(command) ? "ASK" : "ALLOW";
       return "ASK"; // UNKNOWN defaults to asking (Section 16).
     }
 

@@ -41,6 +41,13 @@ const SECRET_LIKE: { pattern: RegExp; keepPrefix: boolean }[] = [
   // text SECRET/TOKEN/PASSWORD/API_KEY/APIKEY. AIza-prefixed keys are
   // Google's own documented format.
   { pattern: /(AIza[A-Za-z0-9_\-]{30,})/g, keepPrefix: false },
+  // Final review Important #6: a human-approved SAFE_READ command whose
+  // argument escapes the workspace (e.g. `cat ~/.ssh/id_rsa`, asked
+  // rather than auto-run since hasEscapingArguments now catches it) can
+  // still have its real content dumped verbatim into run_command's
+  // output. [\s\S]*? (not `.`) so the match spans the key body's
+  // embedded newlines too.
+  { pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, keepPrefix: false },
 ];
 
 export function redactSecrets(text: string): string {

