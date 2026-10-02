@@ -97,13 +97,44 @@ async function writeFileAtomic(filePath: string, content: string): Promise<void>
   await fs.rename(tmpPath, filePath);
 }
 
-async function writeIndex(sessionsDir: string, entries: SessionIndexEntry[]): Promise<void> {
+async function writeIndexRaw(sessionsDir: string, entries: SessionIndexEntry[]): Promise<void> {
   await fs.mkdir(sessionsDir, { recursive: true });
   await writeFileAtomic(indexPath(sessionsDir), JSON.stringify(entries, null, 2));
 }
 
-/** Reconstructs index.json from the directory listing — used when the index is missing or corrupted. Any individual record file that also fails to parse is skipped, not fatal. */
-export async function rebuildIndex(sessionsDir: string): Promise<SessionIndexEntry[]> {
+/**
+ * Final-review finding C2: every index mutation used to do its own
+ * unsynchronized read-modify-write of the WHOLE index.json — atomic
+ * rename (writeFileAtomic) makes any SINGLE write safe, but does nothing
+ * for two overlapping read-modify-write sequences for DIFFERENT session
+ * ids: both read the same starting index, both independently add/remove
+ * their own entry, and whichever writes last wins, silently dropping the
+ * other's change. cloudSync.ts's reconcileSessions deliberately runs every
+ * session's sync concurrently (Promise.all) for speed, so this was a real,
+ * frequently-hit path (confirmed via a live repro: 8 concurrent
+ * saveSession calls for different ids left only 1 in the index), not a
+ * hypothetical one. A simple per-directory promise-chain lock serializes
+ * just the index's own read-modify-write sequence — record files
+ * themselves stay fully concurrent, so this doesn't undo the performance
+ * win reconcileSessions' concurrency was built for.
+ */
+const indexLocks = new Map<string, Promise<void>>();
+
+function withIndexLock<T>(sessionsDir: string, fn: () => Promise<T>): Promise<T> {
+  const prior = indexLocks.get(sessionsDir) ?? Promise.resolve();
+  const run = prior.then(fn, fn);
+  indexLocks.set(
+    sessionsDir,
+    run.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return run;
+}
+
+/** Scans the directory and rebuilds index entries from each record file directly — the self-healing path for a missing/corrupted index.json. Never acquires the index lock or writes anything itself; every caller (both below) does both within its own single lock acquisition, so this can be safely called from inside an already-locked section without deadlocking. */
+async function buildIndexFromDisk(sessionsDir: string): Promise<SessionIndexEntry[]> {
   let files: string[];
   try {
     files = await fs.readdir(sessionsDir);
@@ -113,14 +144,22 @@ export async function rebuildIndex(sessionsDir: string): Promise<SessionIndexEnt
 
   const entries: SessionIndexEntry[] = [];
   for (const file of files) {
-    if (file === "index.json" || !file.endsWith(".json")) continue;
+    if (file === "index.json" || !file.endsWith(".json") || file.includes(".tmp-")) continue;
     const id = file.slice(0, -".json".length);
     const record = await loadSessionRecord(sessionsDir, id);
     if (record) entries.push({ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail });
   }
   entries.sort((a, b) => b.updatedAt - a.updatedAt);
-  await writeIndex(sessionsDir, entries);
   return entries;
+}
+
+/** Reconstructs index.json from the directory listing — used when the index is missing or corrupted. Any individual record file that also fails to parse is skipped, not fatal. Acquires the index lock for its own read+write, so it's safe to call concurrently with saveSession/deleteSession for the same directory. */
+export async function rebuildIndex(sessionsDir: string): Promise<SessionIndexEntry[]> {
+  return withIndexLock(sessionsDir, async () => {
+    const entries = await buildIndexFromDisk(sessionsDir);
+    await writeIndexRaw(sessionsDir, entries);
+    return entries;
+  });
 }
 
 /**
@@ -137,25 +176,47 @@ export async function listSessions(sessionsDir: string, ownerEmail?: string | nu
   return entries.filter((e) => e.ownerEmail === ownerEmail);
 }
 
-async function listAllSessions(sessionsDir: string): Promise<SessionIndexEntry[]> {
-  try {
-    const raw = await fs.readFile(indexPath(sessionsDir), "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return rebuildIndex(sessionsDir);
-    const isValid = parsed.every(
+function isValidIndexArray(parsed: unknown): parsed is SessionIndexEntry[] {
+  return (
+    Array.isArray(parsed) &&
+    parsed.every(
       (e) =>
         !!e &&
         typeof e === "object" &&
         typeof (e as SessionIndexEntry).id === "string" &&
         typeof (e as SessionIndexEntry).title === "string" &&
         typeof (e as SessionIndexEntry).updatedAt === "number"
-    );
-    if (!isValid) return rebuildIndex(sessionsDir);
+    )
+  );
+}
+
+/** Reads index.json WITHOUT acquiring the index lock or persisting any self-heal — used by saveSession/deleteSession, which already hold the lock for their own read-modify-write and are about to write their own complete, corrected snapshot anyway. Calling the lock-acquiring rebuildIndex()/listAllSessions() from inside an already-locked section would deadlock against itself. */
+async function readIndexRaw(sessionsDir: string): Promise<SessionIndexEntry[]> {
+  try {
+    const raw = await fs.readFile(indexPath(sessionsDir), "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isValidIndexArray(parsed)) return buildIndexFromDisk(sessionsDir);
     // ownerEmail is normalized here rather than folded into the validity
     // check above so an index.json written before ownership existed isn't
     // treated as corrupt and rebuilt unnecessarily — it's just missing a
     // field that defaults to null.
-    return (parsed as SessionIndexEntry[]).map((e) => ({ ...e, ownerEmail: e.ownerEmail ?? null }));
+    return parsed.map((e) => ({ ...e, ownerEmail: e.ownerEmail ?? null }));
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return [];
+    return buildIndexFromDisk(sessionsDir);
+  }
+}
+
+async function listAllSessions(sessionsDir: string): Promise<SessionIndexEntry[]> {
+  try {
+    const raw = await fs.readFile(indexPath(sessionsDir), "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isValidIndexArray(parsed)) return rebuildIndex(sessionsDir);
+    // ownerEmail is normalized here rather than folded into the validity
+    // check above so an index.json written before ownership existed isn't
+    // treated as corrupt and rebuilt unnecessarily — it's just missing a
+    // field that defaults to null.
+    return parsed.map((e) => ({ ...e, ownerEmail: e.ownerEmail ?? null }));
   } catch (err: any) {
     if (err?.code === "ENOENT") return [];
     return rebuildIndex(sessionsDir);
@@ -201,20 +262,28 @@ export async function saveSession(sessionsDir: string, record: SessionRecord): P
   await fs.mkdir(sessionsDir, { recursive: true });
   await writeFileAtomic(recordPath(sessionsDir, record.id), JSON.stringify(record, null, 2));
 
-  const entries = await listAllSessions(sessionsDir);
-  const withoutThis = entries.filter((e) => e.id !== record.id);
-  withoutThis.push({ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail });
-  withoutThis.sort((a, b) => b.updatedAt - a.updatedAt);
-  await writeIndex(sessionsDir, withoutThis);
+  // The index's own read-modify-write is the one part of this function
+  // that genuinely races against other concurrent callers (see
+  // withIndexLock's doc comment, final-review finding C2) — the record
+  // file write above does not, so it stays outside the lock.
+  await withIndexLock(sessionsDir, async () => {
+    const entries = await readIndexRaw(sessionsDir);
+    const withoutThis = entries.filter((e) => e.id !== record.id);
+    withoutThis.push({ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail });
+    withoutThis.sort((a, b) => b.updatedAt - a.updatedAt);
+    await writeIndexRaw(sessionsDir, withoutThis);
+  });
 }
 
 export async function deleteSession(sessionsDir: string, id: string): Promise<void> {
   await fs.rm(recordPath(sessionsDir, id), { force: true });
-  const entries = await listAllSessions(sessionsDir);
-  await writeIndex(
-    sessionsDir,
-    entries.filter((e) => e.id !== id)
-  );
+  await withIndexLock(sessionsDir, async () => {
+    const entries = await readIndexRaw(sessionsDir);
+    await writeIndexRaw(
+      sessionsDir,
+      entries.filter((e) => e.id !== id)
+    );
+  });
 }
 
 /**

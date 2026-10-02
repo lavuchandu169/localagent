@@ -233,5 +233,64 @@ console.log("\nsaveSession writes atomically (correctness audit: session Medium 
   await fs.rm(sessionsDir, { recursive: true, force: true });
 }
 
+console.log("\nconcurrent saveSession calls don't lose each other's index entries (final-review finding C2):");
+{
+  // Each saveSession/deleteSession does a read-modify-write of the WHOLE
+  // index.json (read current entries, add/remove this one, write back).
+  // Atomic rename makes any SINGLE write safe, but it does nothing for two
+  // overlapping read-modify-write sequences for DIFFERENT session ids:
+  // both read the same starting index, both independently add their own
+  // entry, and whichever writes last wins — silently dropping the other's
+  // entry. cloudSync.ts's reconcileSessions runs every session's sync
+  // concurrently (Promise.all, by design, for speed), so this is a real,
+  // frequently-hit path, not a hypothetical one.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessions-concurrent-test-"));
+  const COUNT = 8;
+  const records = Array.from({ length: COUNT }, (_, i) => makeRecord(`concurrent-${i}`, `title ${i}`, 100 + i));
+  await Promise.all(records.map((r) => saveSession(sessionsDir, r)));
+
+  const indexed = await listSessions(sessionsDir);
+  check(`all ${COUNT} concurrently-saved sessions are present in the index (got ${indexed.length})`, indexed.length === COUNT);
+  for (const r of records) {
+    check(`index includes ${r.id}`, indexed.some((e) => e.id === r.id));
+  }
+  // Every record file itself still exists on disk even if the index
+  // temporarily disagreed — confirms this is purely an index-bookkeeping
+  // race, not data loss of the records themselves.
+  const filesOnDisk = (await fs.readdir(sessionsDir)).filter((f) => f.endsWith(".json") && f !== "index.json");
+  check(`all ${COUNT} record files exist on disk regardless`, filesOnDisk.length === COUNT);
+  await fs.rm(sessionsDir, { recursive: true, force: true });
+}
+{
+  // Mirrors the "conflict copies become invisible" scenario from the
+  // review: several conflict-preserving saves (reconcileSessions' own
+  // conflict branch does two saveSession calls per conflicting session)
+  // firing concurrently must not drop each other from the index either.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessions-concurrent-conflict-test-"));
+  const COUNT = 5;
+  await Promise.all(
+    Array.from({ length: COUNT }, (_, i) => async () => {
+      await saveSession(sessionsDir, makeRecord(`original-${i}`, `original ${i}`, 100));
+      await saveSession(sessionsDir, makeRecord(`original-${i}-conflict-${i}`, `conflict copy ${i}`, 100));
+    }).map((fn) => fn())
+  );
+  const indexed = await listSessions(sessionsDir);
+  check(`all ${COUNT * 2} sessions (originals + conflict copies) are present in the index (got ${indexed.length})`, indexed.length === COUNT * 2);
+  await fs.rm(sessionsDir, { recursive: true, force: true });
+}
+{
+  // Concurrent deletes must not lose each other's removals either — a
+  // delete racing a save for a DIFFERENT session is the same class of bug.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessions-concurrent-delete-test-"));
+  const COUNT = 6;
+  for (let i = 0; i < COUNT; i++) {
+    await saveSession(sessionsDir, makeRecord(`todelete-${i}`, `title ${i}`, 100 + i));
+  }
+  await Promise.all(Array.from({ length: COUNT }, (_, i) => deleteSession(sessionsDir, `todelete-${i}`)));
+  const indexed = await listSessions(sessionsDir);
+  check("every concurrently-deleted session is actually gone from the index", indexed.length === 0);
+  await fs.rm(sessionsDir, { recursive: true, force: true });
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

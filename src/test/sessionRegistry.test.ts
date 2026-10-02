@@ -949,6 +949,85 @@ await (async () => {
     check("removeSession best-effort deletes the remote copy when signed in", deletedSessionId === sessionId);
   }
 
+  console.log("\nsyncUploadToCloud doesn't overwrite newer local state with a stale snapshot (final-review finding C1):");
+  {
+    // Reproduces the exact race: task 1 finishes and starts a SLOW upload
+    // of its own record. Before that upload's post-upload checkpoint save
+    // completes, task 2 finishes and saves ITS OWN newer record. The slow
+    // upload's checkpoint save must not then overwrite task 2's record
+    // with the stale snapshot it captured when it started.
+    let uploadCalls = 0;
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {
+        throw new Error("should not be called");
+      },
+      uploadSession: async () => {
+        uploadCalls++;
+        if (uploadCalls === 1) {
+          // Task 1's upload is slow — long enough for task 2 to finish and
+          // save first.
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        return { modifiedTime: `modified-${uploadCalls}` };
+      },
+      getOwnerEmail: async () => null,
+    });
+    const provider = new MockProvider([{ turn: { type: "final", content: "first" } }, { turn: { type: "final", content: "second" } }]);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => provider }
+    );
+
+    // Deliberately not awaited — task 1's own persistSession/saveSession
+    // completes synchronously as part of runTask, but its fire-and-forget
+    // upload (the slow one) is still in flight when this call returns.
+    await runTask(registry, sessionId, "task one", () => {});
+    await runTask(registry, sessionId, "task two", () => {});
+    const afterTaskTwo = await loadSessionRecord(sessionsDir, sessionId);
+    check("task two's record is on disk right after it completes", afterTaskTwo?.messages.some((m) => m.content === "task two") ?? false);
+
+    // Give task 1's slow upload (and its post-upload checkpoint save) time
+    // to actually finish.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const afterSlowUpload = await loadSessionRecord(sessionsDir, sessionId);
+    check(
+      "task two's content survives task one's slow, late-finishing upload — not rolled back to a stale snapshot",
+      afterSlowUpload?.messages.some((m) => m.content === "task two") ?? false
+    );
+  }
+  {
+    // The deleted-session-resurrection variant: removeSession's file
+    // delete doesn't wait for an in-flight upload from an earlier task to
+    // finish, so a slow upload completing AFTER the delete must not bring
+    // the file back.
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {},
+      uploadSession: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return { modifiedTime: "modified-late" };
+      },
+      deleteRemoteSession: async () => {},
+      getOwnerEmail: async () => null,
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
+    );
+    await runTask(registry, sessionId, "a task", () => {});
+    await removeSession(registry, sessionId);
+    const rightAfterDelete = await loadSessionRecord(sessionsDir, sessionId);
+    check("the session is gone right after removeSession", rightAfterDelete === null);
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const afterSlowUpload = await loadSessionRecord(sessionsDir, sessionId);
+    check("the deleted session does NOT come back once the slow upload finally finishes", afterSlowUpload === null);
+  }
+
   console.log("\nSession ownership:");
   {
     const registry = createSessionRegistry(sessionsDir, {

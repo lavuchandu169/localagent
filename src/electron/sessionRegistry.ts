@@ -483,7 +483,23 @@ async function syncUploadToCloud(registry: SessionRegistry, record: SessionRecor
     // for no reason. Refreshing the checkpoint here keeps it accurate
     // between reconcile passes, exactly like reconcileSessions' own push
     // branch does after a push it drives itself.
-    await saveSession(registry.sessionsDir, { ...record, lastSyncCheckpoint: { remoteModifiedTime: modifiedTime, localUpdatedAt: record.updatedAt } });
+    //
+    // Final-review finding C1: `record` is a snapshot captured when THIS
+    // upload started — by the time it finishes (the upload itself is a
+    // real network round-trip), a second task can have completed and
+    // saved a newer record, or the session can have been deleted outright
+    // (removeSession's own file delete doesn't wait for an in-flight
+    // upload like this one to finish). Writing `record` back unconditionally
+    // would silently roll back that newer save, or resurrect a deleted
+    // session's file. Re-reading the CURRENT on-disk state right before
+    // this write and only proceeding when nothing has changed since (same
+    // updatedAt, still exists) makes this a pure no-op in both of those
+    // cases instead of an old-copy overwrite — the next save's own upload
+    // will seed a correct, up-to-date checkpoint regardless.
+    const current = await loadSessionRecord(registry.sessionsDir, record.id);
+    if (current && current.updatedAt === record.updatedAt) {
+      await saveSession(registry.sessionsDir, { ...current, lastSyncCheckpoint: { remoteModifiedTime: modifiedTime, localUpdatedAt: record.updatedAt } });
+    }
   } catch (err) {
     if (err instanceof DriveScopeError) onScopeError();
     else console.warn(`[cloudSync] upload failed for session ${record.id}, will retry on next save:`, err);
