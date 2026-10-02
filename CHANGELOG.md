@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.62 — 2026-10-02
+
+- fix: address final-review findings in provider streaming (SSE robustness, in-band stream errors, Gemini converter reuse, renderer tool-card cleanup, event persistence, embedded fallback-tool-call text)
+
 ## v0.1.0-beta.61 — 2026-10-01
 
 - fix: update default Gemini model from 2.5-flash to 3.8-flash
