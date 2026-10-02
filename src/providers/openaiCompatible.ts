@@ -132,6 +132,24 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const choice = data.choices?.[0];
     return fromOpenAIChatMessage(choice?.message ?? {}, data);
   }
+
+  async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
+    const body = buildChatBody(request);
+    body.stream = true;
+
+    const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new ProviderChatError(`Provider error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
+    }
+
+    yield* streamOpenAIShapeResponse(res);
+  }
 }
 
 /** Converts one OpenAI/OpenAI-compatible chat-completion response message

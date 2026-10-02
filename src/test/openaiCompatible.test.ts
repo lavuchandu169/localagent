@@ -118,5 +118,51 @@ console.log("\nOpenAICompatibleProvider does NOT mark a 500 as retryable:");
   }
 }
 
+console.log("\nOpenAICompatibleProvider.chatStream:");
+{
+  const sseBody = 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(sseBody, { status: 200 })) as typeof fetch;
+  try {
+    const provider = new OpenAICompatibleProvider({ baseUrl: "http://localhost:11434/v1", local: true });
+    const seen: any[] = [];
+    for await (const e of provider.chatStream!({ model: "qwen2.5-coder", messages: [{ role: "user", content: "hi" }] })) seen.push(e);
+    check("streams text the same way OpenAIProvider does", seen.some((e) => e.type === "text" && e.text === "Hi"));
+    const done = seen.find((e) => e.type === "done");
+    check("terminal done event assembles correctly", done?.response.turn.type === "final" && done.response.turn.content === "Hi");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+{
+  // The confirmed real-world degenerate case: Ollama's own /v1 endpoint
+  // sends a tool call's name AND complete arguments together in a single
+  // chunk, never split into a separate "name" delta and later "arguments"
+  // fragments. Must produce the exact same final result as the
+  // many-fragments case — only the EVENT SHAPE differs (one
+  // tool_call_start immediately followed by exactly one tool_call_delta
+  // carrying the whole string), not the outcome.
+  const sseBody =
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_xyz","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}}]}\n\n' +
+    'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n' +
+    "data: [DONE]\n\n";
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(sseBody, { status: 200 })) as typeof fetch;
+  try {
+    const provider = new OpenAICompatibleProvider({ baseUrl: "http://localhost:11434/v1", local: true });
+    const seen: any[] = [];
+    for await (const e of provider.chatStream!({ model: "qwen2.5-coder", messages: [{ role: "user", content: "read a.txt" }], tools: [] })) seen.push(e);
+    const start = seen.find((e) => e.type === "tool_call_start");
+    check("tool_call_start fires even for a whole-chunk tool call", start?.index === 0 && start?.name === "read_file");
+    const deltas = seen.filter((e) => e.type === "tool_call_delta");
+    check("exactly one tool_call_delta carries the whole arguments string at once — no artificial fragmentation", deltas.length === 1 && deltas[0].argumentsDelta === '{"path":"a.txt"}');
+    const done = seen.find((e) => e.type === "done");
+    check("the final result is identical to the many-fragments case", done?.response.turn.type === "tool_calls" && done.response.turn.toolCalls[0]?.arguments.path === "a.txt");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

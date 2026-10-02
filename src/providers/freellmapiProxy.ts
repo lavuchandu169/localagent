@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider } from "../types.js";
+import type { ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, StreamEvent } from "../types.js";
 import { OpenAICompatibleProvider } from "./openaiCompatible.js";
 import { startFreellmapiServer, getFreellmapiUnifiedApiKey } from "../electron/freellmapiHost.js";
 
@@ -58,5 +58,12 @@ export class FreellmapiProxyProvider implements ModelProvider {
       throw new Error("FreellmapiProxyProvider.chat() called before healthCheck() established a connection.");
     }
     return this.inner.chat(request);
+  }
+
+  async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
+    if (!this.inner) {
+      throw new Error("FreellmapiProxyProvider.chatStream() called before healthCheck() established a connection.");
+    }
+    yield* this.inner.chatStream!(request);
   }
 }
