@@ -141,6 +141,18 @@ export class AgentSession {
   private gpuStatusReported = false;
   /** Whether THIS task has already attempted its one checkpoint — reset at the start of every run() call. Attempted, not "succeeded": a non-git workspace or any other createCheckpoint failure still marks this true so every subsequent write this task doesn't retry it. */
   private checkpointAttemptedThisTask = false;
+  /** Security audit finding H3: detectVerifyCommand's `npm test`/`pytest`/
+   * `cargo test`/`go test` are in permissions.ts's SAFE_READ_COMMANDS, so
+   * auto-verify would otherwise run a repo's own test runner — arbitrary
+   * repo-defined code (package.json's "test" script, conftest.py, etc.) —
+   * with zero approval the moment ANY edit succeeds, even in a repo the
+   * user just opened for the first time. Reset at the start of every
+   * run() call: the first auto-verify attempt each task is forced through
+   * a real ASK (see autoVerifyAfterEdit below) regardless of what
+   * classifyCommand says, with the model's own tools the user already
+   * sees — once approved, later verifies THIS SAME TASK don't ask again,
+   * matching checkpointAttemptedThisTask's own once-per-task granularity. */
+  private autoVerifyApprovedThisTask = false;
   /**
    * Whether the model's MOST RECENT attempt at a WRITE-permission tool this
    * task was denied or rejected — reset at the start of every run() call,
@@ -336,7 +348,14 @@ export class AgentSession {
     if (!tool) return false;
 
     const call: ToolCall = { id: `auto_verify_${this.turn}`, name: "run_command", arguments: { command } };
-    const decision = this.permissions.evaluate(call, tool.permission);
+    let decision = this.permissions.evaluate(call, tool.permission);
+    // Security audit finding H3: classifyCommand puts "npm test"/"pytest"/
+    // "cargo test"/"go test" in SAFE_READ, which auto-ALLOWs — but running
+    // them means executing this repo's own test-runner script, arbitrary
+    // repo-defined code. Force the first attempt each task through a real
+    // ASK regardless of that classification; once approved, later verifies
+    // this same task don't ask again (autoVerifyApprovedThisTask).
+    if (decision === "ALLOW" && !this.autoVerifyApprovedThisTask) decision = "ASK";
     yield { type: "permission.request", call, decision };
     this.messages.push({ role: "assistant", content: "", tool_calls: [call] });
 
@@ -360,6 +379,7 @@ export class AgentSession {
         });
         return true;
       }
+      this.autoVerifyApprovedThisTask = true;
     }
 
     this.state = "EXECUTING_TOOL";
@@ -391,6 +411,7 @@ export class AgentSession {
     this.opts.fallbackProviders = this.originalFallbackProviders ? [...this.originalFallbackProviders] : this.originalFallbackProviders;
     this.state = "THINKING";
     this.checkpointAttemptedThisTask = false;
+    this.autoVerifyApprovedThisTask = false;
     this.wroteThisTask = false;
     this.anyWriteSucceededThisTask = false;
     this.writeSucceededSinceLastVerify = false;
