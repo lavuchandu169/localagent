@@ -1,7 +1,8 @@
 import type { ChatHistoryItem, ChatModelFunctionCall, ChatModelFunctions } from "node-llama-cpp";
-import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, ToolCall } from "../types.js";
+import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, StreamEvent, ToolCall } from "../types.js";
 import { EMBEDDED_MODELS, isEmbeddedModelId, type EmbeddedModelId } from "../models.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
+import { AsyncEventQueue } from "./asyncEventQueue.js";
 
 /**
  * Builds a user turn's text — the task text plus, for each attachment,
@@ -210,6 +211,16 @@ export function fromLlamaResult(result: LlamaGenerateResult): ChatResponse {
   return { turn: { type: "final", content: result.response }, raw: result };
 }
 
+/** Pure so it's directly testable without a real model/GPU — the actual
+ * decision of what to tell the user about GPU acceleration. */
+export function describeGpuStatus(gpu: "metal" | "cuda" | "vulkan" | false, gpuLayers: number): string {
+  if (gpu !== false && gpuLayers > 0) {
+    const label = gpu === "metal" ? "Metal" : gpu === "cuda" ? "CUDA" : "Vulkan";
+    return `Embedded model ready — ${label} GPU (${gpuLayers} layers offloaded)`;
+  }
+  return "Embedded model ready — CPU only (no GPU backend detected)";
+}
+
 /**
  * Runs a GGUF model in-process via node-llama-cpp — no server, no other app.
  * Uses the low-level LlamaChat.generateResponse() rather than
@@ -237,6 +248,13 @@ export class EmbeddedLlamaProvider implements ModelProvider {
    * process with an uncaught native exception (see dispose() below).
    */
   private llama: import("node-llama-cpp").Llama | undefined;
+  /** Set once loadChat() completes — a plain-language report of whether
+   * GPU acceleration is actually active for this session, read by
+   * agent.ts's turn loop (Task 1, Step 4a) and reported as a one-time
+   * status message. `llama.gpu` and `model.gpuLayers` are both real,
+   * documented properties on node-llama-cpp's own Llama/LlamaModel
+   * classes — verified against its type definitions, not guessed. */
+  gpuStatus: string | undefined;
 
   constructor(
     private opts: {
@@ -265,6 +283,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     this.llama = llama;
     const model = await llama.loadModel({ modelPath });
     this.model = model;
+    this.gpuStatus = describeGpuStatus(llama.gpu, model.gpuLayers);
     // contextSize defaults to "auto", which on a model with a large trained
     // context (e.g. this 7B model's 128K) can allocate a KV cache sized for
     // that whole window regardless of how much is actually used — measured
@@ -323,5 +342,42 @@ export class EmbeddedLlamaProvider implements ModelProvider {
       maxTokens: request.maxTokens ?? 4096,
     });
     return fromLlamaResult(result);
+  }
+
+  async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
+    const chat = await this.getChat();
+    const history = toLlamaHistory(request.messages);
+    const functions = toLlamaFunctions(request.tools);
+    const queue = new AsyncEventQueue<StreamEvent>();
+    const knownCallIndices = new Set<number>();
+
+    const generation = chat
+      .generateResponse(history, {
+        functions,
+        documentFunctionParams: true,
+        maxTokens: request.maxTokens ?? 4096,
+        onTextChunk: (text: string) => {
+          queue.push({ type: "text", text });
+        },
+        onFunctionCallParamsChunk: (chunk: { callIndex: number; functionName: string; paramsChunk: string; done: boolean }) => {
+          if (!knownCallIndices.has(chunk.callIndex)) {
+            knownCallIndices.add(chunk.callIndex);
+            queue.push({ type: "tool_call_start", index: chunk.callIndex, name: chunk.functionName });
+          }
+          queue.push({ type: "tool_call_delta", index: chunk.callIndex, argumentsDelta: chunk.paramsChunk });
+        },
+      })
+      .then(
+        (result) => {
+          queue.push({ type: "done", response: fromLlamaResult(result) });
+          queue.end();
+        },
+        (err) => {
+          queue.fail(err);
+        }
+      );
+
+    yield* queue;
+    await generation;
   }
 }
