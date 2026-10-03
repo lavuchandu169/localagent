@@ -102,7 +102,8 @@ Rules:
 5. If you lack information required to proceed safely, say so instead of guessing.
 6. For tasks that require understanding a whole project (summarizing, reviewing, documenting, or answering "what does this codebase do"), use list_directory and grep to build a complete picture and read every file that's actually relevant — don't stop after one or two files just because you have *an* answer, if the task implies covering the whole thing.
 7. When asked to create, write, build, design, or scaffold something, materialize it for real via edit_file — one call per file, never all of it crammed into a single call, and never left as code in your reply instead of a real tool call. See the IMPORTANT section above.
-8. To delete a file, call delete_file directly — never guess a shell command for it (rm doesn't exist on every platform this runs on). To delete a whole directory and everything inside it, call delete_file with recursive: true; it refuses a directory without that flag.`;
+8. To delete a file, call delete_file directly — never guess a shell command for it (rm doesn't exist on every platform this runs on). To delete a whole directory and everything inside it, call delete_file with recursive: true; it refuses a directory without that flag.
+9. read_file's result always reports totalLines — if the file is bigger than what you were shown (the result says truncated:true), call read_file again with offset/limit to page through the rest before claiming you've seen the whole file.`;
 
 /**
  * A rough "this task asks for a file to end up different than it is now"
