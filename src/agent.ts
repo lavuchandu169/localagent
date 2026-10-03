@@ -21,6 +21,9 @@ import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
 import { createCheckpoint } from "./checkpoints.js";
 import { detectVerifyCommand } from "./verifyCommand.js";
+import { isProtectedPath } from "./protected.js";
+import { resolveWithinWorkspace } from "./workspacePath.js";
+import { applyOldStringReplace } from "./editResolution.js";
 
 export interface AgentSessionOptions {
   workspaceRoot: string;
@@ -103,7 +106,8 @@ Rules:
 6. For tasks that require understanding a whole project (summarizing, reviewing, documenting, or answering "what does this codebase do"), use list_directory and grep to build a complete picture and read every file that's actually relevant — don't stop after one or two files just because you have *an* answer, if the task implies covering the whole thing.
 7. When asked to create, write, build, design, or scaffold something, materialize it for real via edit_file — one call per file, never all of it crammed into a single call, and never left as code in your reply instead of a real tool call. See the IMPORTANT section above.
 8. To delete a file, call delete_file directly — never guess a shell command for it (rm doesn't exist on every platform this runs on). To delete a whole directory and everything inside it, call delete_file with recursive: true; it refuses a directory without that flag.
-9. read_file's result always reports totalLines — if the file is bigger than what you were shown (the result says truncated:true), call read_file again with offset/limit to page through the rest before claiming you've seen the whole file.`;
+9. read_file's result always reports totalLines — if the file is bigger than what you were shown (the result says truncated:true), call read_file again with offset/limit to page through the rest before claiming you've seen the whole file.
+10. For a small change to a file that already exists, prefer edit_file with old_string/new_string over rewriting the whole file with content — it's faster and can't accidentally drop unrelated parts of the file. old_string must match the file's current text exactly (whitespace included) and be unique; use content instead when creating a new file or changing most of an existing one.`;
 
 /**
  * A rough "this task asks for a file to end up different than it is now"
@@ -345,6 +349,50 @@ export class AgentSession {
       oldContent = null; // doesn't exist yet — the whole new content shows as added
     }
     return computeFileDiff(oldContent, newContent);
+  }
+
+  /**
+   * An edit_file call is accepted in two shapes: a full `content` (today's
+   * existing behavior, unchanged by this method) or `old_string`/`new_string`
+   * (a targeted replace, for changing a small part of a large file without
+   * regenerating the whole thing). This resolves the second shape into the
+   * first — reading the file's current content and computing the full
+   * replacement — so every call downstream (permission evaluation, diff
+   * computation, the tool's own execute()) only ever has to understand plain
+   * `content`. Any call that isn't edit_file, or that already carries a
+   * string `content`, passes through completely unchanged.
+   */
+  private async resolveEditFileCall(call: ToolCall): Promise<{ ok: true; call: ToolCall } | { ok: false; error: string }> {
+    if (call.name !== "edit_file") return { ok: true, call };
+    const args = call.arguments as Record<string, unknown>;
+    if (typeof args.content === "string") return { ok: true, call };
+    if (args.old_string === undefined && args.new_string === undefined) {
+      return { ok: true, call }; // neither shape supplied — let editFileTool's own validation report the missing content.
+    }
+    const relPath = args.path;
+    const oldString = args.old_string;
+    const newString = args.new_string;
+    if (typeof relPath !== "string" || typeof oldString !== "string" || typeof newString !== "string") {
+      return { ok: false, error: "edit_file's old_string/new_string mode requires path, old_string, and new_string to all be strings." };
+    }
+    if (isProtectedPath(relPath)) {
+      return { ok: false, error: `Refusing to read protected path: ${relPath}` };
+    }
+    const resolved = await resolveWithinWorkspace(this.opts.workspaceRoot, relPath);
+    if (!resolved.ok) {
+      return { ok: false, error: resolved.error };
+    }
+    let existingContent: string;
+    try {
+      existingContent = await fs.readFile(resolved.abs, "utf8");
+    } catch (err: any) {
+      return { ok: false, error: `old_string/new_string edit requires an existing file — could not read ${relPath}: ${err.message}` };
+    }
+    const result = applyOldStringReplace(existingContent, oldString, newString, args.replace_all === true);
+    if (!result.ok) {
+      return { ok: false, error: `${relPath}: ${result.error}` };
+    }
+    return { ok: true, call: { ...call, arguments: { ...call.arguments, content: result.newContent } } };
   }
 
   getState(): AgentState {
@@ -667,8 +715,30 @@ export class AgentSession {
       // in an earlier turn as already answering this turn's call too.
       const turnRepliesStart = this.messages.length;
 
-      for (const call of response.turn.toolCalls) {
+      for (const rawCall of response.turn.toolCalls) {
         if (this.cancelled) break;
+        // An edit_file call carrying old_string/new_string instead of content
+        // is resolved to a full content HERE, before permission evaluation or
+        // diff computation ever see it — both of those (and the tool's own
+        // execute()) only ever need to understand one shape of edit_file call,
+        // the existing full-content one. Resolution fails CLOSED: a missing
+        // file or an ambiguous/absent old_string match is reported as a tool
+        // error with no permission prompt, never silently falls back to some
+        // other behavior.
+        const resolution = await this.resolveEditFileCall(rawCall);
+        if (!resolution.ok) {
+          yield { type: "tool.start", call: rawCall };
+          const result = { ok: false as const, output: null, error: resolution.error };
+          yield { type: "tool.result", call: rawCall, result };
+          this.messages.push({
+            role: "tool",
+            tool_call_id: rawCall.id,
+            name: rawCall.name,
+            content: JSON.stringify(result),
+          });
+          continue;
+        }
+        const call = resolution.call;
         const tool = this.opts.tools.get(call.name);
         if (!tool) {
           this.messages.push({

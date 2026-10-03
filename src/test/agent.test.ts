@@ -615,6 +615,133 @@ await (async () => {
   }
 })();
 
+console.log("\nedit_file with old_string/new_string resolves to a full write, end to end:");
+await (async () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const workspaceRoot = path.resolve(__dirname, "..", "..", "fixture-repo");
+  const mathPath = path.join(workspaceRoot, "math.js");
+  const originalMath = "function add(a, b) {\n  return a + b;\n}\nmodule.exports = { add };\n";
+
+  {
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "math.js" } }] } },
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "math.js", old_string: "return a + b;", new_string: "return a + b + 1;" } }],
+        },
+      },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("fix the bug in math.js")) events.push(event);
+
+    const editResult = events.find((e) => e.type === "tool.result" && e.call.id === "e1");
+    check("the targeted edit succeeds", editResult?.type === "tool.result" && editResult.result.ok === true);
+
+    const editEvent = events.find((e) => e.type === "permission.request" && e.call.id === "e1");
+    check(
+      "the resolved diff reflects the real old/new lines, not the raw old_string/new_string fields",
+      editEvent?.type === "permission.request" &&
+        Array.isArray(editEvent.diff) &&
+        editEvent.diff.some((c) => c.removed && c.value.includes("return a + b;")) &&
+        editEvent.diff.some((c) => c.added && c.value.includes("return a + b + 1;"))
+    );
+
+    const written = await fs.readFile(mathPath, "utf-8");
+    check(
+      "the file on disk shows the targeted change with the rest of the file untouched",
+      written === "function add(a, b) {\n  return a + b + 1;\n}\nmodule.exports = { add };\n"
+    );
+
+    await fs.writeFile(mathPath, originalMath, "utf-8");
+  }
+
+  {
+    // old_string that doesn't match anything in the real file — must fail
+    // CLOSED: no permission prompt at all, a tool error instead, and the
+    // file on disk must be untouched.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "math.js" } }] } },
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [{ id: "e2", name: "edit_file", arguments: { path: "math.js", old_string: "this text is not in the file", new_string: "x" } }],
+        },
+      },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("fix a line that doesn't exist")) events.push(event);
+
+    const permissionEvent = events.find((e) => e.type === "permission.request" && e.call.id === "e2");
+    check("an unmatched old_string never reaches a permission prompt", permissionEvent === undefined);
+
+    const toolResult = events.find((e) => e.type === "tool.result" && e.call.id === "e2");
+    check(
+      "it's reported as a tool error naming the real problem, instead of silently doing nothing",
+      toolResult?.type === "tool.result" && toolResult.result.ok === false && String(toolResult.result.error ?? "").toLowerCase().includes("not found")
+    );
+
+    const untouched = await fs.readFile(mathPath, "utf-8");
+    check("the file on disk is completely untouched", untouched === originalMath);
+  }
+
+  {
+    // old_string that matches the file in more than one place, with no
+    // replace_all — ambiguous, must also fail closed rather than guessing.
+    await fs.writeFile(mathPath, "const x = 1;\nconst x = 1;\nconst x = 1;\n", "utf-8");
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "math.js" } }] } },
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [{ id: "e3", name: "edit_file", arguments: { path: "math.js", old_string: "const x = 1;", new_string: "const x = 2;" } }],
+        },
+      },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("make the ambiguous edit")) events.push(event);
+
+    const permissionEvent = events.find((e) => e.type === "permission.request" && e.call.id === "e3");
+    check("an ambiguous old_string never reaches a permission prompt either", permissionEvent === undefined);
+
+    const toolResult = events.find((e) => e.type === "tool.result" && e.call.id === "e3");
+    check(
+      "it's reported as an ambiguous-match error",
+      toolResult?.type === "tool.result" && toolResult.result.ok === false && String(toolResult.result.error ?? "").includes("3")
+    );
+
+    await fs.writeFile(mathPath, originalMath, "utf-8");
+  }
+})();
+
 console.log("\nPartial hunk approval only rewrites the edit_file call's content, never the model's own turn history:");
 await (async () => {
   const __filename = fileURLToPath(import.meta.url);
