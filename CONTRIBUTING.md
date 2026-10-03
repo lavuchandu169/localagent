@@ -24,6 +24,20 @@ A non-`beta` bump (`patch`/`minor`/`major`, for whenever this project
 eventually leaves beta) or a hand-written multi-line changelog entry can
 still be triggered manually: Actions tab → Cut Release → Run workflow.
 
+**This pipeline has a known-fragile step.** Opening the version-bump PR
+pushes a branch and creates it using a dedicated `RELEASE_PR_TOKEN`
+secret (a PAT, not the default `GITHUB_TOKEN`) specifically so that PR's
+own CI run actually triggers — a GitHub platform quirk where
+`GITHUB_TOKEN`-created pushes/PRs don't reliably trigger other workflows.
+Even with that in place, the push has been denied outright on more than
+one differently-scoped token, for a cause not yet root-caused. If Cut
+Release fails at "Open the release PR and enable auto-merge", the
+version bump can be cut by hand instead: run
+`CHANGELOG_ENTRY="..." node scripts/bump-version.mjs beta`, build and
+test, commit, push a branch, open a PR, merge once CI passes, then tag
+the merge commit (`git tag vX.Y.Z <sha> && git push origin vX.Y.Z`) and
+run `gh workflow run Release --ref vX.Y.Z` to start the real build.
+
 ```
 any-branch  →  main  →  (automatic) Cut Release  →  vX.Y.Z tag  →  release.yml
 ```
