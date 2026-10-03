@@ -300,5 +300,18 @@ console.log("\nconcurrent saveSession calls don't lose each other's index entrie
   await fs.rm(sessionsDir, { recursive: true, force: true });
 }
 
+console.log("\nSession files are written with restrictive permissions (security audit M3 — a session's history can contain file contents the agent read, which may include secrets):");
+if (process.platform !== "win32") {
+  const modeTestDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessionstore-mode-test-"));
+  await saveSession(modeTestDir, makeRecord("mode-test-1", "mode test", Date.now()));
+  const recordStat = await fs.stat(path.join(modeTestDir, "mode-test-1.json"));
+  const indexStat = await fs.stat(path.join(modeTestDir, "index.json"));
+  check("the session record file is owner-only readable/writable (0600)", (recordStat.mode & 0o777) === 0o600);
+  check("index.json is also owner-only readable/writable (0600)", (indexStat.mode & 0o777) === 0o600);
+  await fs.rm(modeTestDir, { recursive: true, force: true });
+} else {
+  console.log("  (skipped: POSIX file-mode bits aren't meaningful on Windows)");
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

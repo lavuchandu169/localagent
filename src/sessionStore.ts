@@ -77,7 +77,7 @@ export interface SessionRecord {
    * updatedAt-vs-updatedAt comparison for exactly one pass in that case,
    * then seeds this field so every subsequent pass uses the robust path.
    * Deliberately NOT uploaded to Drive (see cloudSync.ts's
-   * cloudSync.ts's prepareRecordForUpload) — it's this device's own bookkeeping
+   * prepareRecordForUpload) — it's this device's own bookkeeping
    * about ITS OWN last sync, and would corrupt another device's identical
    * bookkeeping about its own if it were ever pulled down.
    */
@@ -109,10 +109,17 @@ function recordPath(sessionsDir: string, id: string): string {
  * later rename stays on one filesystem, where POSIX guarantees it's
  * atomic) and renaming it into place means a reader only ever sees the
  * complete old file or the complete new one, never a partial write.
+ *
+ * Security audit finding M3: a session's own history can contain file
+ * contents the agent read mid-task (which may include secrets) — every
+ * settings file holding an API key already uses 0600 (see
+ * anthropicSettings.ts etc.); the temp file is created with the same
+ * mode so the final renamed-into-place file keeps it (rename doesn't
+ * change a file's own permissions).
  */
 async function writeFileAtomic(filePath: string, content: string): Promise<void> {
   const tmpPath = `${filePath}.tmp-${crypto.randomUUID()}`;
-  await fs.writeFile(tmpPath, content, "utf-8");
+  await fs.writeFile(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
   await fs.rename(tmpPath, filePath);
 }
 
