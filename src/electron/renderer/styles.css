@@ -718,14 +718,25 @@ summary:focus-visible {
   width: 100%;
 }
 
-/* Settings/About/MCP Servers are full-window modals now, not panels pushed
-   into the page flow — same backdrop-plus-card pattern as #onboarding-overlay
-   and #whats-new-overlay below. Previously each was its own plain block with
-   no shared-visibility handling, so opening one while another was already
-   open just stacked both in the document flow instead of replacing it (the
-   toggle handlers in renderer.ts now also close the other two before
-   opening one, but the modal treatment is what makes that read as "pages"
-   rather than "panels" once only one is ever open at a time). */
+/* Settings/About/MCP Servers/Manage free providers/Routing are full-window
+   modals now, not panels pushed into the page flow — same backdrop-plus-card
+   positioning as #onboarding-overlay and #whats-new-overlay below. Previously
+   each was its own plain block with no shared-visibility handling, so
+   opening one while another was already open just stacked both in the
+   document flow instead of replacing it (the toggle handlers in renderer.ts
+   now also close the other two before opening one, but the modal treatment
+   is what makes that read as "pages" rather than "panels" once only one is
+   ever open at a time).
+
+   Command Palette keeps the original dim-backdrop-plus-small-card look
+   (its own `background` below) — a quick, dismissible overlay is the right
+   shape for "jump to anything," the same way Spotlight stays an overlay
+   even on a platform that otherwise favors full windows. The other five
+   read a solid background (var(--bg), not a backdrop) and a much wider
+   .modal-card (see below) — these were a fixed 480px card over a dimmed
+   backdrop, cramped for anything with real content (Settings' many
+   provider sections, Manage free providers' 30+ provider list) and reading
+   as an interruption rather than a real page. */
 #about-panel,
 #settings-panel,
 #mcp-servers-panel,
@@ -738,11 +749,22 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
   font-size: 12px;
   color: var(--text-dim);
   font-family: var(--font-sans);
   animation: overlay-in 150ms ease-out;
+}
+
+#about-panel,
+#settings-panel,
+#mcp-servers-panel,
+#freellmapi-panel,
+#freellmapi-fallback-panel {
+  background: var(--bg);
+}
+
+#command-palette-overlay {
+  background: rgba(0, 0, 0, 0.6);
 }
 
 /* .row's `display: flex` pattern applies here too — these three set their
@@ -835,9 +857,15 @@ summary:focus-visible {
 
 .modal-card {
   position: relative;
-  width: 480px;
-  max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 48px);
+  /* 480px read as cramped once these became full pages rather than small
+     dialogs — Settings' many provider sections and Manage free providers'
+     30+ provider list both scrolled inside a box narrower than the window
+     around them. min() keeps a real page width on anything but a small
+     window, where the 80px margin still applies. Command Palette keeps
+     its own narrower #command-palette-card width (set below, wins on
+     specificity) — a quick overlay doesn't need or want page width. */
+  width: min(900px, calc(100vw - 80px));
+  max-height: calc(100vh - 80px);
   overflow-y: auto;
   /* Extra top padding reserves a clear strip for .modal-close-x — About's
      opening paragraph runs full-width and would otherwise wrap directly
