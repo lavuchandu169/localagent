@@ -240,13 +240,15 @@ starts on (see [First-run onboarding](#first-run-onboarding)); later launches
 never override a choice you've already made. Chat and Research/Reasoning
 models are there to pick manually.
 
-Inference runs on CPU in the prebuilt installers — `node-llama-cpp`'s
-optional CUDA/Vulkan GPU backends are deliberately excluded from packaging
-(they alone were ~500MB of an otherwise ~40MB install, mostly NVIDIA-only
-CUDA binaries most users can't use). It falls back to CPU automatically
-either way, so nothing breaks; you just don't get GPU acceleration in the
-packaged app. Building from source with those packages present will
-include them.
+The prebuilt installers ship GPU acceleration via Vulkan (NVIDIA, AMD, and
+Intel GPUs on Windows/Linux) and Metal (Apple Silicon on macOS) — the app
+auto-detects your hardware and offloads layers to the GPU when one's
+available, falling back to CPU automatically otherwise, so nothing breaks
+either way. `node-llama-cpp`'s separate CUDA backend is deliberately
+excluded from packaging: on top of Vulkan it would add another ~500MB
+(mostly a CUDA-only fallback binary) for narrower, NVIDIA-only coverage
+that Vulkan's broader hardware support already provides. Building from
+source with that package present will include it.
 
 ## Desktop app
 
