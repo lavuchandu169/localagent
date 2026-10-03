@@ -28,6 +28,34 @@ export interface TabState {
   running: boolean;
 }
 
+/** Whether attaching an image actually does anything for this provider. The embedded local GGUF models are all plain text Instruct models — no vision adapter is ever loaded alongside them (see embeddedLlama.ts's buildUserText, which replaces an attached image with a "this local model can't see images" text note instead of forwarding real image data) — so attaching one just gets a confused non-answer. Every other provider kind forwards images into a real image content block/part in its API request. */
+export function providerSupportsImages(provider: ProviderConfig): boolean {
+  return provider.kind !== "embedded";
+}
+
+/** Splits a freshly-picked attachment batch into what actually gets added to the task vs. what has to be rejected up front for the given provider — today, only an image attached while the active provider can't see images (providerSupportsImages). A text attachment is never rejected: every provider, embedded included, can use plain text fine, since it's just more text content, not an image the model has to actually see. Rejecting the image here, at pick time, is what stops a user from attaching a screenshot to a text-only model and getting back its confused "I can't see images" reply — the image never gets sent as something to "see" in the first place. */
+export function filterAttachmentsForProvider(
+  attachments: PickedAttachment[],
+  provider: ProviderConfig
+): { accepted: PickedAttachment[]; rejected: { name: string; reason: string }[] } {
+  if (providerSupportsImages(provider)) {
+    return { accepted: attachments, rejected: [] };
+  }
+  const accepted: PickedAttachment[] = [];
+  const rejected: { name: string; reason: string }[] = [];
+  for (const attachment of attachments) {
+    if (attachment.kind === "image") {
+      rejected.push({
+        name: attachment.name,
+        reason: "the active model can't see images (it's a text-only local model) — switch to a cloud provider (Claude, OpenAI, or Gemini) to attach an image",
+      });
+    } else {
+      accepted.push(attachment);
+    }
+  }
+  return { accepted, rejected };
+}
+
 /** The provider/mode/planFirst a brand-new, never-configured tab starts from — also what resetToSetup restores a tab to once its session is deleted. A function (not a shared const) so every tab gets its own object and no caller can mutate another tab's provider by accident. */
 export function defaultTabConfig(): { provider: ProviderConfig; mode: PermissionMode; planFirst: boolean } {
   return { provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT", planFirst: false };
