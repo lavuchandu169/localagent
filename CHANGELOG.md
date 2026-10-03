@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.65 — 2026-10-03
+
+- Add OLED Black and Light themes
+- Reject image attachments up front for text-only embedded models, with a clear reason
+- Tell the model plain conversation (greetings, small talk) doesn't imply a file lookup
+- Disable Chromium's native-window-occlusion tracking on Windows for smoother rendering
+- Fix release-automation guard bug and docs drift (tool list, theme list, release-process caveats)
+
 ## v0.1.0-beta.64 — 2026-10-03
 
 - Claude-style chat UI, corrective-nudge retry, delete_file tool, read_file offset/limit, edit_file old_string/new_string targeted edits, and a fix to the release workflow's PR-creation step
