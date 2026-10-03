@@ -76,6 +76,17 @@ jobs:
         with:
           ref: main
           submodules: recursive
+          # The release PR's own CI run (ci.yml, triggered by the push/PR
+          # made below) has repeatedly come back broken — "action_required"
+          # some runs, an outright failure with zero jobs scheduled and no
+          # PR attached (pull_requests: [] on the run) on others — because
+          # that push and PR are made with the default GITHUB_TOKEN, which
+          # GitHub does not reliably let trigger OTHER workflows' event
+          # handlers. persist-credentials: false stops checkout from
+          # wiring GITHUB_TOKEN into git's credential config at all, so the
+          # PAT used for that one push/PR (below) is the only credential in
+          # play for it — nothing competing with it to cause this.
+          persist-credentials: false
 
       # A push-triggered run fires for EVERY commit that lands on main —
       # including the release-bump PR's own squash-merge commit (opened by
@@ -162,7 +173,11 @@ jobs:
         id: pr
         if: steps.guard.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A PAT, not GITHUB_TOKEN — specifically so the push and PR made
+          # below aren't attributed to the Actions bot. See the checkout
+          # step's comment above for why that's the fix. Needs Contents
+          # (read/write) and Pull requests (read/write) on this repo.
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.bump.outputs.version }}"
@@ -177,6 +192,11 @@ jobs:
           # actually matches what that release ships — never a stale one.
           git add package.json CHANGELOG.md THIRD-PARTY-NOTICES.md
           git commit -m "chore: bump version to $VERSION for release"
+          # persist-credentials: false on checkout (above) means git has no
+          # credentials of its own right now — wire up GH_TOKEN (the PAT
+          # set above) as git's credential helper before the first network
+          # operation that needs one.
+          gh auth setup-git
           git push origin "$BRANCH"
 
           PR_URL=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
@@ -244,6 +264,14 @@ jobs:
             exit 1
           fi
 
+          # Checkout earlier in this job used persist-credentials: false
+          # (see that step's comment) — restore git's own credentials here
+          # from this step's own GH_TOKEN (the default GITHUB_TOKEN; the
+          # tag push below doesn't have the cross-workflow-trigger problem
+          # the PAT swap above fixes, since nothing needs to react to it —
+          # see the explicit gh workflow run call further down for how
+          # release.yml actually starts instead).
+          gh auth setup-git
           git fetch origin main
           git tag "v$VERSION" origin/main
           git push origin "v$VERSION"
