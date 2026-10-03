@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.64 — 2026-10-03
+
+- Claude-style chat UI, corrective-nudge retry, and 3 agent tool enhancements
+
 ## v0.1.0-beta.63 — 2026-10-03
 
 - fix: functional-correctness audit fixes across agent core, providers, GitHub, FreeLLMAPI, MCP, and cloud sync
