@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.66 — 2026-10-03
+
+- Make Settings, About, MCP Servers, Manage free providers, and Routing full pages instead of small popups
+
 ## v0.1.0-beta.65 — 2026-10-03
 
 - Add OLED Black and Light themes
