@@ -3,6 +3,7 @@ import { readFileTool } from "./tools/readFile.js";
 import { listDirectoryTool } from "./tools/listDirectory.js";
 import { grepTool } from "./tools/grep.js";
 import { editFileTool } from "./tools/editFile.js";
+import { deleteFileTool } from "./tools/deleteFile.js";
 import { runCommandTool } from "./tools/runCommand.js";
 
 export class ToolRegistry {
@@ -51,5 +52,5 @@ export class ToolRegistry {
 }
 
 export function defaultToolRegistry(getExtraTools: () => Tool[] = () => []): ToolRegistry {
-  return new ToolRegistry([readFileTool, listDirectoryTool, grepTool, editFileTool, runCommandTool], getExtraTools);
+  return new ToolRegistry([readFileTool, listDirectoryTool, grepTool, editFileTool, deleteFileTool, runCommandTool], getExtraTools);
 }

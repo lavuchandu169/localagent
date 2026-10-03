@@ -24,11 +24,12 @@ const fakeTool: Tool = {
 console.log("defaultToolRegistry:");
 
 const withoutExtras = defaultToolRegistry();
-check("with no extraTools, only the 5 built-in tools are registered", withoutExtras.availableTools().length === 5);
+// 6 built-ins: read_file, list_directory, grep, edit_file, delete_file, run_command.
+check("with no extraTools, only the 6 built-in tools are registered", withoutExtras.availableTools().length === 6);
 check("with no extraTools, an unregistered tool name is undefined", withoutExtras.get("mcp__github__ping") === undefined);
 
 const withExtras = defaultToolRegistry(() => [fakeTool]);
-check("with extraTools, the built-ins are still all present", withExtras.availableTools().length === 6);
+check("with extraTools, the built-ins are still all present", withExtras.availableTools().length === 7);
 check("with extraTools, the extra tool is retrievable by name", withExtras.get("mcp__github__ping") === fakeTool);
 check("with extraTools, a built-in tool is still retrievable by name", withExtras.get("read_file") !== undefined);
 
@@ -47,7 +48,7 @@ console.log("\ndefaultToolRegistry re-resolves its extra tools on every call (co
   check("starts with the extra tool visible", live.get("mcp__github__ping") === fakeTool);
   liveTools = [];
   check("removing it from the live source removes it from the registry too, with no reconstruction", live.get("mcp__github__ping") === undefined);
-  check("availableTools() reflects the removal too", live.availableTools().length === 5);
+  check("availableTools() reflects the removal too", live.availableTools().length === 6);
   const secondTool: Tool = { ...fakeTool, name: "mcp__other__ping" };
   liveTools = [secondTool];
   check("a tool added later to the live source becomes visible without reconstructing the registry", live.get("mcp__other__ping") === secondTool);

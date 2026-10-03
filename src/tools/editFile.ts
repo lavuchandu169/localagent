@@ -11,15 +11,19 @@ interface Input {
 
 export const editFileTool: Tool<Input, { path: string; bytesWritten: number; created: boolean }> = {
   name: "edit_file",
-  description: "Create or overwrite a text file with the given full content. Always read the file first if it exists.",
+  description:
+    "Create or change a text file, in one of two ways. (1) content: the full new file — use for a new file, or when most of the file is changing. (2) old_string + new_string: replace one exact, unique block of an EXISTING file without rewriting the rest — old_string must match the file's current text exactly (including whitespace) and occur only once, unless replace_all is set. Always read the file first.",
   permission: "WRITE",
   inputSchema: {
     type: "object",
     properties: {
       path: { type: "string" },
-      content: { type: "string" },
+      content: { type: "string", description: "Full file content. Omit this when using old_string/new_string instead." },
+      old_string: { type: "string", description: "Exact text to find in the existing file, for a targeted edit. Must be unique unless replace_all is set." },
+      new_string: { type: "string", description: "Text to replace old_string with." },
+      replace_all: { type: "boolean", description: "Replace every occurrence of old_string instead of requiring exactly one match." },
     },
-    required: ["path", "content"],
+    required: ["path"],
   },
   async execute(input, ctx: ToolContext) {
     if (isProtectedPath(input.path)) {
