@@ -56,6 +56,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // instead of relying on the timing to work out.
 app.setName("localagent");
 
+// Chromium's native-window-occlusion tracking (on by default since ~M85)
+// throttles a window's rendering/compositing whenever Windows' DWM reports
+// it as occluded (covered by another window, minimized, or off-screen) —
+// a well-documented source of stutter/frozen-looking rendering on Windows
+// specifically when a window comes back into view, especially across
+// multiple monitors. Several other Electron apps disable this feature for
+// exactly that reason. Must be set before app.whenReady() — commandLine
+// switches have no effect once Chromium has already started up.
+if (process.platform === "win32") {
+  app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+}
+
 // Local-only crash/error capture — never uploaded anywhere, no external
 // service or account needed (see errorLog.ts's own doc comment for why
 // this doesn't need to be opt-in the way a remote crash reporter would).
