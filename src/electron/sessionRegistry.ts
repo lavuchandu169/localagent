@@ -9,7 +9,7 @@ import { OpenAIProvider } from "../providers/openaiProvider.js";
 import { GeminiProvider } from "../providers/geminiProvider.js";
 import { FreellmapiProxyProvider } from "../providers/freellmapiProxy.js";
 import { isEmbeddedModelId } from "../models.js";
-import { saveSession, deleteSession, type SessionRecord } from "../sessionStore.js";
+import { saveSession, deleteSession, loadSessionRecord, type SessionRecord, type PersistedProviderConfig, type SessionIndexEntry } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode, PermissionResponse, Tool } from "../types.js";
 import { isEphemeralStreamEvent } from "../types.js";
@@ -51,13 +51,17 @@ export interface ResumePayload {
   title: string;
   createdAt: number;
   ownerEmail: string | null;
+  /** Correctness audit finding (session High #2): without this, a resumed session always starts with no checkpoint — "Revert this task" silently disappears across an app restart. Null for a session that never took one. */
+  checkpointHash: string | null;
+  /** Final-review finding C3: the workspace checkpointHash was actually made in — startSession only restores the hash when this matches the workspace the session is about to run in (config.workspaceRoot below), refusing it outright otherwise rather than risking a revert against the wrong repo. See SessionRecord.checkpointWorkspaceRoot. */
+  checkpointWorkspaceRoot: string | null;
 }
 
 /** Best-effort cloud sync wiring, supplied by main.ts. uploadSession/deleteRemoteSession default to the real Drive-backed implementations — tests override them directly instead of faking fetch. */
 export interface CloudSyncConfig {
   getAccessToken: () => Promise<string | null>;
   onScopeError: () => void;
-  uploadSession?: (accessToken: string, record: SessionRecord) => Promise<void>;
+  uploadSession?: (accessToken: string, record: SessionRecord) => Promise<{ modifiedTime: string }>;
   deleteRemoteSession?: (accessToken: string, sessionId: string) => Promise<void>;
   /** Cheap, no-network read of the currently signed-in account's email (or null if signed out) — stamped onto every saved session as its owner, so the UI can later filter local history by account. */
   getOwnerEmail: () => Promise<string | null>;
@@ -77,16 +81,86 @@ interface SessionEntry {
   running: Promise<void> | null;
   /** Fixed once at session creation (or carried over from a resumed session's prior record) — never re-derived from "whoever's currently signed in" on every save, so signing out or switching accounts mid-conversation can't silently strip ownership from an already-owned session. */
   ownerEmail: string | null;
+  /** Fixed once at session creation — the provider/model never change for a live session's lifetime (editing either requires cancelSession + startSession(resume) instead, per updateLiveSessionSettings's own doc comment), so caching this here (rather than trying to derive it from the live ModelProvider instance, which has no clean way back to the original ProviderConfig "kind") is always accurate. Correctness audit finding (session High #1): persisted alongside mode/planFirst so resuming a session restores its real settings instead of silently falling back to a form's current defaults. */
+  providerConfig: PersistedProviderConfig;
+}
+
+/** Strips the API key (if any) before caching/persisting — see PersistedProviderConfig's own doc comment for why a key never belongs here. */
+function toPersistedProviderConfig(config: ProviderConfig): PersistedProviderConfig {
+  switch (config.kind) {
+    case "openai-compatible":
+      return { kind: "openai-compatible", baseUrl: config.baseUrl, model: config.model };
+    case "embedded":
+      return { kind: "embedded", size: config.size };
+    case "anthropic":
+    case "openai":
+    case "gemini":
+      return { kind: config.kind, model: config.model };
+    case "freellmapi":
+      return { kind: "freellmapi" };
+  }
 }
 
 export interface SessionRegistry {
   sessions: Map<string, SessionEntry>;
   sessionsDir: string;
   cloudSync?: CloudSyncConfig;
+  /** Correctness audit finding (session Medium #4): fired whenever any session's pending permission/plan approval starts, gets answered, or is swept away (session cancelled/deleted) — lets main.ts rebroadcast agent:sessions-changed so the sidebar's "waiting for approval" indicator (see getSessionIdsWithPendingApproval) stays live even for a session with no tab currently open. */
+  onPendingApprovalsChanged?: () => void;
 }
 
-export function createSessionRegistry(sessionsDir: string, cloudSync?: CloudSyncConfig): SessionRegistry {
-  return { sessions: new Map(), sessionsDir, cloudSync };
+export function createSessionRegistry(sessionsDir: string, cloudSync?: CloudSyncConfig, onPendingApprovalsChanged?: () => void): SessionRegistry {
+  return { sessions: new Map(), sessionsDir, cloudSync, onPendingApprovalsChanged };
+}
+
+/**
+ * Correctness audit finding (session Medium #4): closing the tab for a
+ * session with an in-flight permission or plan approval doesn't cancel
+ * that approval — the task just sits there forever, waiting for a click
+ * nothing can ever send again, with no record of this anywhere the user
+ * would see it. Surfaces exactly which live sessions are in that state
+ * right now, so callers (main.ts's agent:list-sessions) can flag them for
+ * the sidebar, independent of whether any tab is open for them.
+ */
+export function getSessionIdsWithPendingApproval(registry: SessionRegistry): Set<string> {
+  const ids = new Set<string>();
+  for (const [id, entry] of registry.sessions) {
+    if (entry.pendingApprovals.size > 0 || entry.pendingPlanApproval.resolve !== null) ids.add(id);
+  }
+  return ids;
+}
+
+export type SessionIndexEntryWithApproval = SessionIndexEntry & { waitingForApproval: boolean };
+
+/**
+ * Merges live waitingForApproval state onto a disk-backed session list —
+ * a session can have a dangling, unanswerable approval with no tab open
+ * for it at all, so this can't be derived from anything the renderer
+ * already tracks per-tab.
+ *
+ * Final-review finding I4: a session's disk record is only ever written
+ * once a task completes (persistSession) — a BRAND NEW session whose
+ * very first task is still waiting on an approval has no disk record at
+ * all yet, so flagging only EXISTING entries left it invisible no matter
+ * what. Synthesizes a minimal row straight from the live registry for
+ * exactly that case, filtered by the same owner (and, when `query` is
+ * given, the same title-substring match) the disk-backed list already
+ * applies, so it never leaks across accounts or defeats a search.
+ */
+export function withPendingApprovalEntries(registry: SessionRegistry, entries: SessionIndexEntry[], email: string | null, query?: string): SessionIndexEntryWithApproval[] {
+  const pendingIds = getSessionIdsWithPendingApproval(registry);
+  const flagged: SessionIndexEntryWithApproval[] = entries.map((e) => ({ ...e, waitingForApproval: pendingIds.has(e.id) }));
+  const existingIds = new Set(entries.map((e) => e.id));
+  const trimmedQuery = query?.trim().toLowerCase();
+  for (const id of pendingIds) {
+    if (existingIds.has(id)) continue;
+    const liveEntry = registry.sessions.get(id);
+    if (!liveEntry || liveEntry.ownerEmail !== email) continue;
+    const title = liveEntry.title ?? "(untitled)";
+    if (trimmedQuery && !title.toLowerCase().includes(trimmedQuery)) continue;
+    flagged.push({ id, title, updatedAt: liveEntry.createdAt, ownerEmail: liveEntry.ownerEmail, waitingForApproval: true });
+  }
+  return flagged;
 }
 
 /** Mirrors the provider construction in cli.ts's --base-url branch. `signal` only matters for the embedded provider — it's the model download's cancellation handle; the other two providers make no download, so they simply ignore it. */
@@ -135,14 +209,21 @@ export async function startSession(
     /** Lets the caller cancel an in-progress embedded-model download — see buildProvider. */
     signal?: AbortSignal;
     resume?: ResumePayload;
-    /** Currently-connected MCP servers' tools, supplied by main.ts — see mcpClient.ts/mcpToolAdapter.ts. Defaults to none, so every existing caller/test is unaffected. */
-    extraTools?: Tool[];
+    /** Live getter for currently-connected MCP servers' tools (plus the
+     * GitHub tools), supplied by main.ts — see mcpClient.ts/mcpToolAdapter.ts.
+     * A function, not a snapshot array (correctness audit finding, MCP
+     * Medium): ToolRegistry re-calls this on every lookup rather than
+     * caching its result once, so an MCP server disconnected or removed
+     * after this session starts stops being callable on the very next
+     * turn instead of staying stale for the session's whole life. Defaults
+     * to none, so every existing caller/test is unaffected. */
+    getExtraTools?: () => Tool[];
     /** Directory holding anthropic-settings.json/openai-settings.json/gemini-settings.json — passed so startSession can resolve fallback candidates via providerFallback.ts. Undefined (every existing caller/test that doesn't care about fallback) means no fallback is ever configured, exactly like today's behavior. */
     settingsDir?: string;
     storageCrypto?: StorageCrypto;
     getGithubToken?: () => Promise<string | null>;
   } = {}
-): Promise<{ sessionId: string; workspaceRoot: string }> {
+): Promise<{ sessionId: string; workspaceRoot: string; checkpointHash: string | null }> {
   const provider = (deps.providerFactory ?? buildProvider)(config.provider, deps.onDownloadProgress, deps.signal);
   const health = await provider.healthCheck();
   if (!health.ok) {
@@ -159,7 +240,7 @@ export async function startSession(
   // leak the old entry's model — tear it down first.
   const existing = registry.sessions.get(sessionId);
   if (existing) {
-    await finalizeEntry(existing);
+    await finalizeEntry(registry, existing);
   }
 
   const CLOUD_KINDS: CloudProviderKind[] = ["anthropic", "openai", "gemini"];
@@ -207,21 +288,35 @@ export async function startSession(
             ? "auto"
             : config.provider.size,
     provider,
-    tools: defaultToolRegistry(deps.extraTools ?? []),
+    tools: defaultToolRegistry(deps.getExtraTools ?? (() => [])),
     getGithubToken: deps.getGithubToken,
     permissionMode: config.mode,
     initialMessages: deps.resume?.initialMessages,
     onApprovalNeeded: (call) =>
       new Promise<PermissionResponse>((resolve) => {
         pendingApprovals.set(call.id, resolve);
+        registry.onPendingApprovalsChanged?.();
       }),
     planFirst: config.planFirst,
     onPlanApprovalNeeded: () =>
       new Promise<boolean>((resolve) => {
         pendingPlanApproval.resolve = resolve;
+        registry.onPendingApprovalsChanged?.();
       }),
     fallbackProviders,
     providerLabel,
+    // Final-review finding C3: only restore the checkpoint when it was
+    // actually made in THIS workspace — a resumed session or a
+    // provider-change mid-session restart can land in a workspace the
+    // old checkpoint hash doesn't belong to at all (SessionRecord never
+    // used to persist workspaceRoot, so a resume just runs in whatever
+    // the tab currently shows). Usually a mismatched hash just makes a
+    // later `git checkout` fail, but git worktrees of the same repo share
+    // one object database — there it can resolve successfully in the
+    // WRONG worktree and overwrite its files. A legacy record (no
+    // checkpointWorkspaceRoot recorded at all) is treated as "unknown",
+    // which never matches, same safe default as discarding the checkpoint.
+    initialCheckpointHash: deps.resume && deps.resume.checkpointWorkspaceRoot === workspaceRoot ? deps.resume.checkpointHash : null,
   });
 
   // Fixed once here: a resumed session keeps its original owner regardless
@@ -241,8 +336,15 @@ export async function startSession(
     deleted: false,
     running: null,
     ownerEmail,
+    providerConfig: toPersistedProviderConfig(config.provider),
   });
-  return { sessionId, workspaceRoot };
+  // Final-review finding I3: lets the renderer show "Revert this task"
+  // immediately on a successful resume with a real, workspace-matching
+  // checkpoint, instead of only after a later tab-switch happens to
+  // replay a stale checkpoint.created event from the old task's history
+  // (beginSession's own "fresh session" code otherwise unconditionally
+  // hides the button, assuming there's nothing to revert yet).
+  return { sessionId, workspaceRoot, checkpointHash: session.getCheckpointHash() };
 }
 
 /**
@@ -323,8 +425,36 @@ export async function revertSessionCheckpoint(registry: SessionRegistry, session
   if (entry.running) return { ok: false, error: "Can't revert while a task is running." };
   const hash = entry.session.getCheckpointHash();
   if (!hash) return { ok: false, error: "No checkpoint available for this session." };
-  await revertToCheckpoint(entry.session.getWorkspaceRoot(), hash);
-  return { ok: true };
+  // Correctness audit finding (session Medium #2): the entry.running
+  // check just above was the ONLY guard against a task starting mid-revert
+  // — checked once, synchronously, then several awaited git subprocess
+  // calls ran with no lock held across that window, leaving a real
+  // check-then-act race (a runTask call issued during that window
+  // started a real task concurrently with the revert's own checkout).
+  // Claiming the SAME entry.running lock revertSessionCheckpoint already
+  // reads from — synchronously, before the first await below — closes it
+  // symmetrically: runTask now refuses while this is set, exactly like
+  // this function already refuses while a task is running.
+  const revertPromise = (async () => {
+    // Correctness audit finding (session Medium #3): a checkpoint is a
+    // deliberately dangling, unreferenced git commit (see checkpoints.ts's
+    // own doc comment — "eventually GC'd"), so revertToCheckpoint can
+    // genuinely fail for reasons outside this function's control (the
+    // commit got pruned, a git subprocess error) — same shape of failure
+    // getSessionChanges below already guards against. Without this, that
+    // failure propagated as an unhandled rejection instead of the clear
+    // {ok:false, error} this function's own return type promises.
+    await revertToCheckpoint(entry.session.getWorkspaceRoot(), hash);
+  })();
+  entry.running = revertPromise;
+  try {
+    await revertPromise;
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    if (entry.running === revertPromise) entry.running = null;
+  }
 }
 
 /**
@@ -351,6 +481,14 @@ export async function getSessionChanges(
 
 async function persistSession(registry: SessionRegistry, sessionId: string, entry: SessionEntry): Promise<void> {
   if (entry.deleted) return;
+  // lastSyncCheckpoint is cloud sync's own bookkeeping about ITS last
+  // successful push/pull (see SessionRecord's doc comment) — a normal
+  // task-completion save has nothing to do with that and must carry it
+  // forward unchanged, not silently reset it to null every time a task
+  // finishes (which would force every single reconcile pass back onto the
+  // less-robust updatedAt-fallback comparison).
+  const existing = await loadSessionRecord(registry.sessionsDir, sessionId);
+  const checkpointHash = entry.session.getCheckpointHash();
   const record: SessionRecord = {
     id: sessionId,
     title: entry.title ?? "(untitled)",
@@ -359,6 +497,23 @@ async function persistSession(registry: SessionRegistry, sessionId: string, entr
     createdAt: entry.createdAt,
     updatedAt: Date.now(),
     ownerEmail: entry.ownerEmail,
+    // Correctness audit finding (session High #1, #2): provider/model are
+    // fixed for the entry's lifetime (see providerConfig's own doc
+    // comment); mode/planFirst/checkpointHash are read LIVE off the
+    // session so a mid-session "Edit settings…" change or a later
+    // checkpoint is never persisted stale.
+    provider: entry.providerConfig,
+    mode: entry.session.getPermissionMode(),
+    planFirst: entry.session.getPlanFirst(),
+    checkpointHash,
+    // Final-review finding C3: paired with checkpointHash so a later
+    // resume/restart can refuse to restore it into a different workspace
+    // — see SessionRecord's own doc comment. getWorkspaceRoot() is the
+    // SAME live value setWorkspaceRoot keeps in lock-step with the
+    // checkpoint (it clears the hash on any real change), so this is
+    // never stale relative to checkpointHash above.
+    checkpointWorkspaceRoot: checkpointHash ? entry.session.getWorkspaceRoot() : null,
+    lastSyncCheckpoint: existing?.lastSyncCheckpoint ?? null,
   };
   await saveSession(registry.sessionsDir, record);
   // Fire-and-forget: syncUploadToCloud never rejects (it catches everything
@@ -377,7 +532,34 @@ async function syncUploadToCloud(registry: SessionRegistry, record: SessionRecor
   try {
     const token = await getAccessToken();
     if (!token) return;
-    await upload(token, record);
+    const { modifiedTime } = await upload(token, record);
+    // Correctness audit finding (session Medium #1): without this, every
+    // continuous per-task upload (this function) would leave the local
+    // checkpoint stale relative to what Drive now actually holds — the
+    // NEXT reconcileSessions pass would then see "remote changed" (it did,
+    // but only because THIS device just pushed it) and misread its own
+    // background upload as a concurrent edit from another device,
+    // routing every subsequent save into the conflict-preservation branch
+    // for no reason. Refreshing the checkpoint here keeps it accurate
+    // between reconcile passes, exactly like reconcileSessions' own push
+    // branch does after a push it drives itself.
+    //
+    // Final-review finding C1: `record` is a snapshot captured when THIS
+    // upload started — by the time it finishes (the upload itself is a
+    // real network round-trip), a second task can have completed and
+    // saved a newer record, or the session can have been deleted outright
+    // (removeSession's own file delete doesn't wait for an in-flight
+    // upload like this one to finish). Writing `record` back unconditionally
+    // would silently roll back that newer save, or resurrect a deleted
+    // session's file. Re-reading the CURRENT on-disk state right before
+    // this write and only proceeding when nothing has changed since (same
+    // updatedAt, still exists) makes this a pure no-op in both of those
+    // cases instead of an old-copy overwrite — the next save's own upload
+    // will seed a correct, up-to-date checkpoint regardless.
+    const current = await loadSessionRecord(registry.sessionsDir, record.id);
+    if (current && current.updatedAt === record.updatedAt) {
+      await saveSession(registry.sessionsDir, { ...current, lastSyncCheckpoint: { remoteModifiedTime: modifiedTime, localUpdatedAt: record.updatedAt } });
+    }
   } catch (err) {
     if (err instanceof DriveScopeError) onScopeError();
     else console.warn(`[cloudSync] upload failed for session ${record.id}, will retry on next save:`, err);
@@ -442,6 +624,13 @@ export async function runTask(
 ): Promise<void> {
   const entry = registry.sessions.get(sessionId);
   if (!entry) throw new Error(`Unknown session: ${sessionId}`);
+  // Correctness audit finding (session Medium #2): the OPPOSITE direction
+  // of revertSessionCheckpoint's own "can't revert while a task is
+  // running" guard — entry.running is now the single shared lock between
+  // a running task AND a mid-flight revert (see that function), so a
+  // runTask call during either refuses the same way, rather than racing
+  // a live agent write against the revert's own checkout+cleanup.
+  if (entry.running) throw new Error("A task or revert is already in progress for this session.");
 
   const runPromise = doRunTask(registry, sessionId, entry, task, onEvent, attachments);
   entry.running = runPromise;
@@ -459,6 +648,7 @@ export function respondPermission(registry: SessionRegistry, sessionId: string, 
   const resolve = entry.pendingApprovals.get(callId);
   if (!resolve) return;
   entry.pendingApprovals.delete(callId);
+  registry.onPendingApprovalsChanged?.();
   resolve({ approved, approvedHunkIds });
 }
 
@@ -469,6 +659,7 @@ export function respondPlan(registry: SessionRegistry, sessionId: string, approv
   const resolve = entry.pendingPlanApproval.resolve;
   if (!resolve) return;
   entry.pendingPlanApproval.resolve = null;
+  registry.onPendingApprovalsChanged?.();
   resolve(approved);
 }
 
@@ -480,13 +671,15 @@ export function respondPlan(registry: SessionRegistry, sessionId: string, approv
  * actually finish (so the model's native resources are never freed mid
  * generation), then disposes the provider's local resources.
  */
-async function finalizeEntry(entry: SessionEntry): Promise<void> {
+async function finalizeEntry(registry: SessionRegistry, entry: SessionEntry): Promise<void> {
+  const hadPending = entry.pendingApprovals.size > 0 || entry.pendingPlanApproval.resolve !== null;
   for (const resolve of entry.pendingApprovals.values()) resolve({ approved: false });
   entry.pendingApprovals.clear();
   if (entry.pendingPlanApproval.resolve) {
     entry.pendingPlanApproval.resolve(false);
     entry.pendingPlanApproval.resolve = null;
   }
+  if (hadPending) registry.onPendingApprovalsChanged?.();
   entry.session.cancel();
   await entry.running?.catch(() => {});
   await entry.provider.dispose?.().catch(() => {});
@@ -516,7 +709,7 @@ async function finalizeEntry(entry: SessionEntry): Promise<void> {
 export async function cancelSession(registry: SessionRegistry, sessionId: string): Promise<void> {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return;
-  await finalizeEntry(entry);
+  await finalizeEntry(registry, entry);
   // Only remove if this is still the same entry — in principle a caller
   // could already have started a new session under this id while this
   // cancel's async teardown was in flight; that newer entry must survive.
@@ -535,7 +728,7 @@ export async function removeSession(registry: SessionRegistry, sessionId: string
   const entry = registry.sessions.get(sessionId);
   if (entry) {
     entry.deleted = true;
-    await finalizeEntry(entry);
+    await finalizeEntry(registry, entry);
   }
   await deleteSession(registry.sessionsDir, sessionId);
   registry.sessions.delete(sessionId);

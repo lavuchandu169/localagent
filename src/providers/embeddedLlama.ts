@@ -169,7 +169,16 @@ function isToolCallShape(parsed: unknown): parsed is { name: string; arguments: 
  * trailing call is the model's actual next action, not an example it mentioned
  * in passing.
  */
-function tryParseFallbackToolCall(response: string): { name: string; arguments: Record<string, unknown> } | null {
+/** Correctness audit finding (provider Medium #2): this function's own
+ * doc comment above says the recovered call can have "its own
+ * explanatory prose before or after" the JSON — rawMatch is the exact
+ * span to treat as "the recovered call" when a caller (fromLlamaResult)
+ * locates it within the original response text and keeps whatever
+ * surrounds it as real explanatory text. When the JSON was inside a
+ * fenced block, rawMatch is the WHOLE fence (including the ``` markers),
+ * not just the inner JSON — otherwise the fence markers themselves would
+ * get treated as "surrounding prose" and leak into the kept text. */
+function tryParseFallbackToolCall(response: string): { name: string; arguments: Record<string, unknown>; rawMatch: string } | null {
   const trimmed = response.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   const searchText = fenced ? fenced[1]! : trimmed;
@@ -187,7 +196,7 @@ function tryParseFallbackToolCall(response: string): { name: string; arguments: 
         continue;
       }
     }
-    if (isToolCallShape(parsed)) return parsed;
+    if (isToolCallShape(parsed)) return { ...parsed, rawMatch: fenced ? fenced[0] : candidate };
   }
   return null;
 }
@@ -205,7 +214,21 @@ export function fromLlamaResult(result: LlamaGenerateResult): ChatResponse {
   const fallback = tryParseFallbackToolCall(result.response);
   if (fallback) {
     const toolCalls: ToolCall[] = [{ id: "call_0", name: fallback.name, arguments: fallback.arguments }];
-    return { turn: { type: "tool_calls", toolCalls }, raw: result };
+    // Correctness audit finding (provider Medium #2): rawMatch is the
+    // exact JSON substring tryParseFallbackToolCall found inside
+    // result.response — whatever's left after removing it is real
+    // explanatory text the model wrote around its (mis-flagged) tool
+    // call, not something to silently discard. indexOf (not the regex
+    // match position) because rawMatch may have come from inside a
+    // fenced block, whose own position within the UNTRIMMED response
+    // differs from its position within the extracted fence content.
+    const matchIndex = result.response.indexOf(fallback.rawMatch);
+    const content =
+      matchIndex === -1
+        ? undefined
+        : [result.response.slice(0, matchIndex).trim(), result.response.slice(matchIndex + fallback.rawMatch.length).trim()].filter(Boolean).join("\n\n") ||
+          undefined;
+    return { turn: { type: "tool_calls", toolCalls, content }, raw: result };
   }
 
   return { turn: { type: "final", content: result.response }, raw: result };

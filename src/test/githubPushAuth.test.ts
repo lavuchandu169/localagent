@@ -34,6 +34,36 @@ check("defaults to origin for 'git push --set-upstream'", parseGitPushRemoteName
 check("picks up an explicit remote name", parseGitPushRemoteName("git push upstream main") === "upstream");
 check("still defaults to origin when only a branch is given after flags", parseGitPushRemoteName("git push -u origin feature-branch") === "origin");
 
+// Correctness audit finding (GitHub Medium #1): -o/--push-option takes a
+// SEPARATE following token as its own value (confirmed against real git:
+// `git push -o ci.skip origin main` and the long form both parse
+// successfully) — the old logic only skipped tokens that themselves
+// started with "-", so it misread the option's VALUE as the remote name,
+// silently disabling authenticated push for a push that IS targeting an
+// unauthenticated github.com remote (getConfiguredRemoteUrl looks up a
+// remote that doesn't exist, prepareGitPushCommand no-ops, and the plain
+// push runs with whatever ambient credential state exists — none, since
+// that's exactly the case this feature exists to handle).
+check("the short form -o <value> doesn't get misread as the remote name", parseGitPushRemoteName("git push -o ci.skip origin main") === "origin");
+check("the long form --push-option <value> doesn't get misread as the remote name", parseGitPushRemoteName("git push --push-option ci.skip origin main") === "origin");
+check("the long form with = is unaffected (already a single token starting with -)", parseGitPushRemoteName("git push --push-option=ci.skip origin main") === "origin");
+check("multiple -o flags in a row still resolve to the real remote name", parseGitPushRemoteName("git push -o ci.skip -o merge_request.create origin main") === "origin");
+
+// Final-review finding I5: unlike -o/--push-option (whose value is
+// unrelated to the remote), --repo's value IS the destination repository
+// itself — `git push --repo upstream main` pushes to "upstream", the same
+// as `git push upstream main`. Treating it like -o/--push-option (skip the
+// value, keep scanning for a remote name) read the WRONG token as the
+// remote name: before GitHub Medium #1 fixed the naive "skip anything
+// starting with -" logic this accidentally returned "upstream"; after it
+// started skipping --repo's own value as if it were unrelated, it
+// returned "main" instead — a plain branch name, not a remote, which then
+// fails getConfiguredRemoteUrl's lookup and silently disables
+// authenticated push for a command that IS targeting an unauthenticated
+// github.com remote named "upstream".
+check("--repo <value> IS the remote name, not a value to skip past", parseGitPushRemoteName("git push --repo upstream main") === "upstream");
+check("--repo=<value> form works the same way", parseGitPushRemoteName("git push --repo=upstream main") === "upstream");
+
 console.log("\nisSimpleGitPushCommand (Important #1 from final review: never authenticate a compound command):");
 check("a plain push is simple", isSimpleGitPushCommand("git push") === true);
 check("a push with a remote and branch is simple", isSimpleGitPushCommand("git push origin main") === true);

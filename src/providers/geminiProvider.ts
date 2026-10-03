@@ -93,9 +93,21 @@ export function toGeminiTools(tools: ChatRequest["tools"]): { functionDeclaratio
 }
 
 /** A model response's parts can mix plain text with one or more functionCall parts — defensive by construction, the same posture buildChatBody/fromAnthropicResponse already take, since tool-call reliability varies by Gemini model tier the same way it does across any provider. */
+/** Correctness audit finding (provider High #1): previously only ever
+ * populated for AnthropicProvider — Gemini's real usageMetadata is
+ * sitting right in the response already in hand, free to extract. */
+function usageFromGeminiResult(raw: any): ChatResponse["usage"] {
+  const usageMetadata = raw?.usageMetadata;
+  if (!usageMetadata || typeof usageMetadata.promptTokenCount !== "number" || typeof usageMetadata.candidatesTokenCount !== "number") {
+    return undefined;
+  }
+  return { inputTokens: usageMetadata.promptTokenCount, outputTokens: usageMetadata.candidatesTokenCount };
+}
+
 export function fromGeminiResult(raw: any): ChatResponse {
   const parts: GeminiPart[] = raw?.candidates?.[0]?.content?.parts ?? [];
   const toolCalls: ToolCall[] = [];
+  const usage = usageFromGeminiResult(raw);
   let text = "";
 
   parts.forEach((part) => {
@@ -114,9 +126,9 @@ export function fromGeminiResult(raw: any): ChatResponse {
   });
 
   if (toolCalls.length > 0) {
-    return { turn: { type: "tool_calls", toolCalls, content: text || undefined }, raw };
+    return { turn: { type: "tool_calls", toolCalls, content: text || undefined }, raw, usage };
   }
-  return { turn: { type: "final", content: text }, raw };
+  return { turn: { type: "final", content: text }, raw, usage };
 }
 
 /**
@@ -208,6 +220,11 @@ export class GeminiProvider implements ModelProvider {
     // functionCall's thoughtSignature) automatically covers streaming too,
     // with no second copy of the parsing logic to keep in sync.
     const allParts: GeminiPart[] = [];
+    // Correctness audit finding (provider High #1): Gemini sends
+    // usageMetadata on (typically) the final chunk — captured here and
+    // threaded into the synthetic raw object below, so fromGeminiResult's
+    // own usage extraction (shared with chat()) picks it up automatically.
+    let usageMetadata: unknown;
     for await (const payload of parseSseLines(res)) {
       const chunk = JSON.parse(payload);
 
@@ -218,6 +235,8 @@ export class GeminiProvider implements ModelProvider {
       if (chunk.error) {
         throw new ProviderChatError(chunk.error?.message ?? "Gemini returned an in-band stream error.", { retryable: false });
       }
+
+      if (chunk.usageMetadata) usageMetadata = chunk.usageMetadata;
 
       const parts: GeminiPart[] = chunk?.candidates?.[0]?.content?.parts ?? [];
       for (const part of parts) {
@@ -230,6 +249,6 @@ export class GeminiProvider implements ModelProvider {
       }
     }
 
-    yield { type: "done", response: fromGeminiResult({ candidates: [{ content: { parts: allParts } }] }) };
+    yield { type: "done", response: fromGeminiResult({ candidates: [{ content: { parts: allParts } }], usageMetadata }) };
   }
 }

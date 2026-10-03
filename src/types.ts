@@ -127,9 +127,22 @@ export interface ModelProvider {
   /** Optional incremental-rendering side channel — see StreamEvent. When
    * present, agent.ts calls this instead of chat(), driving it with
    * `for await` and yielding a corresponding AgentEvent per StreamEvent.
-   * The final `done` event's response is identical in shape to what
-   * chat() would return for the same input — streaming never changes
-   * what's persisted to session history, only what's rendered live. */
+   * The final `done` event's `turn` and `usage` are guaranteed identical
+   * to what chat() would return for the same input — streaming never
+   * changes what's persisted to session history or what cost is reported,
+   * only what's rendered live.
+   *
+   * `raw` is NOT covered by that guarantee for every provider (correctness
+   * audit finding, provider Medium #3): AnthropicProvider and
+   * EmbeddedLlamaProvider build it identically in both paths, but
+   * OpenAIProvider/OpenAICompatibleProvider/FreellmapiProxyProvider's
+   * streaming path yields `raw: undefined` (chat() sets the full parsed
+   * response body), and GeminiProvider's streaming path yields a
+   * synthetic `{candidates: [...], usageMetadata}` missing fields real
+   * non-streaming responses carry (`promptFeedback`, `modelVersion`,
+   * etc.). Currently harmless — nothing in this codebase reads `.raw` —
+   * but a future caller that does must not assume it's interchangeable
+   * between the two paths the way `turn`/`usage` are. */
   chatStream?(request: ChatRequest): AsyncGenerator<StreamEvent>;
   /** Releases any local native resources (loaded model weights, KV cache/context). Optional — only providers holding local resources (the embedded provider) implement it; remote providers have nothing to release. */
   dispose?(): Promise<void>;

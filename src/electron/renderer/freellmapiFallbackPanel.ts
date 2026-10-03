@@ -28,6 +28,7 @@ let cooldownMinutesInput: HTMLInputElement;
 let saveRoutingBtn: HTMLButtonElement;
 
 let modelListEl: HTMLElement;
+let modelPriorityHintEl: HTMLElement;
 let saveModelsBtn: HTMLButtonElement;
 let discardModelsBtn: HTMLButtonElement;
 let unsavedHintEl: HTMLElement;
@@ -41,6 +42,18 @@ let sortBudgetBtn: HTMLButtonElement;
 // array is replaced wholesale with the result rather than merged.
 let workingModels: FallbackModelRow[] = [];
 let modelsDirty = false;
+
+// Correctness audit finding (FreeLLMAPI High #1): the drag-order list below
+// is this panel's ONLY view onto "what order will models actually be
+// tried," but that's only true when the active strategy is 'priority' -
+// under every other strategy (the default, 'balanced', included) the
+// server computes its real order from scored weights (GET /routing's
+// `scores`, a completely different endpoint this panel doesn't fetch) and
+// manual order is consulted only as a tiebreaker between equal scores.
+// Tracked from the routing settings this panel already fetches via
+// refreshRouting(), so the model list can tell the user the truth about
+// what their drag-reordering actually controls right now.
+let currentStrategy: RoutingStrategy | null = null;
 
 export function initFreellmapiFallbackPanel(): void {
   panel = document.getElementById("freellmapi-fallback-panel")!;
@@ -64,6 +77,7 @@ export function initFreellmapiFallbackPanel(): void {
   cooldownMinutesInput = document.getElementById("freellmapi-fallback-cooldown-minutes") as HTMLInputElement;
   saveRoutingBtn = document.getElementById("freellmapi-fallback-save-routing") as HTMLButtonElement;
   modelListEl = document.getElementById("freellmapi-fallback-model-list")!;
+  modelPriorityHintEl = document.getElementById("freellmapi-fallback-model-priority-hint")!;
   saveModelsBtn = document.getElementById("freellmapi-fallback-save-models") as HTMLButtonElement;
   discardModelsBtn = document.getElementById("freellmapi-fallback-discard-models") as HTMLButtonElement;
   unsavedHintEl = document.getElementById("freellmapi-fallback-unsaved-hint")!;
@@ -117,6 +131,8 @@ export async function openFreellmapiFallbackPanel(): Promise<void> {
 }
 
 function populateForm(settings: RoutingSettings): void {
+  currentStrategy = settings.strategy;
+  renderModelPriorityHint();
   strategySelect.value = settings.strategy;
   customWeightsRow.hidden = settings.strategy !== "custom";
   weightReliability.value = String(settings.customWeights.reliability);
@@ -233,12 +249,36 @@ function markDirty(dirty: boolean): void {
   unsavedHintEl.hidden = !dirty;
 }
 
+const STRATEGY_LABELS: Record<RoutingStrategy, string> = {
+  priority: "Manual order (priority)",
+  balanced: "Balanced",
+  smartest: "Smartest",
+  fastest: "Fastest",
+  reliable: "Most reliable",
+  custom: "Custom weights",
+};
+
+function renderModelPriorityHint(): void {
+  if (currentStrategy === null || currentStrategy === "priority") {
+    modelPriorityHintEl.hidden = true;
+    return;
+  }
+  modelPriorityHintEl.hidden = false;
+  modelPriorityHintEl.textContent = `Routing strategy is "${STRATEGY_LABELS[currentStrategy]}" — models are primarily ranked by that strategy's scores. This manual order only breaks ties between models that score equally.`;
+}
+
 function renderModelList(): void {
   modelListEl.innerHTML = "";
+  renderModelPriorityHint();
   // Only models with a configured key are actually routable - the vendored
   // page filters the same way (FallbackPage.tsx). workingModels itself stays
   // unfiltered so saveModels' full-replace PUT still includes every row.
-  const sorted = workingModels.filter((m) => m.keyCount > 0).sort((a, b) => a.priority - b.priority);
+  // Sorted by effectivePriority (priority adjusted for an active rate-limit
+  // penalty — see FallbackModelRow.effectivePriority), not the raw saved
+  // priority, so a temporarily-deprioritized model's actual current
+  // position is what the user sees, not a stale #1 that nothing is really
+  // honoring right now (correctness audit: FreeLLMAPI High #1).
+  const sorted = workingModels.filter((m) => m.keyCount > 0).sort((a, b) => a.effectivePriority - b.effectivePriority);
   sorted.forEach((model, index) => {
     const row = document.createElement("div");
     row.className = "freellmapi-provider-row";
@@ -252,6 +292,13 @@ function renderModelList(): void {
     name.className = "freellmapi-provider-name";
     name.textContent = `${model.displayName} (${model.platform})`;
     row.appendChild(name);
+
+    if (model.penalty > 0) {
+      const penaltyBadge = document.createElement("span");
+      penaltyBadge.className = "freellmapi-model-penalty hint-text";
+      penaltyBadge.textContent = `rate-limited recently — temporarily deprioritized (${model.rateLimitHits} hit${model.rateLimitHits === 1 ? "" : "s"})`;
+      row.appendChild(penaltyBadge);
+    }
 
     const controls = document.createElement("div");
     controls.className = "freellmapi-provider-controls";

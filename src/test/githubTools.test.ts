@@ -75,6 +75,39 @@ console.log("github_create_repo:");
     restore();
   }
 }
+{
+  // Correctness audit finding (GitHub Medium #2): without this, nothing
+  // ever told the stored identity it had gone bad — Settings kept showing
+  // "Connected as @x" indefinitely after a real revocation, with every
+  // actual use of the integration failing and no path back to "reconnect
+  // your account" short of the user noticing on their own.
+  let unauthorizedCalls = 0;
+  const tool = createGithubCreateRepoTool(async () => "gho_revoked", async () => {
+    unauthorizedCalls++;
+  });
+  const restore = fakeFetch(() => new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 }));
+  try {
+    await tool.execute({ name: "x", private: false }, ctx);
+    check("a 401 invokes the onUnauthorized callback exactly once, so the stored identity can be cleared", unauthorizedCalls === 1);
+  } finally {
+    restore();
+  }
+}
+{
+  // A non-401 error (the existing 422 case) must NOT trigger it — the
+  // token itself is still fine in that case.
+  let unauthorizedCalls = 0;
+  const tool = createGithubCreateRepoTool(async () => "gho_faketoken", async () => {
+    unauthorizedCalls++;
+  });
+  const restore = fakeFetch(() => new Response(JSON.stringify({ message: "already exists" }), { status: 422 }));
+  try {
+    await tool.execute({ name: "x", private: false }, ctx);
+    check("a 422 (not a token problem) never invokes onUnauthorized", unauthorizedCalls === 0);
+  } finally {
+    restore();
+  }
+}
 
 {
   // Important #6 from final review: owner/repo/org flow unvalidated

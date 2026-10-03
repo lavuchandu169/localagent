@@ -1,6 +1,42 @@
 import type { ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, StreamEvent } from "../types.js";
+import { ProviderChatError } from "../types.js";
 import { OpenAICompatibleProvider } from "./openaiCompatible.js";
 import { startFreellmapiServer, getFreellmapiUnifiedApiKey } from "../electron/freellmapiHost.js";
+
+/** Correctness audit finding (FreeLLMAPI Medium #3): OpenAICompatibleProvider
+ * (which this class delegates every real request to) only ever marks a bare
+ * 429 as retryable — the right call for an arbitrary user-configured custom
+ * server, where any other status is a real error worth surfacing as-is.
+ * FreeLLMAPI specifically, though, documents these additional statuses as
+ * "this free-tier path is unusable right now" rather than "something is
+ * wrong with your request" — 502/503 (the bundled router or an upstream
+ * model host is down), 413 (the router rejected an oversized request it
+ * couldn't route to any configured model), 404 (no model in the free tier
+ * currently matches what was requested). Treating these as retryable too
+ * lets agent.ts's existing fallback-to-cloud-provider path (see agent.ts's
+ * run() catch block: `err.retryable && this.opts.fallbackProviders?.length`)
+ * kick in instead of hard-failing the task — a no-op when no fallback
+ * provider is configured, since that same check gates it. Scoped to this
+ * wrapper (not the shared OpenAICompatibleProvider itself) so an arbitrary
+ * custom server's genuine 404/413/502/503 keeps failing clearly instead
+ * of silently retrying against a provider the user never asked for.
+ *
+ * Deliberately does NOT include 400: FreeLLMAPI's own "needsKey" error
+ * (no provider key configured for any model) happens to use 400, but 400
+ * is also the generic "your request was malformed" status — this wrapper
+ * can only see the status code here, not the specific error `code` field
+ * that would distinguish the two, so including it would silently retry a
+ * genuinely malformed request against a paid fallback provider instead of
+ * surfacing the real error (final-review pushback: the original inclusion
+ * of 400 here had no status-specific justification to match the others). */
+const FREE_TIER_UNUSABLE_STATUSES = new Set([404, 413, 502, 503]);
+
+function broadenRetryable(err: unknown): never {
+  if (err instanceof ProviderChatError && !err.retryable && err.status !== undefined && FREE_TIER_UNUSABLE_STATUSES.has(err.status)) {
+    throw new ProviderChatError(err.message, { status: err.status, retryable: true });
+  }
+  throw err;
+}
 
 export interface FreellmapiProxyOptions {
   userDataDir: string;
@@ -57,13 +93,21 @@ export class FreellmapiProxyProvider implements ModelProvider {
     if (!this.inner) {
       throw new Error("FreellmapiProxyProvider.chat() called before healthCheck() established a connection.");
     }
-    return this.inner.chat(request);
+    try {
+      return await this.inner.chat(request);
+    } catch (err) {
+      broadenRetryable(err);
+    }
   }
 
   async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
     if (!this.inner) {
       throw new Error("FreellmapiProxyProvider.chatStream() called before healthCheck() established a connection.");
     }
-    yield* this.inner.chatStream!(request);
+    try {
+      yield* this.inner.chatStream!(request);
+    } catch (err) {
+      broadenRetryable(err);
+    }
   }
 }

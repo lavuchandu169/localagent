@@ -296,5 +296,39 @@ console.log("\nGeminiProvider.chatStream reuses fromGeminiResult instead of dupl
   }
 }
 
+console.log("\nfromGeminiResult reports real usage from usageMetadata, not just Anthropic (correctness audit: provider High #1):");
+{
+  const raw = {
+    candidates: [{ content: { parts: [{ text: "hello" }] } }],
+    usageMetadata: { promptTokenCount: 15, candidatesTokenCount: 4, totalTokenCount: 19 },
+  };
+  const response = fromGeminiResult(raw);
+  check("inputTokens comes from the real promptTokenCount", response.usage?.inputTokens === 15);
+  check("outputTokens comes from the real candidatesTokenCount", response.usage?.outputTokens === 4);
+}
+{
+  const raw = { candidates: [{ content: { parts: [{ text: "hello" }] } }] };
+  const response = fromGeminiResult(raw);
+  check("no usageMetadata means no usage on the ChatResponse, not a crash or a fabricated 0", response.usage === undefined);
+}
+
+console.log("\nGeminiProvider.chatStream reports real usage from the final chunk's usageMetadata (correctness audit: provider High #1):");
+{
+  const sseBody =
+    'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}\n\n' +
+    'data: {"candidates":[{"content":{"parts":[{"text":" world"}]}}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3,"totalTokenCount":11}}\n\n';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(sseBody, { status: 200 })) as typeof fetch;
+  try {
+    const provider = new GeminiProvider({ apiKey: "test-key" });
+    const seen: any[] = [];
+    for await (const e of provider.chatStream!({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "hi" }] })) seen.push(e);
+    const done = seen.find((e) => e.type === "done");
+    check("the terminal done event carries real usage from the stream's final chunk", done?.response.usage?.inputTokens === 8 && done.response.usage?.outputTokens === 3);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

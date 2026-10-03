@@ -138,9 +138,23 @@ async function refreshProviders(): Promise<void> {
   errorEl.hidden = true;
   loadingEl.hidden = false;
   try {
-    const result = await window.agent.freellmapiListProviders();
+    // Correctness audit finding (FreeLLMAPI High #2): /providers only ever
+    // reports a configured platform's key COUNT, never whether any of
+    // those keys are actually usable right now — a key the vendored
+    // server has already marked 'invalid' (bad credentials, revoked,
+    // etc.) still showed as plain "Configured (1 active)" here, with the
+    // real reason (KeyRow.lastHealthError) visible nowhere in this UI.
+    // Fetched alongside providers (not sequentially) since both are
+    // independent reads behind the same refresh-generation guard below.
+    const [result, keys] = await Promise.all([window.agent.freellmapiListProviders(), window.agent.freellmapiListKeys()]);
     if (generation !== refreshGeneration) return; // a newer refresh has already started or finished
-    renderProviders(result.providers);
+    const keysByPlatform = new Map<string, typeof keys>();
+    for (const key of keys) {
+      const existing = keysByPlatform.get(key.platform);
+      if (existing) existing.push(key);
+      else keysByPlatform.set(key.platform, [key]);
+    }
+    renderProviders(result.providers, keysByPlatform);
   } catch (err) {
     if (generation !== refreshGeneration) return;
     errorEl.hidden = false;
@@ -150,7 +164,14 @@ async function refreshProviders(): Promise<void> {
   }
 }
 
-function renderProviders(providers: ProviderRow[]): void {
+/** A key's health is only ever worth surfacing when it's actively broken.
+ * 'unknown' means "not checked yet" (e.g. just added) - not an error - and
+ * 'healthy' needs no callout at all. */
+function isUnhealthyKeyStatus(status: string): boolean {
+  return status !== "healthy" && status !== "unknown";
+}
+
+function renderProviders(providers: ProviderRow[], keysByPlatform: Map<string, KeyRow[]>): void {
   listEl.innerHTML = "";
   for (const provider of providers) {
     const row = document.createElement("div");
@@ -165,6 +186,15 @@ function renderProviders(providers: ProviderRow[]): void {
     status.className = provider.configured ? "freellmapi-provider-status configured" : "freellmapi-provider-status";
     status.textContent = provider.configured ? `Configured (${provider.enabledKeyCount} active)` : "Not configured";
     row.appendChild(status);
+
+    const unhealthyKeys = (keysByPlatform.get(provider.platform) ?? []).filter((k) => isUnhealthyKeyStatus(k.status));
+    if (provider.configured && unhealthyKeys.length > 0) {
+      const health = document.createElement("span");
+      health.className = "freellmapi-provider-status error-text";
+      const reasons = unhealthyKeys.map((k) => k.lastHealthError ?? k.status).join("; ");
+      health.textContent = `${unhealthyKeys.length} key${unhealthyKeys.length === 1 ? "" : "s"} unhealthy: ${reasons}`;
+      row.appendChild(health);
+    }
 
     const signupUrl = PROVIDER_SIGNUP_URLS[provider.platform];
     if (signupUrl && !provider.keyless && !provider.configured) {

@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { listRemoteSessions, downloadSession, uploadSession, deleteRemoteSession, DriveScopeError, reconcileSessions } from "../cloudSync.js";
 import type { SessionRecord } from "../sessionStore.js";
-import { loadSessionRecord, saveSession } from "../sessionStore.js";
+import { loadSessionRecord, saveSession, listSessions } from "../sessionStore.js";
 import type { ChatMessage } from "../types.js";
 
 let failures = 0;
@@ -16,8 +16,22 @@ function check(name: string, cond: boolean) {
   }
 }
 
-function makeRecord(id: string, updatedAt: number): SessionRecord {
-  return { id, title: `title-${id}`, messages: [], events: [], createdAt: updatedAt, updatedAt, ownerEmail: null };
+function makeRecord(id: string, updatedAt: number, lastSyncCheckpoint: SessionRecord["lastSyncCheckpoint"] = null): SessionRecord {
+  return {
+    id,
+    title: `title-${id}`,
+    messages: [],
+    events: [],
+    createdAt: updatedAt,
+    updatedAt,
+    ownerEmail: null,
+    provider: null,
+    mode: null,
+    planFirst: false,
+    checkpointHash: null,
+    checkpointWorkspaceRoot: null,
+    lastSyncCheckpoint,
+  };
 }
 
 console.log("cloudSync (fake fetch):");
@@ -28,7 +42,12 @@ console.log("\nlistRemoteSessions:");
   const fakeFetch: typeof fetch = async (url) => {
     calls.push(url.toString());
     return new Response(
-      JSON.stringify({ files: [{ id: "f1", appProperties: { sessionId: "s1" } }, { id: "f2", appProperties: {} }] }),
+      JSON.stringify({
+        files: [
+          { id: "f1", appProperties: { sessionId: "s1" }, modifiedTime: "2024-01-01T00:00:00.000Z" },
+          { id: "f2", appProperties: {} },
+        ],
+      }),
       { status: 200 }
     );
   };
@@ -38,6 +57,11 @@ console.log("\nlistRemoteSessions:");
     result.length === 1 && result[0]!.sessionId === "s1" && result[0]!.driveFileId === "f1"
   );
   check("requests the appDataFolder space", calls[0]!.includes("spaces=appDataFolder"));
+  // Correctness audit finding (session Medium #1): reconcile needs Drive's
+  // own server-assigned modifiedTime to merge without trusting either
+  // device's own wall clock directly against the other's.
+  check("requests modifiedTime in the fields param", decodeURIComponent(calls[0]!).includes("modifiedTime"));
+  check("carries the real modifiedTime through", result[0]!.modifiedTime === "2024-01-01T00:00:00.000Z");
 }
 
 console.log("\ndownloadSession:");
@@ -61,11 +85,15 @@ console.log("\nuploadSession — create path (no existing file):");
       // findRemoteFile lookup: nothing exists yet
       return new Response(JSON.stringify({ files: [] }), { status: 200 });
     }
-    return new Response("{}", { status: 200 });
+    return new Response(JSON.stringify({ modifiedTime: "2024-02-02T00:00:00.000Z" }), { status: 200 });
   };
-  await uploadSession("tok", makeRecord("new-session", 100), fakeFetch);
+  const result = await uploadSession("tok", makeRecord("new-session", 100), fakeFetch);
   const createCall = calls.find((c) => c.method === "POST");
   check("issues a multipart create when no existing file is found", !!createCall && createCall.url.includes("uploadType=multipart"));
+  check("requests modifiedTime back in the response fields", decodeURIComponent(createCall!.url).includes("modifiedTime"));
+  // Correctness audit finding (session Medium #1): reconcile uses this to
+  // seed a clock-skew-immune sync checkpoint immediately after an upload.
+  check("returns Drive's real modifiedTime for the new file", result.modifiedTime === "2024-02-02T00:00:00.000Z");
 }
 
 console.log("\nuploadSession — update path (existing file):");
@@ -76,14 +104,16 @@ console.log("\nuploadSession — update path (existing file):");
     if (!init?.method) {
       return new Response(JSON.stringify({ files: [{ id: "existing-file" }] }), { status: 200 });
     }
-    return new Response("{}", { status: 200 });
+    return new Response(JSON.stringify({ modifiedTime: "2024-02-03T00:00:00.000Z" }), { status: 200 });
   };
-  await uploadSession("tok", makeRecord("s1", 100), fakeFetch);
+  const result = await uploadSession("tok", makeRecord("s1", 100), fakeFetch);
   const patchCall = calls.find((c) => c.method === "PATCH");
   check(
     "issues a media PATCH to the found file id when one exists",
     !!patchCall && patchCall.url.includes("existing-file") && patchCall.url.includes("uploadType=media")
   );
+  check("requests modifiedTime back in the response fields", decodeURIComponent(patchCall!.url).includes("modifiedTime"));
+  check("returns Drive's real modifiedTime for the updated file", result.modifiedTime === "2024-02-03T00:00:00.000Z");
 }
 
 console.log("\nuploadSession — redacts secrets before upload (security audit M3 — a session's own history can carry file contents the agent read, e.g. a .env value, which previously went to the user's Drive verbatim):");
@@ -107,6 +137,12 @@ console.log("\nuploadSession — redacts secrets before upload (security audit M
     createdAt: 100,
     updatedAt: 100,
     ownerEmail: null,
+    provider: null,
+    mode: null,
+    planFirst: false,
+    checkpointHash: null,
+    checkpointWorkspaceRoot: null,
+    lastSyncCheckpoint: null,
   };
   let uploadedBody: string | undefined;
   const fakeFetch: typeof fetch = async (url, init) => {
@@ -154,6 +190,17 @@ console.log("\nuploadSession — strips image/text attachments before upload:");
     createdAt: 100,
     updatedAt: 100,
     ownerEmail: null,
+    provider: null,
+    mode: null,
+    planFirst: false,
+    checkpointHash: null,
+    checkpointWorkspaceRoot: null,
+    // Correctness audit finding (session Medium #1): this is this
+    // device's own bookkeeping about ITS OWN last sync — never previously
+    // asserted to actually be stripped before upload, even though
+    // uploading it would corrupt another device's identical bookkeeping
+    // about its own last sync the moment it pulled this record.
+    lastSyncCheckpoint: { remoteModifiedTime: "2024-05-05T00:00:00.000Z", localUpdatedAt: 999 },
   };
 
   let capturedBody: string | undefined;
@@ -178,6 +225,7 @@ console.log("\nuploadSession — strips image/text attachments before upload:");
   check("the uploaded user message has no 'textAttachments' key at all", !("textAttachments" in uploadedUserMessage));
   check("the uploaded user message's text content is unaffected", uploadedUserMessage.content === "please look at this");
   check("the uploaded assistant message's content is unaffected", uploadedAssistantMessage.content === "sure, looking now");
+  check("the uploaded record has no 'lastSyncCheckpoint' key at all", !("lastSyncCheckpoint" in uploaded));
 
   // The ORIGINAL record and its messages must be untouched — local
   // persistence (sessionRegistry.ts) reads this same object independently
@@ -187,6 +235,7 @@ console.log("\nuploadSession — strips image/text attachments before upload:");
     "the original record's user message still carries its textAttachments array",
     Array.isArray(messages[0]!.textAttachments) && messages[0]!.textAttachments!.length === 1
   );
+  check("the original record still carries its own lastSyncCheckpoint", record.lastSyncCheckpoint?.localUpdatedAt === 999);
 }
 
 console.log("\nuploadSession — a message with no attachments round-trips unaffected:");
@@ -200,6 +249,12 @@ console.log("\nuploadSession — a message with no attachments round-trips unaff
     createdAt: 100,
     updatedAt: 100,
     ownerEmail: null,
+    provider: null,
+    mode: null,
+    planFirst: false,
+    checkpointHash: null,
+    checkpointWorkspaceRoot: null,
+    lastSyncCheckpoint: null,
   };
 
   let capturedBody: string | undefined;
@@ -220,15 +275,28 @@ console.log("\nuploadSession — a message with no attachments round-trips unaff
 
 console.log("\ndeleteRemoteSession:");
 {
-  const calls: { url: string; method?: string }[] = [];
+  // Correctness audit finding (session High #3): a literal DELETE left no
+  // trace that this session had ever existed — a second device that
+  // hadn't synced since the delete would see "my local copy is still
+  // here, the remote copy is just gone" during its own reconcile pass and
+  // re-upload its local copy, silently resurrecting a session the user
+  // deliberately deleted. Writing a tombstone to the SAME file (never
+  // actually deleting it) keeps it discoverable via the exact same
+  // listRemoteSessions/findRemoteFile query every other device already
+  // uses, so they can learn about the deletion instead of re-creating it.
+  const calls: { url: string; method?: string; body?: string }[] = [];
   const fakeFetch: typeof fetch = async (url, init) => {
-    calls.push({ url: url.toString(), method: init?.method });
+    calls.push({ url: url.toString(), method: init?.method, body: typeof init?.body === "string" ? init.body : undefined });
     if (!init?.method) return new Response(JSON.stringify({ files: [{ id: "to-delete" }] }), { status: 200 });
-    return new Response(null, { status: 204 });
+    return new Response(JSON.stringify({ id: "to-delete" }), { status: 200 });
   };
   await deleteRemoteSession("tok", "s1", fakeFetch);
-  const deleteCall = calls.find((c) => c.method === "DELETE");
-  check("deletes the found file id", !!deleteCall && deleteCall.url.includes("to-delete"));
+  check("never issues a literal DELETE", !calls.some((c) => c.method === "DELETE"));
+  const patchCall = calls.find((c) => c.method === "PATCH");
+  check("PATCHes the found file's content instead", !!patchCall && patchCall.url.includes("to-delete"));
+  const tombstone = patchCall?.body ? JSON.parse(patchCall.body) : null;
+  check("the new content is a tombstone marker for this exact sessionId", tombstone?.tombstone === true && tombstone?.sessionId === "s1");
+  check("the tombstone carries a deletedAt timestamp", typeof tombstone?.deletedAt === "string" && tombstone.deletedAt.length > 0);
 }
 {
   const fakeFetch: typeof fetch = async () => new Response(JSON.stringify({ files: [] }), { status: 200 });
@@ -238,7 +306,7 @@ console.log("\ndeleteRemoteSession:");
   } catch {
     threw = true;
   }
-  check("no-ops without throwing when no remote file exists for this session", !threw);
+  check("no-ops without throwing when no remote file exists for this session (nothing to tombstone)", !threw);
 }
 
 console.log("\nDriveScopeError classification:");
@@ -278,6 +346,7 @@ console.log("\nreconcileSessions:");
       },
       uploadSession: async (_token, record) => {
         uploaded.push(record);
+        return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
     },
   });
@@ -291,7 +360,7 @@ console.log("\nreconcileSessions:");
 
   const result = await reconcileSessions(sessionsDir, "tok", {
     ops: {
-      listRemoteSessions: async () => [{ sessionId: "remote-only", driveFileId: "f1" }],
+      listRemoteSessions: async () => [{ sessionId: "remote-only", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
       downloadSession: async () => remoteRecord,
       uploadSession: async () => {
         throw new Error("should not be called");
@@ -311,7 +380,7 @@ console.log("\nreconcileSessions:");
 
   await reconcileSessions(sessionsDir, "tok", {
     ops: {
-      listRemoteSessions: async () => [{ sessionId: "both", driveFileId: "f1" }],
+      listRemoteSessions: async () => [{ sessionId: "both", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
       downloadSession: async () => newerRemote,
       uploadSession: async () => {
         throw new Error("should not be called");
@@ -331,10 +400,11 @@ console.log("\nreconcileSessions:");
 
   await reconcileSessions(sessionsDir, "tok", {
     ops: {
-      listRemoteSessions: async () => [{ sessionId: "both", driveFileId: "f1" }],
+      listRemoteSessions: async () => [{ sessionId: "both", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
       downloadSession: async () => olderRemote,
       uploadSession: async (_token, record) => {
         uploaded.push(record);
+        return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
     },
   });
@@ -351,18 +421,191 @@ console.log("\nreconcileSessions:");
   const uploaded: SessionRecord[] = [];
   const result = await reconcileSessions(sessionsDir, "tok", {
     ops: {
-      listRemoteSessions: async () => [{ sessionId: "broken", driveFileId: "f-broken" }],
+      listRemoteSessions: async () => [{ sessionId: "broken", driveFileId: "f-broken", modifiedTime: "2024-01-01T00:00:00.000Z" }],
       downloadSession: async (_token, id) => {
         if (id === "f-broken") throw new Error("simulated network failure");
         throw new Error("unexpected id");
       },
       uploadSession: async (_token, record) => {
         uploaded.push(record);
+        return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
     },
   });
   check("a failed remote download doesn't abort the rest of the pass", uploaded.some((r) => r.id === "ok"));
   check("the failed session isn't counted as pulled", result.pulled === 0);
+}
+
+console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (correctness audit: session Medium #1):");
+{
+  // Checkpoint present and remote's modifiedTime matches it exactly ->
+  // remote hasn't changed since this device last synced it, so ANY local
+  // change (regardless of what either device's wall clock says) pushes.
+  // Deliberately gives local an OLDER updatedAt than it would need under
+  // the old updatedAt-vs-updatedAt comparison, so this only passes if the
+  // checkpoint path is actually being used instead of the fallback.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const checkpoint = { remoteModifiedTime: "2024-01-01T00:00:00.000Z", localUpdatedAt: 100 };
+  await saveSession(sessionsDir, makeRecord("robust-push", 999, checkpoint));
+  const uploaded: SessionRecord[] = [];
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "robust-push", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
+      downloadSession: async () => makeRecord("robust-push", 100, checkpoint), // remote's own on-disk updatedAt is stale/irrelevant here
+      uploadSession: async (_token, record) => {
+        uploaded.push(record);
+        return { modifiedTime: "2024-01-02T00:00:00.000Z" };
+      },
+    },
+  });
+  check("remote unchanged + local changed pushes, even though local's updatedAt doesn't reflect it", uploaded.length === 1 && result.pushed === 1);
+  const local = await loadSessionRecord(sessionsDir, "robust-push");
+  check("the checkpoint is refreshed with the new remoteModifiedTime from the push response", local?.lastSyncCheckpoint?.remoteModifiedTime === "2024-01-02T00:00:00.000Z");
+  check("the checkpoint's localUpdatedAt is refreshed too", local?.lastSyncCheckpoint?.localUpdatedAt === 999);
+}
+{
+  // Checkpoint present, local's updatedAt still matches it exactly (this
+  // device hasn't touched it), but remote's modifiedTime has moved on ->
+  // some OTHER device changed it -> pull.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const checkpoint = { remoteModifiedTime: "2024-01-01T00:00:00.000Z", localUpdatedAt: 100 };
+  await saveSession(sessionsDir, makeRecord("robust-pull", 100, checkpoint));
+  const remoteRecord = makeRecord("robust-pull", 50, checkpoint); // remote's own updatedAt is deliberately OLDER than local's
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "robust-pull", driveFileId: "f1", modifiedTime: "2024-02-02T00:00:00.000Z" }],
+      downloadSession: async () => remoteRecord,
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+  check("remote changed + local unchanged pulls, even though remote's own updatedAt is older", result.pulled === 1 && result.pushed === 0);
+  const local = await loadSessionRecord(sessionsDir, "robust-pull");
+  check("the checkpoint is refreshed with the new remote modifiedTime", local?.lastSyncCheckpoint?.remoteModifiedTime === "2024-02-02T00:00:00.000Z");
+}
+{
+  // Checkpoint present, NEITHER side has moved since -> skip entirely, no network writes.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const checkpoint = { remoteModifiedTime: "2024-01-01T00:00:00.000Z", localUpdatedAt: 100 };
+  await saveSession(sessionsDir, makeRecord("robust-skip", 100, checkpoint));
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "robust-skip", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
+      downloadSession: async () => makeRecord("robust-skip", 100, checkpoint),
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+  check("nothing changed on either side since the last sync -> skipped, no push or pull", result.pulled === 0 && result.pushed === 0);
+}
+{
+  // Both sides changed since the last checkpoint -> genuine concurrent
+  // edit. The about-to-be-overwritten LOCAL version must be preserved
+  // recoverably (a conflict-suffixed copy), never silently destroyed.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const checkpoint = { remoteModifiedTime: "2024-01-01T00:00:00.000Z", localUpdatedAt: 100 };
+  await saveSession(sessionsDir, makeRecord("robust-conflict", 500, checkpoint)); // local changed since checkpoint
+  const remoteRecord = makeRecord("robust-conflict", 300, checkpoint); // remote also changed since checkpoint
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "robust-conflict", driveFileId: "f1", modifiedTime: "2024-03-03T00:00:00.000Z" }],
+      downloadSession: async () => remoteRecord,
+      uploadSession: async () => {
+        throw new Error("should not be called — a conflict adopts remote, it doesn't push");
+      },
+    },
+  });
+  check("reports exactly one conflict", result.conflicts === 1);
+  const resolved = await loadSessionRecord(sessionsDir, "robust-conflict");
+  check("the session id now holds the remote (adopted) copy", resolved?.updatedAt === 300);
+  const allIds = (await listSessions(sessionsDir)).map((e) => e.id);
+  const conflictCopyId = allIds.find((id) => id !== "robust-conflict");
+  check("a conflict-suffixed copy preserving the LOCAL version was created, not silently destroyed", conflictCopyId !== undefined);
+  const conflictCopy = conflictCopyId ? await loadSessionRecord(sessionsDir, conflictCopyId) : null;
+  check("the preserved copy is the local version (updatedAt 500), not the remote one", conflictCopy?.updatedAt === 500);
+}
+
+console.log("\nreconcileSessions: a remote tombstone (correctness audit: session High #3):");
+{
+  // The exact resurrection bug this fixes: device A deletes a session
+  // (both local and remote, via deleteRemoteSession's new tombstone
+  // write). Device B never synced since — its reconcile pass sees the
+  // session still present locally AND still present remotely (as a
+  // tombstone, not absent), and must delete its own local copy instead of
+  // treating "present remotely" as license to push/pull like a normal
+  // record.
+  //
+  // Local genuinely hasn't changed since the last sync (its checkpoint's
+  // localUpdatedAt matches) — a plain delete is safe, nothing to preserve.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const checkpoint = { remoteModifiedTime: "2024-01-01T00:00:00.000Z", localUpdatedAt: 100 };
+  await saveSession(sessionsDir, makeRecord("deleted-elsewhere", 100, checkpoint));
+
+  const uploaded: SessionRecord[] = [];
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "deleted-elsewhere", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
+      downloadSession: async () => ({ tombstone: true as const, sessionId: "deleted-elsewhere", deletedAt: new Date().toISOString() }),
+      uploadSession: async (_token, record) => {
+        uploaded.push(record);
+        return { modifiedTime: "2024-03-01T00:00:00.000Z" };
+      },
+    },
+  });
+  const local = await loadSessionRecord(sessionsDir, "deleted-elsewhere");
+  check("the local copy is deleted, not re-pushed", local === null && uploaded.length === 0);
+  check("reports it as a local deletion, not a pull, push, or conflict", result.deletedLocal === 1 && result.pulled === 0 && result.pushed === 0 && result.conflicts === 0);
+}
+{
+  // Final-review finding I7: local WAS edited since the last sync (no
+  // checkpoint at all, in this case — never synced before) when the
+  // tombstone arrived — this device was genuinely still using the
+  // session when it was deleted elsewhere. Deleting it outright would
+  // silently destroy that work; it must be preserved under a
+  // conflict-suffixed id instead, same as a genuine concurrent-edit
+  // conflict.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  await saveSession(sessionsDir, makeRecord("deleted-but-edited", 500));
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "deleted-but-edited", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
+      downloadSession: async () => ({ tombstone: true as const, sessionId: "deleted-but-edited", deletedAt: new Date().toISOString() }),
+      uploadSession: async () => {
+        throw new Error("should not be called — a locally-edited-since-sync tombstone preserves, it doesn't push");
+      },
+    },
+  });
+  const local = await loadSessionRecord(sessionsDir, "deleted-but-edited");
+  check("the original id is still gone (deleted, not left in place)", local === null);
+  check("reports it as a conflict, not a plain local deletion", result.conflicts === 1 && result.deletedLocal === 0);
+  const allIds = (await listSessions(sessionsDir)).map((e) => e.id);
+  const conflictCopyId = allIds.find((id) => id !== "deleted-but-edited");
+  check("a conflict-suffixed copy preserving the local work was created", conflictCopyId !== undefined);
+  const conflictCopy = conflictCopyId ? await loadSessionRecord(sessionsDir, conflictCopyId) : null;
+  check("the preserved copy carries the local content (updatedAt 500)", conflictCopy?.updatedAt === 500);
+}
+{
+  // The tombstone exists remotely but nothing local ever knew about this
+  // session (e.g. a third device that never had it) — nothing to delete.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "never-had-it", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
+      downloadSession: async () => ({ tombstone: true as const, sessionId: "never-had-it", deletedAt: new Date().toISOString() }),
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+  check("a tombstone with no local copy anywhere is a pure no-op", result.deletedLocal === 0 && result.pulled === 0 && result.pushed === 0);
 }
 
 console.log("\nreconcileSessions: stale local index doesn't cause data loss:");
@@ -379,10 +622,11 @@ console.log("\nreconcileSessions: stale local index doesn't cause data loss:");
 
   await reconcileSessions(sessionsDir, "tok", {
     ops: {
-      listRemoteSessions: async () => [{ sessionId: "crashed", driveFileId: "f1" }],
+      listRemoteSessions: async () => [{ sessionId: "crashed", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
       downloadSession: async () => olderRemote,
       uploadSession: async (_token, record) => {
         uploaded.push(record);
+        return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
     },
   });
@@ -406,6 +650,7 @@ console.log("\nreconcileSessions: sessions are reconciled concurrently, not one 
   const remoteEntries = Array.from({ length: SESSION_COUNT }, (_, i) => ({
     sessionId: `remote-${i}`,
     driveFileId: `f-${i}`,
+    modifiedTime: "2024-01-01T00:00:00.000Z",
   }));
 
   const start = Date.now();

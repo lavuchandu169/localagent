@@ -171,14 +171,23 @@ console.log("\nEmbedded llama provider conversion:");
   );
 }
 {
+  // Correctness audit finding (provider Medium #2): fromLlamaResult used
+  // to silently DROP this explanatory text entirely (no `content` field
+  // at all on the recovered tool_calls turn) — tryParseFallbackToolCall's
+  // own doc comment says prose before/after the recovered call is
+  // expected, so it must survive as `content`, not vanish from the
+  // transcript.
   const { turn } = fromLlamaResult({
     response: 'I\'ll check the project structure first.\n\n{"name": "list_directory", "arguments": {"path": "."}}',
     functionCalls: undefined,
   });
   check(
     "fromLlamaResult recovers a tool call preceded by explanatory prose",
-    JSON.stringify(turn) ===
-      JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "call_0", name: "list_directory", arguments: { path: "." } }] })
+    turn.type === "tool_calls" && JSON.stringify(turn.toolCalls) === JSON.stringify([{ id: "call_0", name: "list_directory", arguments: { path: "." } }])
+  );
+  check(
+    "...and keeps the preceding prose as content instead of silently dropping it",
+    turn.type === "tool_calls" && turn.content === "I'll check the project structure first."
   );
 }
 {
@@ -188,8 +197,11 @@ console.log("\nEmbedded llama provider conversion:");
   });
   check(
     "fromLlamaResult recovers a fenced tool call surrounded by prose on both sides",
-    JSON.stringify(turn) ===
-      JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "call_0", name: "read_file", arguments: { path: "a.js" } }] })
+    turn.type === "tool_calls" && JSON.stringify(turn.toolCalls) === JSON.stringify([{ id: "call_0", name: "read_file", arguments: { path: "a.js" } }])
+  );
+  check(
+    "...and keeps BOTH the preceding and following prose as content, joined, with the fence markers themselves excluded",
+    turn.type === "tool_calls" && turn.content === "Let me look at that file.\n\nOne moment."
   );
 }
 {
@@ -353,6 +365,50 @@ await (async () => {
     "without initialMessages, a session still starts with just the system prompt",
     freshSession.getMessages().length === 1 && freshSession.getMessages()[0]?.role === "system"
   );
+
+  // Correctness audit finding (session High #2): resuming a session with a
+  // real prior checkpoint hash must restore getCheckpointHash() to it —
+  // without this, "Revert this task" silently becomes unavailable the
+  // moment a session is resumed, with no indication to the user.
+  const resumedWithCheckpoint = new AgentSession({
+    workspaceRoot,
+    model: "mock",
+    provider: new MockProvider([{ turn: { type: "final", content: "x" } }]),
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN",
+    initialMessages: seeded,
+    initialCheckpointHash: "abc123fakehash",
+  });
+  check("initialCheckpointHash seeds getCheckpointHash() on a resumed session", resumedWithCheckpoint.getCheckpointHash() === "abc123fakehash");
+
+  const resumedWithoutCheckpoint = new AgentSession({
+    workspaceRoot,
+    model: "mock",
+    provider: new MockProvider([{ turn: { type: "final", content: "x" } }]),
+    tools: defaultToolRegistry(),
+    permissionMode: "PLAN",
+    initialCheckpointHash: null,
+  });
+  check("a null/absent initialCheckpointHash leaves getCheckpointHash() at null, same as today", resumedWithoutCheckpoint.getCheckpointHash() === null);
+
+  // Correctness audit: getPermissionMode()/getPlanFirst() must reflect the
+  // LIVE setting (after a mid-session edit), not just the value a session
+  // started with — sessionRegistry.ts's persistSession relies on this to
+  // never persist stale provider/mode/planFirst.
+  const liveSettingsSession = new AgentSession({
+    workspaceRoot,
+    model: "mock",
+    provider: new MockProvider([{ turn: { type: "final", content: "x" } }]),
+    tools: defaultToolRegistry(),
+    permissionMode: "DEFAULT",
+    planFirst: false,
+  });
+  check("getPermissionMode() reflects the mode the session started with", liveSettingsSession.getPermissionMode() === "DEFAULT");
+  check("getPlanFirst() reflects the planFirst the session started with", liveSettingsSession.getPlanFirst() === false);
+  liveSettingsSession.setPermissionMode("PLAN");
+  liveSettingsSession.setPlanFirst(true);
+  check("getPermissionMode() reflects a live setPermissionMode call, not the original value", liveSettingsSession.getPermissionMode() === "PLAN");
+  check("getPlanFirst() reflects a live setPlanFirst call, not the original value", liveSettingsSession.getPlanFirst() === true);
 })();
 
 console.log("\nMid-turn cancellation backfill doesn't over-scope to earlier turns:");
@@ -770,6 +826,71 @@ await (async () => {
     await fs.rm(nonGitDir, { recursive: true, force: true });
   }
 
+  {
+    // Functional-correctness audit finding (agent core High #2): a task
+    // whose OWN checkpoint attempt fails (but still goes on to write real
+    // changes) must not leave a PREVIOUS task's hash in place as the
+    // "revert this task" target — that would silently discard more work
+    // than the user asked for on revert. Task A succeeds and sets a real
+    // checkpoint; task B's attempt is forced to fail (HEAD corrupted,
+    // simulating a real git failure) while its own write still succeeds
+    // (edit_file never touches git) — getCheckpointHash() must come back
+    // null afterward, not task A's stale hash.
+    const repo2 = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-checkpoint-stale-test-"));
+    await git(repo2, ["init", "-q"]);
+    await git(repo2, ["config", "user.email", "test@example.com"]);
+    await git(repo2, ["config", "user.name", "Test"]);
+    await fs.writeFile(path.join(repo2, "a.js"), "v1\n", "utf-8");
+    await git(repo2, ["add", "-A"]);
+    await git(repo2, ["commit", "-q", "-m", "initial"]);
+
+    // One continuous script spanning both tasks — AgentSession.run()
+    // resets this.opts.provider back to the ORIGINAL provider at the
+    // start of every call (undoing any mid-task fallback swap from a
+    // previous task), so swapping in a second MockProvider between tasks
+    // doesn't work; a single provider instance's script naturally spans
+    // multiple run() calls since its own step counter just keeps
+    // incrementing regardless of which task logically owns each entry.
+    const combinedScript: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "eA", name: "edit_file", arguments: { path: "a.js", content: "v2\n" } }] } },
+      { turn: { type: "final", content: "task A done" } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "eB", name: "edit_file", arguments: { path: "b.js", content: "new file from task B\n" } }] } },
+      { turn: { type: "final", content: "task B done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: repo2,
+      model: "mock",
+      provider: new MockProvider(combinedScript),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+      onApprovalNeeded: async () => ({ approved: true }),
+    });
+    for await (const _event of session.run("task A")) {
+      /* drain */
+    }
+    const hashAfterTaskA = session.getCheckpointHash();
+    check("task A's checkpoint succeeded", typeof hashAfterTaskA === "string" && hashAfterTaskA.length > 0);
+
+    // Corrupt HEAD so createCheckpoint's own `rev-parse HEAD` fails for
+    // task B (the same failure path as "no commits yet") — isGitRepo()
+    // still returns true (it doesn't read HEAD), so this is a faithful
+    // real-world "checkpoint attempt failed, but write still succeeds"
+    // scenario, not a mock.
+    await fs.writeFile(path.join(repo2, ".git", "HEAD"), "corrupted\n", "utf-8");
+
+    for await (const _event of session.run("task B")) {
+      /* drain */
+    }
+    const writtenB = await fs.readFile(path.join(repo2, "b.js"), "utf-8").catch(() => null);
+    check("task B's write still succeeded despite the checkpoint attempt failing", writtenB === "new file from task B\n");
+    check(
+      "getCheckpointHash() is now null, NOT task A's stale hash — 'revert this task' must not silently wipe out task A too",
+      session.getCheckpointHash() === null
+    );
+
+    await fs.rm(repo2, { recursive: true, force: true });
+  }
+
   await fs.rm(repo, { recursive: true, force: true });
 })();
 
@@ -835,6 +956,90 @@ await (async () => {
   check("the file on disk in the NEW workspace actually got edited", writtenContent === "edited");
 
   await fs.rm(tmpDir, { recursive: true, force: true });
+})();
+
+console.log("\nsetWorkspaceRoot clears a stale checkpoint hash (correctness audit: session Medium #3):");
+await (async () => {
+  // A checkpoint hash is a commit hash inside a SPECIFIC git repo — moving
+  // to a different workspace mid-session (via "Edit settings…") without
+  // clearing it would leave revertSessionCheckpoint trying to check out a
+  // commit hash from the OLD repo inside the NEW one, which almost always
+  // throws (unknown revision / not the right repo).
+  const execFileAsync = promisify(execFile);
+  const git = async (cwd: string, args: string[]) => (await execFileAsync("git", args, { cwd })).stdout.trim();
+  const repoA = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-workspaceswitch-a-"));
+  await git(repoA, ["init", "-q"]);
+  await git(repoA, ["config", "user.email", "t@t.com"]);
+  await git(repoA, ["config", "user.name", "T"]);
+  await fs.writeFile(path.join(repoA, "a.txt"), "v1\n", "utf-8");
+  await git(repoA, ["add", "-A"]);
+  await git(repoA, ["commit", "-q", "-m", "initial"]);
+  const repoB = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-workspaceswitch-b-"));
+
+  const script: ChatResponse[] = [
+    { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v2\n" } }] } },
+    { turn: { type: "final", content: "done" } },
+  ];
+  const session = new AgentSession({
+    workspaceRoot: repoA,
+    model: "mock",
+    provider: new MockProvider(script),
+    tools: defaultToolRegistry(),
+    permissionMode: "ACCEPT_EDITS",
+    onApprovalNeeded: async () => ({ approved: true }),
+  });
+  for await (const _event of session.run("edit a.txt")) {
+    /* drain */
+  }
+  check("a real checkpoint exists in repoA before switching workspace", typeof session.getCheckpointHash() === "string");
+
+  session.setWorkspaceRoot(repoB);
+  check("getCheckpointHash() is cleared to null after switching workspace — the old hash belongs to a different repo", session.getCheckpointHash() === null);
+
+  await fs.rm(repoA, { recursive: true, force: true });
+  await fs.rm(repoB, { recursive: true, force: true });
+})();
+
+console.log("\nsetWorkspaceRoot is a no-op on the checkpoint when the path hasn't actually changed (final-review finding I1):");
+await (async () => {
+  // renderer.ts's applySessionEdits ("Edit settings…") always passes
+  // workspaceRoot to updateLiveSessionSettings, even when the user only
+  // changed mode/planFirst and the path is identical to what it already
+  // was — so setWorkspaceRoot gets called on every settings apply, not
+  // just an actual workspace switch. Unconditionally clearing the
+  // checkpoint there wiped Revert/"View changes" after a PLAIN mode
+  // change, with no workspace switch involved at all.
+  const execFileAsync = promisify(execFile);
+  const git = async (cwd: string, args: string[]) => (await execFileAsync("git", args, { cwd })).stdout.trim();
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-workspace-samepath-"));
+  await git(repo, ["init", "-q"]);
+  await git(repo, ["config", "user.email", "t@t.com"]);
+  await git(repo, ["config", "user.name", "T"]);
+  await fs.writeFile(path.join(repo, "a.txt"), "v1\n", "utf-8");
+  await git(repo, ["add", "-A"]);
+  await git(repo, ["commit", "-q", "-m", "initial"]);
+
+  const script: ChatResponse[] = [
+    { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v2\n" } }] } },
+    { turn: { type: "final", content: "done" } },
+  ];
+  const session = new AgentSession({
+    workspaceRoot: repo,
+    model: "mock",
+    provider: new MockProvider(script),
+    tools: defaultToolRegistry(),
+    permissionMode: "ACCEPT_EDITS",
+    onApprovalNeeded: async () => ({ approved: true }),
+  });
+  for await (const _event of session.run("edit a.txt")) {
+    /* drain */
+  }
+  check("a real checkpoint exists before the settings apply", typeof session.getCheckpointHash() === "string");
+
+  session.setWorkspaceRoot(repo); // identical path — simulates applySessionEdits' redundant pass-through
+  check("the checkpoint survives setWorkspaceRoot when the path is unchanged", session.getCheckpointHash() !== null);
+
+  await fs.rm(repo, { recursive: true, force: true });
 })();
 
 console.log("\nCorrective nudge — a 'create X' task answered with code-in-prose instead of a real edit_file call:");

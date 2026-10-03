@@ -1,6 +1,7 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ChatMessage, AgentEvent } from "./types.js";
+import type { ChatMessage, AgentEvent, PermissionMode } from "./types.js";
 
 export interface SessionIndexEntry {
   id: string;
@@ -8,6 +9,22 @@ export interface SessionIndexEntry {
   updatedAt: number;
   /** The Google account email that owns this session, or null for a session saved before ownership existed (or one that's never been signed-in-tagged). */
   ownerEmail: string | null;
+}
+
+/**
+ * Just enough to rebuild a ModelProvider config on resume — deliberately
+ * NEVER includes an API key. Every cloud-provider API key is re-resolved
+ * fresh from its own encrypted settings file at session-start time
+ * regardless of what's in this config (see main.ts's "agent:start-session"
+ * handler, which the renderer's own provider config never carries a key
+ * for either) — persisting one here would duplicate a secret into every
+ * session record and cloud-synced copy for no benefit.
+ */
+export interface PersistedProviderConfig {
+  kind: "openai-compatible" | "embedded" | "anthropic" | "openai" | "gemini" | "freellmapi";
+  model?: string;
+  baseUrl?: string;
+  size?: string;
 }
 
 export interface SessionRecord {
@@ -19,6 +36,52 @@ export interface SessionRecord {
   updatedAt: number;
   /** The Google account email that owns this session, or null. See SessionIndexEntry. */
   ownerEmail: string | null;
+  /** Correctness audit finding (session High #1): without these, resuming a session after an app restart silently fell back to whatever the setup form currently showed — including a PLAN-mode/no-planFirst session silently resuming in DEFAULT mode with no plan gating. Null on a record saved before these fields existed; the resume caller falls back to its own default in that case, same as ownerEmail's existing `?? null` pattern. */
+  provider: PersistedProviderConfig | null;
+  mode: PermissionMode | null;
+  planFirst: boolean;
+  /** Correctness audit finding (session High #2): without this, a checkpoint never survives an app restart — "Revert this task" silently becomes unavailable the moment the app is closed and reopened, with no indication to the user that the capability (and the now-or-never window to use it) just disappeared. */
+  checkpointHash: string | null;
+  /**
+   * Final-review finding C3: a checkpoint hash is a commit inside a
+   * SPECIFIC git repo — nothing paired it with WHICH workspace that was,
+   * so a resumed session (which runs in whatever workspace the tab
+   * currently shows, since SessionRecord never persisted workspaceRoot
+   * itself) or a provider-change mid-session restart could carry an old
+   * checkpoint hash into an unrelated current workspace. Usually that
+   * just makes `git checkout <hash>` fail ("unknown revision"), but git
+   * worktrees of the same repository share one object database — there,
+   * the hash can resolve successfully in a DIFFERENT worktree than the
+   * one it was made in, and reverting would overwrite that worktree's
+   * files (including deleting untracked ones) instead of refusing
+   * outright. sessionRegistry.ts's startSession only restores
+   * checkpointHash when this matches the workspace the session is
+   * actually about to run in; null (a legacy record saved before this
+   * field existed) is treated as "unknown" and never matches, same safe
+   * default as discarding the checkpoint outright.
+   */
+  checkpointWorkspaceRoot: string | null;
+  /**
+   * Correctness audit finding (session Medium #1): cloud sync's merge used
+   * to compare `updatedAt` directly across devices — two wall clocks that
+   * can disagree (clock skew), which can make an actually-older edit look
+   * newer and silently overwrite a genuinely newer one. This checkpoint
+   * captures, as of the last successful push or pull for this session on
+   * THIS device, Drive's own server-assigned modifiedTime for the remote
+   * copy and this device's own updatedAt at that moment — comparing a
+   * CURRENT value against this device's own PRIOR observation of itself
+   * never compares two different devices' clocks against each other.
+   * Null for a record never reconciled under this scheme yet (a
+   * pre-migration record, or one that's never touched cloud sync at all);
+   * cloudSync.ts's reconcileSessions falls back to the previous
+   * updatedAt-vs-updatedAt comparison for exactly one pass in that case,
+   * then seeds this field so every subsequent pass uses the robust path.
+   * Deliberately NOT uploaded to Drive (see cloudSync.ts's
+   * prepareRecordForUpload) — it's this device's own bookkeeping
+   * about ITS OWN last sync, and would corrupt another device's identical
+   * bookkeeping about its own if it were ever pulled down.
+   */
+  lastSyncCheckpoint: { remoteModifiedTime: string; localUpdatedAt: number } | null;
 }
 
 function indexPath(sessionsDir: string): string {
@@ -33,18 +96,71 @@ function recordPath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.json`);
 }
 
-async function writeIndex(sessionsDir: string, entries: SessionIndexEntry[]): Promise<void> {
-  await fs.mkdir(sessionsDir, { recursive: true });
-  // Security audit finding M3: a session's own history can contain file
-  // contents the agent read mid-task (which may include secrets), yet
-  // this was the only place in the codebase writing to disk with no
-  // explicit mode — every settings file holding an API key already uses
-  // 0600 (see anthropicSettings.ts etc.). Match that standard here too.
-  await fs.writeFile(indexPath(sessionsDir), JSON.stringify(entries, null, 2), { encoding: "utf-8", mode: 0o600 });
+/**
+ * Correctness audit finding (session Medium #1 fallout): a plain
+ * fs.writeFile() truncates the destination before writing its new
+ * content, leaving a real window where a concurrent reader can see an
+ * empty or partial file. That stopped being a purely theoretical risk
+ * once cloudSync.ts's syncUploadToCloud started doing a SECOND
+ * saveSession() for the same session shortly after the first — a
+ * concurrent loadSessionRecord() for that same id could intermittently
+ * read mid-write and come back null even though the record had just been
+ * saved correctly. Writing to a temp file in the SAME directory (so the
+ * later rename stays on one filesystem, where POSIX guarantees it's
+ * atomic) and renaming it into place means a reader only ever sees the
+ * complete old file or the complete new one, never a partial write.
+ *
+ * Security audit finding M3: a session's own history can contain file
+ * contents the agent read mid-task (which may include secrets) — every
+ * settings file holding an API key already uses 0600 (see
+ * anthropicSettings.ts etc.); the temp file is created with the same
+ * mode so the final renamed-into-place file keeps it (rename doesn't
+ * change a file's own permissions).
+ */
+async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  const tmpPath = `${filePath}.tmp-${crypto.randomUUID()}`;
+  await fs.writeFile(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
+  await fs.rename(tmpPath, filePath);
 }
 
-/** Reconstructs index.json from the directory listing — used when the index is missing or corrupted. Any individual record file that also fails to parse is skipped, not fatal. */
-export async function rebuildIndex(sessionsDir: string): Promise<SessionIndexEntry[]> {
+async function writeIndexRaw(sessionsDir: string, entries: SessionIndexEntry[]): Promise<void> {
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await writeFileAtomic(indexPath(sessionsDir), JSON.stringify(entries, null, 2));
+}
+
+/**
+ * Final-review finding C2: every index mutation used to do its own
+ * unsynchronized read-modify-write of the WHOLE index.json — atomic
+ * rename (writeFileAtomic) makes any SINGLE write safe, but does nothing
+ * for two overlapping read-modify-write sequences for DIFFERENT session
+ * ids: both read the same starting index, both independently add/remove
+ * their own entry, and whichever writes last wins, silently dropping the
+ * other's change. cloudSync.ts's reconcileSessions deliberately runs every
+ * session's sync concurrently (Promise.all) for speed, so this was a real,
+ * frequently-hit path (confirmed via a live repro: 8 concurrent
+ * saveSession calls for different ids left only 1 in the index), not a
+ * hypothetical one. A simple per-directory promise-chain lock serializes
+ * just the index's own read-modify-write sequence — record files
+ * themselves stay fully concurrent, so this doesn't undo the performance
+ * win reconcileSessions' concurrency was built for.
+ */
+const indexLocks = new Map<string, Promise<void>>();
+
+function withIndexLock<T>(sessionsDir: string, fn: () => Promise<T>): Promise<T> {
+  const prior = indexLocks.get(sessionsDir) ?? Promise.resolve();
+  const run = prior.then(fn, fn);
+  indexLocks.set(
+    sessionsDir,
+    run.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return run;
+}
+
+/** Scans the directory and rebuilds index entries from each record file directly — the self-healing path for a missing/corrupted index.json. Never acquires the index lock or writes anything itself; every caller (both below) does both within its own single lock acquisition, so this can be safely called from inside an already-locked section without deadlocking. */
+async function buildIndexFromDisk(sessionsDir: string): Promise<SessionIndexEntry[]> {
   let files: string[];
   try {
     files = await fs.readdir(sessionsDir);
@@ -54,14 +170,22 @@ export async function rebuildIndex(sessionsDir: string): Promise<SessionIndexEnt
 
   const entries: SessionIndexEntry[] = [];
   for (const file of files) {
-    if (file === "index.json" || !file.endsWith(".json")) continue;
+    if (file === "index.json" || !file.endsWith(".json") || file.includes(".tmp-")) continue;
     const id = file.slice(0, -".json".length);
     const record = await loadSessionRecord(sessionsDir, id);
     if (record) entries.push({ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail });
   }
   entries.sort((a, b) => b.updatedAt - a.updatedAt);
-  await writeIndex(sessionsDir, entries);
   return entries;
+}
+
+/** Reconstructs index.json from the directory listing — used when the index is missing or corrupted. Any individual record file that also fails to parse is skipped, not fatal. Acquires the index lock for its own read+write, so it's safe to call concurrently with saveSession/deleteSession for the same directory. */
+export async function rebuildIndex(sessionsDir: string): Promise<SessionIndexEntry[]> {
+  return withIndexLock(sessionsDir, async () => {
+    const entries = await buildIndexFromDisk(sessionsDir);
+    await writeIndexRaw(sessionsDir, entries);
+    return entries;
+  });
 }
 
 /**
@@ -78,25 +202,47 @@ export async function listSessions(sessionsDir: string, ownerEmail?: string | nu
   return entries.filter((e) => e.ownerEmail === ownerEmail);
 }
 
-async function listAllSessions(sessionsDir: string): Promise<SessionIndexEntry[]> {
-  try {
-    const raw = await fs.readFile(indexPath(sessionsDir), "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return rebuildIndex(sessionsDir);
-    const isValid = parsed.every(
+function isValidIndexArray(parsed: unknown): parsed is SessionIndexEntry[] {
+  return (
+    Array.isArray(parsed) &&
+    parsed.every(
       (e) =>
         !!e &&
         typeof e === "object" &&
         typeof (e as SessionIndexEntry).id === "string" &&
         typeof (e as SessionIndexEntry).title === "string" &&
         typeof (e as SessionIndexEntry).updatedAt === "number"
-    );
-    if (!isValid) return rebuildIndex(sessionsDir);
+    )
+  );
+}
+
+/** Reads index.json WITHOUT acquiring the index lock or persisting any self-heal — used by saveSession/deleteSession, which already hold the lock for their own read-modify-write and are about to write their own complete, corrected snapshot anyway. Calling the lock-acquiring rebuildIndex()/listAllSessions() from inside an already-locked section would deadlock against itself. */
+async function readIndexRaw(sessionsDir: string): Promise<SessionIndexEntry[]> {
+  try {
+    const raw = await fs.readFile(indexPath(sessionsDir), "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isValidIndexArray(parsed)) return buildIndexFromDisk(sessionsDir);
     // ownerEmail is normalized here rather than folded into the validity
     // check above so an index.json written before ownership existed isn't
     // treated as corrupt and rebuilt unnecessarily — it's just missing a
     // field that defaults to null.
-    return (parsed as SessionIndexEntry[]).map((e) => ({ ...e, ownerEmail: e.ownerEmail ?? null }));
+    return parsed.map((e) => ({ ...e, ownerEmail: e.ownerEmail ?? null }));
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return [];
+    return buildIndexFromDisk(sessionsDir);
+  }
+}
+
+async function listAllSessions(sessionsDir: string): Promise<SessionIndexEntry[]> {
+  try {
+    const raw = await fs.readFile(indexPath(sessionsDir), "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isValidIndexArray(parsed)) return rebuildIndex(sessionsDir);
+    // ownerEmail is normalized here rather than folded into the validity
+    // check above so an index.json written before ownership existed isn't
+    // treated as corrupt and rebuilt unnecessarily — it's just missing a
+    // field that defaults to null.
+    return parsed.map((e) => ({ ...e, ownerEmail: e.ownerEmail ?? null }));
   } catch (err: any) {
     if (err?.code === "ENOENT") return [];
     return rebuildIndex(sessionsDir);
@@ -127,6 +273,12 @@ export async function loadSessionRecord(sessionsDir: string, id: string): Promis
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
       ownerEmail: r.ownerEmail ?? null,
+      provider: r.provider ?? null,
+      mode: r.mode ?? null,
+      planFirst: r.planFirst ?? false,
+      checkpointHash: r.checkpointHash ?? null,
+      checkpointWorkspaceRoot: r.checkpointWorkspaceRoot ?? null,
+      lastSyncCheckpoint: r.lastSyncCheckpoint ?? null,
     };
   } catch {
     return null;
@@ -135,22 +287,30 @@ export async function loadSessionRecord(sessionsDir: string, id: string): Promis
 
 export async function saveSession(sessionsDir: string, record: SessionRecord): Promise<void> {
   await fs.mkdir(sessionsDir, { recursive: true });
-  await fs.writeFile(recordPath(sessionsDir, record.id), JSON.stringify(record, null, 2), { encoding: "utf-8", mode: 0o600 });
+  await writeFileAtomic(recordPath(sessionsDir, record.id), JSON.stringify(record, null, 2));
 
-  const entries = await listAllSessions(sessionsDir);
-  const withoutThis = entries.filter((e) => e.id !== record.id);
-  withoutThis.push({ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail });
-  withoutThis.sort((a, b) => b.updatedAt - a.updatedAt);
-  await writeIndex(sessionsDir, withoutThis);
+  // The index's own read-modify-write is the one part of this function
+  // that genuinely races against other concurrent callers (see
+  // withIndexLock's doc comment, final-review finding C2) — the record
+  // file write above does not, so it stays outside the lock.
+  await withIndexLock(sessionsDir, async () => {
+    const entries = await readIndexRaw(sessionsDir);
+    const withoutThis = entries.filter((e) => e.id !== record.id);
+    withoutThis.push({ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail });
+    withoutThis.sort((a, b) => b.updatedAt - a.updatedAt);
+    await writeIndexRaw(sessionsDir, withoutThis);
+  });
 }
 
 export async function deleteSession(sessionsDir: string, id: string): Promise<void> {
   await fs.rm(recordPath(sessionsDir, id), { force: true });
-  const entries = await listAllSessions(sessionsDir);
-  await writeIndex(
-    sessionsDir,
-    entries.filter((e) => e.id !== id)
-  );
+  await withIndexLock(sessionsDir, async () => {
+    const entries = await readIndexRaw(sessionsDir);
+    await writeIndexRaw(
+      sessionsDir,
+      entries.filter((e) => e.id !== id)
+    );
+  });
 }
 
 /**

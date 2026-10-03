@@ -45,7 +45,19 @@ export async function createCheckpoint(workspaceRoot: string): Promise<string | 
     return null; // no commits yet
   }
 
-  const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-checkpoint-"));
+  // Functional-correctness audit finding (agent core High #1): mkdtemp
+  // itself must be inside the same net as every other failure mode below
+  // (a read-only/quota-exhausted TMPDIR is a realistic sandboxed/
+  // containerized-environment failure) — this function's own contract is
+  // "never throws, always degrades to null," and a caller (agent.ts)
+  // relies on that to let a task proceed without a checkpoint rather than
+  // aborting outright.
+  let scratchDir: string;
+  try {
+    scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-checkpoint-"));
+  } catch {
+    return null;
+  }
   const scratchIndex = path.join(scratchDir, "index");
   try {
     const env = { ...process.env, GIT_INDEX_FILE: scratchIndex };

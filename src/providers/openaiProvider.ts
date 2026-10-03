@@ -77,6 +77,11 @@ export class OpenAIProvider implements ModelProvider {
       delete body.max_tokens;
     }
     body.stream = true;
+    // Correctness audit finding (provider High #1): OpenAI's real API
+    // only includes a usage field on a streamed chunk when this is set —
+    // without it, chat() reports real cost but chatStream() silently
+    // never does, even though it's the exact same billed request.
+    body.stream_options = { include_usage: true };
 
     const res = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
       method: "POST",

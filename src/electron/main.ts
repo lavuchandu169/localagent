@@ -13,7 +13,7 @@ import os from "node:os";
 import fsPromises from "node:fs/promises";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import type { AttachedImage, AttachedText, PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
@@ -153,6 +153,11 @@ app.whenReady().then(async () => {
   }
 
   const getGithubToken = () => getGithubAccessToken(githubAuthFilePath, storageCrypto);
+  // Correctness audit finding (GitHub Medium #2): a 401 from a GitHub tool
+  // call means the stored token itself is dead (revoked on GitHub's side,
+  // most likely) — clear the stored identity so Settings stops claiming
+  // "Connected as @x" and the user gets a real path back to reconnecting.
+  const onGithubUnauthorized = () => clearStoredGithubIdentity(githubAuthFilePath);
 
   // Broadcasts to every live window rather than a single captured `win`
   // reference: on macOS, closing the window destroys that BrowserWindow
@@ -220,6 +225,21 @@ app.whenReady().then(async () => {
   }
 
   async function connectAndTrack(config: McpServerConfig): Promise<McpConnection> {
+    // Correctness audit finding (MCP Low/Medium): a server's entry used to
+    // appear in mcpConnections (and therefore in agent:list-mcp-servers'
+    // response) only once connectMcpServer's whole promise resolved —
+    // connecting or failed both arrive in the SAME resolution, so there
+    // was never a window where a caller could observe "connecting" for a
+    // server that hadn't finished yet. At app startup, where every enabled
+    // server connects without anything awaiting the result (see the
+    // fire-and-forget chain below), that meant opening the MCP panel
+    // during the first several seconds after launch showed a server as
+    // simply MISSING rather than "connecting" — it would then pop into
+    // existence once the connect settled. Seeding a "connecting" entry
+    // synchronously, before the first await, closes that window: it's the
+    // same object connectMcpServer's onStatusChange callback already looks
+    // up and mutates in place below.
+    mcpConnections = mcpConnections.filter((c) => c.config.id !== config.id).concat({ config, status: { state: "connecting" }, client: undefined, tools: [] });
     const connection = await connectMcpServer(config, (status: McpServerStatus) => {
       const existing = mcpConnections.find((c) => c.config.id === config.id);
       if (existing) existing.status = status;
@@ -291,14 +311,26 @@ app.whenReady().then(async () => {
     broadcastToAllWindows("agent:cloud-sync-scope-warning");
   }
 
-  const registry = createSessionRegistry(sessionsDir, {
-    getAccessToken: async () => {
-      const { clientId, clientSecret } = await resolveGoogleCredentials(settingsFilePath, storageCrypto);
-      return getFreshAccessToken(authFilePath, clientId, clientSecret, storageCrypto);
+  const registry = createSessionRegistry(
+    sessionsDir,
+    {
+      getAccessToken: async () => {
+        const { clientId, clientSecret } = await resolveGoogleCredentials(settingsFilePath, storageCrypto);
+        return getFreshAccessToken(authFilePath, clientId, clientSecret, storageCrypto);
+      },
+      onScopeError: notifyScopeWarning,
+      getOwnerEmail: () => getStoredEmail(authFilePath, storageCrypto),
     },
-    onScopeError: notifyScopeWarning,
-    getOwnerEmail: () => getStoredEmail(authFilePath, storageCrypto),
-  });
+    // Correctness audit finding (session Medium #4): rebroadcasts the
+    // existing sessions-changed signal whenever any session's pending
+    // approval starts, gets answered, or is swept on cancel/delete — the
+    // renderer's own onSessionsChanged listener already refreshes the
+    // sidebar on this event, so this is the only wiring needed to keep the
+    // "waiting for approval" indicator (agent:list-sessions' new
+    // waitingForApproval field) live, including for a session with no tab
+    // currently open.
+    () => broadcastToAllWindows("agent:sessions-changed")
+  );
 
   // Tracks the AbortController for whichever agent:start-session call is
   // currently in flight, so agent:cancel-download has something to abort.
@@ -353,7 +385,7 @@ app.whenReady().then(async () => {
         onDownloadProgress: (status) => event.sender.send("agent:model-progress", status),
         signal: controller.signal,
         resume,
-        extraTools: [...currentMcpTools(), createGithubCreateRepoTool(getGithubToken), createGithubCreatePrTool(getGithubToken)],
+        getExtraTools: () => [...currentMcpTools(), createGithubCreateRepoTool(getGithubToken, onGithubUnauthorized), createGithubCreatePrTool(getGithubToken, onGithubUnauthorized)],
         settingsDir: app.getPath("userData"),
         storageCrypto,
         getGithubToken,
@@ -496,8 +528,8 @@ app.whenReady().then(async () => {
         const reconcileCreds = await resolveGoogleCredentials(settingsFilePath, storageCrypto);
         const token = await getFreshAccessToken(authFilePath, reconcileCreds.clientId, reconcileCreds.clientSecret, storageCrypto);
         if (token) {
-          const { pulled, pushed } = await reconcileSessions(sessionsDir, token);
-          console.log(`[cloudSync] reconcile after sign-in: pulled ${pulled}, pushed ${pushed}`);
+          const { pulled, pushed, deletedLocal } = await reconcileSessions(sessionsDir, token);
+          console.log(`[cloudSync] reconcile after sign-in: pulled ${pulled}, pushed ${pushed}, deleted locally ${deletedLocal}`);
         } else {
           console.warn("[cloudSync] sign-in succeeded but no access token was available for reconcile — skipping.");
         }
@@ -720,13 +752,17 @@ app.whenReady().then(async () => {
   // Session history is gated by the signed-in account: signed out (or no
   // account ever stored) shows nothing, matching the app's per-account
   // model rather than exposing every local session unconditionally.
+  // withPendingApprovalEntries (correctness audit: session Medium #4;
+  // final-review finding I4) merges live waitingForApproval state onto
+  // the disk-backed list and synthesizes a row for a brand-new session
+  // that has no disk record yet.
   ipcMain.handle("agent:list-sessions", async () => {
     const email = await getStoredEmail(authFilePath, storageCrypto);
-    return email ? listSessions(sessionsDir, email) : [];
+    return email ? withPendingApprovalEntries(registry, await listSessions(sessionsDir, email), email) : [];
   });
   ipcMain.handle("agent:search-sessions", async (_event, query: string) => {
     const email = await getStoredEmail(authFilePath, storageCrypto);
-    return email ? searchSessions(sessionsDir, query, email) : [];
+    return email ? withPendingApprovalEntries(registry, await searchSessions(sessionsDir, query, email), email, query) : [];
   });
   ipcMain.handle("agent:load-session", async (_event, id: string) => {
     try {

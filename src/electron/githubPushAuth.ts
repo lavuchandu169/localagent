@@ -14,6 +14,18 @@ export function isUnauthenticatedGithubRemote(url: string): boolean {
   return true;
 }
 
+/** Correctness audit finding (GitHub Medium #1): these flags consume a
+ * SEPARATE following token as their own value (confirmed against real
+ * git), not just a token starting with "-" of their own — `-o ci.skip`
+ * is TWO tokens, and the old "skip anything starting with -" logic
+ * misread "ci.skip" itself as the remote name, which doesn't exist,
+ * silently disabling authenticated push for a push that genuinely needs
+ * it. The `=` form (`--push-option=ci.skip`) is already a single token
+ * starting with "-" and needs no special handling. Unlike --repo (below),
+ * none of these flags' VALUES are themselves a remote/repository name —
+ * the real remote name, if any, is still a later, separate token. */
+const GIT_PUSH_FLAGS_WITH_UNRELATED_VALUE = new Set(["-o", "--push-option", "--receive-pack", "--exec"]);
+
 /** Mirrors git's own default: the named remote right after "push" (skipping
  * leading flags like -u/--set-upstream), or "origin" if none is named. Good
  * enough for the common invocation shapes this feature targets — it never
@@ -24,9 +36,17 @@ export function isUnauthenticatedGithubRemote(url: string): boolean {
 export function parseGitPushRemoteName(command: string): string {
   const afterPush = command.trim().replace(/^git\s+push\s*/, "");
   const tokens = afterPush.split(/\s+/).filter(Boolean);
-  for (const token of tokens) {
-    if (token.startsWith("-")) continue;
-    return token;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    // Final-review finding I5: --repo is NOT like -o/--push-option — its
+    // value IS the destination repository itself (`git push --repo
+    // upstream main` pushes to "upstream", same as `git push upstream
+    // main`), not an unrelated value to skip past while still looking for
+    // a remote name later in the command.
+    if (token === "--repo") return tokens[i + 1] ?? "origin";
+    if (token.startsWith("--repo=")) return token.slice("--repo=".length) || "origin";
+    if (!token.startsWith("-")) return token;
+    if (GIT_PUSH_FLAGS_WITH_UNRELATED_VALUE.has(token)) i++; // also skip this flag's own separate value token
   }
   return "origin";
 }

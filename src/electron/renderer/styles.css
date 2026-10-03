@@ -300,6 +300,16 @@ body {
   color: var(--danger);
 }
 
+/* Correctness audit finding (session Medium #4): a session left waiting
+   on a permission/plan approval with no tab open to answer it — visible
+   regardless of which tab (if any) is currently open. */
+.session-item-pending-approval {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--accent);
+}
+
 #app-main {
   flex: 1;
   min-width: 0;

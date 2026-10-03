@@ -21,7 +21,9 @@ function validateGithubIdentifier(value: string, fieldName: string): string | nu
   return null;
 }
 
-async function githubApiRequest<T>(getToken: GetToken, method: string, path: string, body?: unknown): Promise<ToolResult<T>> {
+type OnUnauthorized = () => Promise<void>;
+
+async function githubApiRequest<T>(getToken: GetToken, method: string, path: string, body?: unknown, onUnauthorized?: OnUnauthorized): Promise<ToolResult<T>> {
   const token = await getToken();
   if (!token) return { ok: false, output: null, error: NOT_CONNECTED_ERROR };
   const response = await fetch(`https://api.github.com${path}`, {
@@ -36,6 +38,12 @@ async function githubApiRequest<T>(getToken: GetToken, method: string, path: str
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = typeof (data as any)?.message === "string" ? (data as any).message : `GitHub API request failed: ${response.status} ${response.statusText}`;
+    // Correctness audit finding (GitHub Medium #2): a real 401 means the
+    // stored token itself is bad (revoked on GitHub's side, most likely) —
+    // nothing else in the app ever finds that out otherwise, so Settings
+    // keeps showing "Connected as @x" indefinitely and every future use
+    // fails the same way with no path back to reconnecting.
+    if (response.status === 401 && onUnauthorized) await onUnauthorized();
     return { ok: false, output: null, error: message };
   }
   return { ok: true, output: data as T };
@@ -53,7 +61,7 @@ interface CreateRepoOutput {
   htmlUrl: string;
 }
 
-export function createGithubCreateRepoTool(getToken: GetToken): Tool<CreateRepoInput, CreateRepoOutput> {
+export function createGithubCreateRepoTool(getToken: GetToken, onUnauthorized?: OnUnauthorized): Tool<CreateRepoInput, CreateRepoOutput> {
   return {
     name: "github_create_repo",
     description: "Creates a new GitHub repository under the connected account (or an org, if specified). Requires a connected GitHub account.",
@@ -76,7 +84,7 @@ export function createGithubCreateRepoTool(getToken: GetToken): Tool<CreateRepoI
       const result = await githubApiRequest<{ full_name: string; clone_url: string; html_url: string }>(getToken, "POST", path, {
         name: input.name,
         private: input.private,
-      });
+      }, onUnauthorized);
       if (!result.ok || !result.output) return result as unknown as ToolResult<CreateRepoOutput>;
       return {
         ok: true,
@@ -100,7 +108,7 @@ interface CreatePrOutput {
   number: number;
 }
 
-export function createGithubCreatePrTool(getToken: GetToken): Tool<CreatePrInput, CreatePrOutput> {
+export function createGithubCreatePrTool(getToken: GetToken, onUnauthorized?: OnUnauthorized): Tool<CreatePrInput, CreatePrOutput> {
   return {
     name: "github_create_pr",
     description: "Opens a pull request on GitHub from an already-pushed head branch against a base branch. Requires a connected GitHub account.",
@@ -127,7 +135,7 @@ export function createGithubCreatePrTool(getToken: GetToken): Tool<CreatePrInput
         head: input.head,
         title: input.title,
         body: input.body,
-      });
+      }, onUnauthorized);
       if (!result.ok || !result.output) return result as unknown as ToolResult<CreatePrOutput>;
       return { ok: true, output: { url: result.output.html_url, number: result.output.number } };
     },

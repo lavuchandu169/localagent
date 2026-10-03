@@ -1,5 +1,5 @@
 // src/test/embeddedLlama.test.ts
-import { EmbeddedLlamaProvider, describeGpuStatus } from "../providers/embeddedLlama.js";
+import { EmbeddedLlamaProvider, describeGpuStatus, fromLlamaResult } from "../providers/embeddedLlama.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -140,6 +140,38 @@ console.log("\nEmbeddedLlamaProvider.chatStream discards text recovered as a fal
   const seen: any[] = [];
   for await (const e of provider.chatStream!({ model: "fake-model", messages: [{ role: "user", content: "hi" }] })) seen.push(e);
   check("a genuine text response never gets a spurious reset", !seen.some((e) => e.type === "reset"));
+}
+
+console.log("\nfromLlamaResult keeps explanatory text around a recovered fallback tool call, instead of discarding it (correctness audit: provider Medium #2):");
+{
+  // tryParseFallbackToolCall's own doc comment explicitly says the
+  // recovered call can have "its own explanatory prose before or after"
+  // — but the fallback branch returned a tool_calls turn with NO content
+  // field at all, silently dropping it (while the genuine-functionCalls
+  // branch three lines above keeps `content: result.response`).
+  const result = { response: 'I\'ll read that file now.\n{"name": "read_file", "arguments": {"path": "a.txt"}}' };
+  const response = fromLlamaResult(result);
+  check("still recovers the tool call correctly", response.turn.type === "tool_calls" && response.turn.toolCalls[0]?.name === "read_file");
+  check(
+    "the explanatory text BEFORE the recovered JSON is preserved as content, not silently dropped",
+    response.turn.type === "tool_calls" && typeof response.turn.content === "string" && response.turn.content.includes("I'll read that file now.")
+  );
+}
+{
+  const result = { response: '{"name": "read_file", "arguments": {"path": "a.txt"}}\nLet me take a look.' };
+  const response = fromLlamaResult(result);
+  check(
+    "explanatory text AFTER the recovered JSON is preserved too",
+    response.turn.type === "tool_calls" && typeof response.turn.content === "string" && response.turn.content.includes("Let me take a look.")
+  );
+}
+{
+  // Pure JSON with nothing around it must not fabricate an empty-string
+  // content — undefined, matching the genuine-functionCalls branch's own
+  // `result.response || undefined`.
+  const result = { response: '{"name": "read_file", "arguments": {"path": "a.txt"}}' };
+  const response = fromLlamaResult(result);
+  check("no surrounding text means content stays undefined, not an empty string", response.turn.type === "tool_calls" && response.turn.content === undefined);
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

@@ -32,6 +32,8 @@ export interface AgentSessionOptions {
   systemPrompt?: string;
   /** Seeds the conversation from a prior session's history instead of starting fresh with just the system prompt — used to resume a saved session. */
   initialMessages?: ChatMessage[];
+  /** Seeds checkpointHash from a prior session's persisted value — without this, resuming a session after an app restart always starts with no checkpoint (getCheckpointHash() === null), silently making "Revert this task" unavailable with no indication the capability (and the now-or-never window to use it) just disappeared (correctness audit: session High #2). */
+  initialCheckpointHash?: string | null;
   /** Called when a tool call needs ASK approval. Return `{ approved: true }` to allow; add `approvedHunkIds` to apply only some of an edit_file diff's hunks. */
   onApprovalNeeded?: (call: ToolCall) => Promise<PermissionResponse>;
   /**
@@ -131,7 +133,7 @@ export class AgentSession {
   private cancelled = false;
   /** Paths read_file has been attempted on this session, success or not — evidence the model actually looked before writing. */
   private readPaths = new Set<string>();
-  /** The most recent task's checkpoint (see createCheckpoint) — one per task, not a deep undo stack. Overwritten the next time a task actually makes its first non-read tool call; a task that never writes anything leaves the previous task's checkpoint as the current "revert" target. */
+  /** The most recent task's checkpoint (see createCheckpoint) — one per task, not a deep undo stack. Overwritten the next time a task actually makes its first non-read tool call; a task that never writes anything leaves the previous task's checkpoint as the current "revert" target. A task that DOES attempt one but the attempt fails clears this to null instead of leaving the previous task's hash in place — otherwise "revert this task" would silently discard that earlier task's work too (final-review finding: agent core High #2). */
   private checkpointHash: string | null = null;
   /** Reported once, right after the first successful provider call —
    * never re-checked on later turns. Only the embedded provider sets
@@ -219,6 +221,7 @@ export class AgentSession {
     } else {
       this.messages.push({ role: "system", content: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT });
     }
+    if (opts.initialCheckpointHash) this.checkpointHash = opts.initialCheckpointHash;
   }
 
   /** A copy of the current conversation history, safe to persist or inspect without risking mutation of the live session. */
@@ -233,7 +236,23 @@ export class AgentSession {
    * already in flight is undefined).
    */
   setWorkspaceRoot(workspaceRoot: string): void {
+    // Final-review finding I1: renderer.ts's applySessionEdits ("Edit
+    // settings…") always passes the CURRENT workspaceRoot through to this
+    // call, even when the user only changed mode/planFirst and never
+    // touched the workspace field — so this must only clear the
+    // checkpoint for an ACTUAL path change, or a plain mode-only edit
+    // silently wipes Revert/"View changes" with no workspace switch
+    // having happened at all.
+    const changed = workspaceRoot !== this.opts.workspaceRoot;
     this.opts.workspaceRoot = workspaceRoot;
+    if (!changed) return;
+    // Correctness audit finding (session Medium #3): a checkpoint hash is
+    // a commit inside a SPECIFIC git repo — carrying it over into a
+    // different workspace would make a later revert try to check out
+    // that hash inside the WRONG repo, which almost always throws
+    // (unknown revision / not a git repo at all). The old checkpoint is
+    // simply inapplicable here, not something to silently keep offering.
+    this.checkpointHash = null;
   }
 
   /** The workspace a checkpoint hash (see getCheckpointHash) needs to be reverted against — reads the same live opts.workspaceRoot setWorkspaceRoot mutates, so this is never stale even after a mid-session workspace edit. */
@@ -249,6 +268,16 @@ export class AgentSession {
   /** Updates whether the next task's first turn gets held for approval before executing — same in-place, between-tasks-only contract as setWorkspaceRoot/setPermissionMode. */
   setPlanFirst(planFirst: boolean): void {
     this.opts.planFirst = planFirst;
+  }
+
+  /** Reads the live permission mode — same never-stale contract as getWorkspaceRoot, so a caller persisting session state (sessionRegistry.ts) always sees the result of the most recent setPermissionMode, not whatever mode the session started with. */
+  getPermissionMode(): PermissionMode {
+    return this.permissions.getMode();
+  }
+
+  /** Reads the live planFirst setting — same never-stale contract as getPermissionMode. */
+  getPlanFirst(): boolean {
+    return this.opts.planFirst ?? false;
   }
 
   cancel() {
@@ -633,6 +662,16 @@ export class AgentSession {
           if (hash) {
             this.checkpointHash = hash;
             yield { type: "checkpoint.created", checkpointHash: hash };
+          } else {
+            // Functional-correctness audit finding (agent core High #2):
+            // this task is about to write real changes (that's why a
+            // checkpoint was attempted at all), but the attempt itself
+            // failed — leaving the PREVIOUS task's hash in place would
+            // make "revert this task" silently discard that earlier
+            // task's work too, with a success message that's factually
+            // wrong about what got reverted. Clearing it makes the revert
+            // affordance correctly unavailable for this task instead.
+            this.checkpointHash = null;
           }
         }
 

@@ -70,6 +70,16 @@ interface SessionIndexEntry {
   title: string;
   updatedAt: number;
   ownerEmail: string | null;
+  /** Correctness audit finding (session Medium #4): true while this session has an unanswered permission/plan approval no tab may be open to answer — e.g. its tab was closed mid-task. */
+  waitingForApproval: boolean;
+}
+
+/** Mirrors sessionStore.ts's PersistedProviderConfig — deliberately never carries an apiKey (see that type's own doc comment). */
+interface PersistedProviderConfig {
+  kind: "openai-compatible" | "embedded" | "anthropic" | "openai" | "gemini" | "freellmapi";
+  model?: string;
+  baseUrl?: string;
+  size?: string;
 }
 
 interface SessionRecord {
@@ -80,6 +90,13 @@ interface SessionRecord {
   createdAt: number;
   updatedAt: number;
   ownerEmail: string | null;
+  /** Correctness audit finding (session High #1, #2) — see sessionStore.ts's SessionRecord for why these exist and why they're nullable. */
+  provider: PersistedProviderConfig | null;
+  mode: PermissionMode | null;
+  planFirst: boolean;
+  checkpointHash: string | null;
+  /** Final-review finding C3 — see sessionStore.ts's SessionRecord for why this must travel paired with checkpointHash. */
+  checkpointWorkspaceRoot: string | null;
 }
 
 interface ResumePayload {
@@ -89,6 +106,8 @@ interface ResumePayload {
   title: string;
   createdAt: number;
   ownerEmail: string | null;
+  checkpointHash: string | null;
+  checkpointWorkspaceRoot: string | null;
 }
 
 /** The live, in-memory shape of an active session — see getLiveSessionSnapshot in sessionRegistry.ts. Unlike SessionRecord, this is available even for a session that hasn't run a task (and so hasn't hit disk) yet. */
@@ -105,7 +124,7 @@ type McpServerStatus = { state: "connecting" } | { state: "connected"; toolCount
 type McpServerView = { id: string; name: string; command: string; args: string[]; status: McpServerStatus };
 
 interface AgentBridge {
-  startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string }>;
+  startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string; checkpointHash: string | null }>;
   runTask(sessionId: string, task: string, attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }): Promise<void>;
   pickAttachments(limit?: number): Promise<{ attachments: PickedAttachment[]; errors: { name: string; error: string }[]; skipped: number }>;
   respondPermission(sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]): Promise<void>;
@@ -1081,6 +1100,13 @@ async function openSettingsPanel(): Promise<void> {
   geminiApiKeyInput.placeholder = currentGemini.hasKey ? "•••• saved" : "";
   geminiEnvOverrideNotice.hidden = !currentGemini.envOverride;
 
+  // Correctness audit finding (GitHub Medium #3): every other credential
+  // section above re-reads its real stored state on every open — GitHub's
+  // was only ever fetched once at launch, so a revocation detected mid-
+  // session (see onGithubUnauthorized in main.ts) or a connect/disconnect
+  // from another window never showed up here until the next app restart.
+  await refreshGithubStatus();
+
   await refreshDownloadedModelsList();
 }
 
@@ -1356,6 +1382,17 @@ for (const chip of document.querySelectorAll<HTMLButtonElement>(".example-prompt
 }
 
 const WHATS_NEW_SEEN_KEY = "localagent:whats-new-seen-version";
+
+/** Correctness audit finding (updateManager Low/Medium): on an unsigned Mac
+ * build, Squirrel.Mac's in-place apply step fails every time (the download
+ * itself succeeds, only the apply fails — see UpdateStatus's "fallback"
+ * doc comment), which resets updateReadyToInstall and lets the periodic
+ * 4-hour re-check (updateManager.ts) re-detect the SAME version and run
+ * through the whole cycle again. Before this, that re-detection forced the
+ * banner back open (see the state-transition check below) for a version
+ * the user already saw and dismissed, with nothing new to tell them.
+ * Per-viewer UI preference only, same reasoning as WHATS_NEW_SEEN_KEY. */
+const UPDATE_FALLBACK_DISMISSED_VERSION_KEY = "localagent:update-fallback-dismissed-version";
 
 /** Turns a changelog bullet's `` `code span` `` markdown into a real <code> element, leaving everything else as plain text — built via DOM nodes rather than innerHTML since this text ultimately comes from a file in the repo, not a trusted-but-still-worth-being-careful-with input. */
 function renderWhatsNewBullet(text: string): DocumentFragment {
@@ -1998,6 +2035,27 @@ function captureFormIntoTab(): void {
  */
 const startedSessionConfigs = new Map<string, { provider: ProviderConfig; mode: PermissionMode; planFirst: boolean }>();
 
+/** Converts a persisted, apiKey-free provider config back into a real ProviderConfig for resumeSession — null if the persisted shape is missing a field its own kind requires (a record saved before this existed, or any other unexpected shape), so the caller can fall back to the tab's current default rather than guessing wrong (correctness audit: session High #1). */
+function providerConfigFromPersisted(persisted: PersistedProviderConfig | null): ProviderConfig | null {
+  if (!persisted) return null;
+  switch (persisted.kind) {
+    case "openai-compatible":
+      return typeof persisted.baseUrl === "string" && typeof persisted.model === "string"
+        ? { kind: "openai-compatible", baseUrl: persisted.baseUrl, model: persisted.model }
+        : null;
+    case "embedded":
+      return typeof persisted.size === "string" ? { kind: "embedded", size: persisted.size } : null;
+    case "anthropic":
+    case "openai":
+    case "gemini":
+      return { kind: persisted.kind, model: persisted.model };
+    case "freellmapi":
+      return { kind: "freellmapi" };
+    default:
+      return null;
+  }
+}
+
 /** True only while `tab` is the one the shared DOM is currently painting. Every DOM write in beginSession that happens AFTER an await has to ask this first: the user is free to switch tabs while an embedded model spends 30s loading, and painting "Session started"/an unlocked composer/a collapsed setup form into whatever tab they switched to is exactly the leak this guards. The tab's OWN fields (sessionId, activeProvider, …) are still updated unconditionally, so switching back to it later renders the right state through the normal syncFormFromTab/clearAndReplayEventLog path. */
 function isActiveTab(tab: TabState): boolean {
   return tab.tabId === tabRegistry.activeTabId;
@@ -2129,8 +2187,16 @@ async function beginSession(tab: TabState, resume?: ResumePayload): Promise<void
       setSetupControlsDisabled(true);
       editSettingsBtn.textContent = "Edit settings…";
       editSettingsBtn.hidden = false;
-      revertCheckpointBtn.hidden = true; // a fresh/resumed/edited session has no checkpoint of its own yet — see the checkpoint.created event handler
-      viewChangesBtn.hidden = true;
+      // Final-review finding I3: a fresh session genuinely has no
+      // checkpoint yet (hidden, until the checkpoint.created event
+      // handler below shows it for real) — but a RESUMED session can
+      // already have one restored (see session High #2 / final-review
+      // C3), and hiding it unconditionally here left it invisible until
+      // a later tab-switch happened to replay the old task's
+      // checkpoint.created event from history. result.checkpointHash is
+      // the real, post-restore answer.
+      revertCheckpointBtn.hidden = result.checkpointHash === null;
+      viewChangesBtn.hidden = result.checkpointHash === null;
       // Chat-first once a session is running: the setup form collapses out of
       // the way, and Edit settings… brings it back (see editSettingsBtn's
       // handler for the reverse, and resetToSetup for the full teardown).
@@ -2186,19 +2252,34 @@ revertCheckpointBtn.addEventListener("click", () => {
   const tab = activeTab(tabRegistry);
   if (!tab?.sessionId) return;
   const idToRevert = tab.sessionId;
+  // Final-review finding I2: a revert and a new task share the SAME
+  // entry.running lock server-side (sessionRegistry.ts) — runTask now
+  // throws if a revert is still in flight. Disabling Send for the
+  // duration closes the race at the source, on top of the run-task
+  // handler's own defensive catch for any case that still slips through
+  // (e.g. a request already in flight the instant this click happens).
+  runTaskBtn.disabled = true;
   void withBusyLabel(revertCheckpointBtn, "Reverting…", async () => {
-    const result = await window.agent.revertCheckpoint(idToRevert);
-    if (result.ok) {
-      logLine("[checkpoint] Reverted — the workspace is back to how it was before this task.", "log-done");
-      revertCheckpointBtn.hidden = true;
-      // Nothing's changed anymore — reverting undid it all.
-      viewChangesBtn.hidden = true;
-      changesPanel.hidden = true;
-    } else {
-      // Same graceful-failure posture as everywhere else in this app: show
-      // the real reason (most likely "a task is running") rather than
-      // silently doing nothing or throwing.
-      logLine(`[checkpoint] Couldn't revert: ${result.error ?? "unknown error"}`, "log-error");
+    try {
+      const result = await window.agent.revertCheckpoint(idToRevert);
+      if (result.ok) {
+        logLine("[checkpoint] Reverted — the workspace is back to how it was before this task.", "log-done");
+        revertCheckpointBtn.hidden = true;
+        // Nothing's changed anymore — reverting undid it all.
+        viewChangesBtn.hidden = true;
+        changesPanel.hidden = true;
+      } else {
+        // Same graceful-failure posture as everywhere else in this app: show
+        // the real reason (most likely "a task is running") rather than
+        // silently doing nothing or throwing.
+        logLine(`[checkpoint] Couldn't revert: ${result.error ?? "unknown error"}`, "log-error");
+      }
+    } finally {
+      // Same "nothing past an await paints the shared DOM unless this tab
+      // is still the one it's showing" rule used elsewhere in this file
+      // (e.g. applySessionEdits) — the user may have switched tabs during
+      // the revert.
+      if (isActiveTab(tab) && !tab.running) runTaskBtn.disabled = false;
     }
   });
 });
@@ -2355,6 +2436,15 @@ async function applySessionEdits(): Promise<void> {
       if (isActiveTab(tab)) startError.textContent = "Couldn't read the current session to apply changes.";
       return;
     }
+    // Read BEFORE cancelSession disposes this session — the checkpoint
+    // itself is a git commit in the workspace, independent of which
+    // provider/model is editing it, so switching provider/model here
+    // must not silently drop "Revert this task" the same way an
+    // unrelated app-restart resume could (correctness audit: session
+    // High #2 — this is the same AgentSession continuing under a new
+    // provider, not a resume-after-restart, but the exact same
+    // checkpoint-preservation principle applies).
+    const checkpointHash = await window.agent.getCheckpoint(idBeingEdited);
     await window.agent.cancelSession(idBeingEdited);
     tab.sessionId = null;
     tab.running = false;
@@ -2370,6 +2460,15 @@ async function applySessionEdits(): Promise<void> {
       title: snapshot.title,
       createdAt: snapshot.createdAt,
       ownerEmail: snapshot.ownerEmail,
+      checkpointHash,
+      // Final-review finding C3: the workspace this checkpoint was
+      // actually read from (snapshot.workspaceRoot, the live session's
+      // CURRENT workspace at the moment getCheckpoint ran above) — if the
+      // user also changed the workspace field in this same edit, the new
+      // session starts somewhere this hash doesn't belong, and
+      // startSession must refuse to restore it rather than risk a revert
+      // against the wrong repo.
+      checkpointWorkspaceRoot: checkpointHash ? snapshot.workspaceRoot : null,
     });
   } finally {
     tab.editingSession = false;
@@ -2693,6 +2792,17 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
     const diskRecord = record!;
     tab.events = [...diskRecord.events];
     tab.title = diskRecord.title;
+    // Correctness audit finding (session High #1): without this, resuming
+    // a session after an app restart silently fell back to whatever the
+    // setup form currently showed — including a PLAN-mode/no-planFirst
+    // session silently resuming in DEFAULT mode with no plan gating.
+    // Falls back to the tab's current value (not a hardcoded default) for
+    // any field the disk record doesn't have (a legacy record, or a
+    // provider shape providerConfigFromPersisted couldn't convert).
+    const restoredProvider = providerConfigFromPersisted(diskRecord.provider);
+    if (restoredProvider) tab.provider = restoredProvider;
+    if (diskRecord.mode) tab.mode = diskRecord.mode;
+    tab.planFirst = diskRecord.planFirst;
     renderTabStrip();
     focusTab(tabRegistry, tab.tabId);
     renderTabStrip();
@@ -2706,6 +2816,14 @@ async function resumeSession(id: string, triggerEl?: HTMLButtonElement): Promise
       title: diskRecord.title,
       createdAt: diskRecord.createdAt,
       ownerEmail: diskRecord.ownerEmail,
+      // Correctness audit finding (session High #2): without this, a
+      // checkpoint never survives an app restart — "Revert this task"
+      // silently becomes unavailable with no indication to the user.
+      checkpointHash: diskRecord.checkpointHash,
+      // Final-review finding C3: paired with checkpointHash so
+      // startSession can refuse to restore it if this tab's workspace
+      // ends up differing from where the checkpoint was actually made.
+      checkpointWorkspaceRoot: diskRecord.checkpointWorkspaceRoot,
     });
     tab.title = diskRecord.title;
     renderTabStrip();
@@ -2732,8 +2850,24 @@ function renderSessionList(entries: SessionIndexEntry[]): void {
     label.type = "button";
     label.className = "session-item-label";
     label.textContent = entry.title;
-    label.title = entry.title;
     label.addEventListener("click", () => void resumeSession(entry.id, label));
+
+    // Correctness audit finding (session Medium #4): a session whose tab
+    // was closed mid-task while it was waiting on a permission/plan
+    // approval has no tab left that could ever answer it — it just sits
+    // blocked forever with nothing else in the UI showing that. This is
+    // the only place that state is visible regardless of whether any tab
+    // is open for the session.
+    if (entry.waitingForApproval) {
+      const badge = document.createElement("span");
+      badge.className = "session-item-pending-approval";
+      badge.textContent = "⏸";
+      badge.title = "Waiting for approval — reopen this session to respond";
+      item.appendChild(badge);
+      label.title = `${entry.title} (waiting for approval — reopen to respond)`;
+    } else {
+      label.title = entry.title;
+    }
 
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
@@ -2822,8 +2956,25 @@ runTaskBtn.addEventListener("click", async () => {
   tab.draftTask = "";
   taskInput.value = "";
   renderAttachmentChips();
-  await window.agent.runTask(tab.sessionId, task, attachments);
-  await refreshSessionList(sessionSearchInput.value.trim());
+  try {
+    await window.agent.runTask(tab.sessionId, task, attachments);
+    await refreshSessionList(sessionSearchInput.value.trim());
+  } catch (err) {
+    // Final-review finding I2: runTask now throws (rather than silently
+    // proceeding) when a revert is already in progress for this session —
+    // correct for sessionRegistry.ts's own in-flight-work guard, but
+    // nothing here used to catch it. Left unhandled, the tab stayed
+    // "running" forever (the button that would reset it never runs past
+    // the throwing await) with no way to send another task or tell what
+    // happened — restore the UI to a sendable state and surface why,
+    // matching this app's existing "show the real reason" posture (e.g.
+    // the revert button's own error path just above).
+    tab.running = false;
+    if (isActiveTab(tab)) {
+      runTaskBtn.disabled = false;
+      logLine(`✗ ${err instanceof Error ? err.message : String(err)}`, "log-error");
+    }
+  }
 });
 
 taskInput.addEventListener("keydown", (e) => {
@@ -2951,12 +3102,34 @@ window.agent.onCloudSyncScopeWarning(() => {
   authError.textContent = "Sign in again to keep backing up your sessions to Google Drive.";
 });
 
+let lastUpdateStatus: UpdateStatus | null = null;
+let lastKnownUpdateVersion: string | null = null;
+
+function readDismissedUpdateVersion(): string | null {
+  try {
+    return localStorage.getItem(UPDATE_FALLBACK_DISMISSED_VERSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
 updateBannerDismiss.addEventListener("click", () => {
   // Hides the banner only — a background download in progress keeps
   // downloading, and an already-downloaded update still applies itself on
   // the next natural quit either way. Dismiss is a view-layer action; the
   // state that matters lives in the main process, not the DOM.
   updateBanner.hidden = true;
+  // Only remembered for a "fallback" dismiss — "ready"/"downloading" are
+  // still actionable (or self-resolving) and should always be able to
+  // reopen; "fallback" on an unsigned build is the one case that just
+  // repeats the same unactionable message every periodic re-check.
+  if (lastUpdateStatus?.state === "fallback") {
+    try {
+      localStorage.setItem(UPDATE_FALLBACK_DISMISSED_VERSION_KEY, lastUpdateStatus.version);
+    } catch {
+      // Best-effort — worst case the banner just reopens again next re-check; not worth surfacing an error for.
+    }
+  }
 });
 
 updateBannerRestartBtn.addEventListener("click", () => {
@@ -2970,6 +3143,15 @@ updateBannerOpenFileBtn.addEventListener("click", () => {
 let lastRenderedUpdateState: string | null = null;
 
 window.agent.onUpdateStatus((status) => {
+  lastUpdateStatus = status;
+  // "downloading" carries no version of its own — the most recently known
+  // version (from this same run's last "ready"/"fallback") is the best
+  // available signal for "is this still the same already-dismissed cycle
+  // restarting", since a periodic re-check re-detecting an unsigned
+  // build's stuck version runs through downloading → fallback again with
+  // no new information in between.
+  if (status.state !== "downloading") lastKnownUpdateVersion = status.version;
+
   if (status.state === "downloading") {
     updateBannerText.textContent = `Downloading update… (${status.percent}%)`;
     updateBannerRestartBtn.hidden = true;
@@ -3001,7 +3183,14 @@ window.agent.onUpdateStatus((status) => {
   // download-progress tick re-broadcasts "downloading" many times a
   // second, and forcing hidden=false on every one of those made the
   // dismiss button impossible to use for the duration of a download.
-  if (status.state !== lastRenderedUpdateState) {
+  // "ready" always reopens regardless (still actionable); "downloading"/
+  // "fallback" don't, when the version involved is one the user already
+  // dismissed a fallback banner for — correctness audit finding
+  // (updateManager Low/Medium): without this, an unsigned Mac build's
+  // periodic re-check re-opened this exact dismissed banner every 4 hours
+  // with nothing new to tell the user.
+  const alreadyDismissedVersion = status.state !== "ready" && lastKnownUpdateVersion !== null && lastKnownUpdateVersion === readDismissedUpdateVersion();
+  if (status.state !== lastRenderedUpdateState && !alreadyDismissedVersion) {
     updateBanner.hidden = false;
   }
   lastRenderedUpdateState = status.state;

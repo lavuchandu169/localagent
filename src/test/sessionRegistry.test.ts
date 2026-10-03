@@ -18,9 +18,11 @@ import {
   revertSessionCheckpoint,
   getSessionChanges,
   respondPlan,
+  getSessionIdsWithPendingApproval,
+  withPendingApprovalEntries,
 } from "../electron/sessionRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
-import { loadSessionRecord } from "../sessionStore.js";
+import { loadSessionRecord, listSessions, searchSessions } from "../sessionStore.js";
 import { DriveScopeError } from "../cloudSync.js";
 import { groupDiffIntoSegments } from "../diffUtil.js";
 import type { AgentEvent, ChatResponse } from "../types.js";
@@ -107,12 +109,57 @@ await (async () => {
     await startSession(
       registry,
       { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
-      { providerFactory: () => provider, extraTools: [extraTool] }
+      { providerFactory: () => provider, getExtraTools: () => [extraTool] }
     );
     const sessionId = [...registry.sessions.keys()][0]!;
     await runTask(registry, sessionId, "anything", () => {});
     const toolNames = provider.receivedRequests[0]?.tools?.map((t) => t.name) ?? [];
     check("extraTools passed to startSession reach the model's tool list", toolNames.includes("mcp__github__ping"));
+  }
+
+  {
+    // Correctness audit finding (MCP Medium): an already-started session
+    // previously kept whatever extraTools snapshot existed at
+    // agent:start-session time for its entire life — an MCP server
+    // disconnected or removed afterward stayed fully callable (and a newly
+    // added one stayed invisible) until the session was restarted. A live
+    // getExtraTools() closure, re-called on every turn rather than
+    // snapshotted once, fixes that: this session starts with the tool
+    // present, the test then removes it from the SAME live source the
+    // registry was given, and the session's very next task must no longer
+    // see it — with no restart in between.
+    const registry = createSessionRegistry(sessionsDir);
+    const extraTool = {
+      name: "mcp__github__ping",
+      description: "[MCP: github] Replies with pong",
+      permission: "DANGEROUS" as const,
+      inputSchema: { type: "object", properties: {} },
+      async execute() {
+        return { ok: true, output: { content: "pong" } };
+      },
+    };
+    let liveTools = [extraTool];
+    const provider = new MockProvider([
+      { turn: { type: "final", content: "first" } },
+      { turn: { type: "final", content: "second" } },
+    ]);
+    await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => provider, getExtraTools: () => liveTools }
+    );
+    const sessionId = [...registry.sessions.keys()][0]!;
+    await runTask(registry, sessionId, "first task", () => {});
+    const firstToolNames = provider.receivedRequests[0]?.tools?.map((t) => t.name) ?? [];
+    check("the tool is visible on the first task, before anything changes", firstToolNames.includes("mcp__github__ping"));
+
+    liveTools = []; // simulates the MCP server being disconnected/removed mid-session, with no restart
+    await runTask(registry, sessionId, "second task", () => {});
+    const secondToolNames = provider.receivedRequests[1]?.tools?.map((t) => t.name) ?? [];
+    check(
+      "the already-started session's NEXT task no longer sees the removed tool, with no restart",
+      !secondToolNames.includes("mcp__github__ping")
+    );
   }
 
   {
@@ -423,6 +470,113 @@ await (async () => {
     );
   }
 
+  console.log("\ngetSessionIdsWithPendingApproval (correctness audit: session Medium #4):");
+  {
+    // Closing a tab for a session with an in-flight permission ASK never
+    // cancels that approval — the task just sits there forever, waiting
+    // for a click nothing can send it again. This is the mechanism a
+    // sidebar "waiting for approval" indicator reads from, independent of
+    // whether any tab is currently open for the session.
+    let changeNotifications = 0;
+    const registry = createSessionRegistry(sessionsDir, undefined, () => {
+      changeNotifications++;
+    });
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "echo hi" } }] } },
+      { turn: { type: "final", content: "ran it" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+
+    check("before the task starts, nothing is pending", !getSessionIdsWithPendingApproval(registry).has(sessionId));
+
+    let sawPendingDuringRun = false;
+    const events: AgentEvent[] = [];
+    const runPromise = runTask(registry, sessionId, "run echo", (e: AgentEvent) => {
+      events.push(e);
+      if (e.type === "permission.request" && e.decision === "ASK") {
+        // The generator yields this event BEFORE it actually calls
+        // onApprovalNeeded() and registers the pending resolve function —
+        // same ordering subtlety as every other deferred-respond test in
+        // this file — so the pending-check must be deferred too, not read
+        // synchronously in this same tick.
+        setImmediate(() => {
+          sawPendingDuringRun = getSessionIdsWithPendingApproval(registry).has(sessionId);
+          respondPermission(registry, sessionId, e.call.id, true);
+        });
+      }
+    });
+    await runPromise;
+
+    check("the session id is reported as pending while the ASK is unanswered", sawPendingDuringRun);
+    check("once answered, it's no longer reported as pending", !getSessionIdsWithPendingApproval(registry).has(sessionId));
+    check("onPendingApprovalsChanged fired at least once for the start and once for the answer", changeNotifications >= 2);
+  }
+  {
+    // The abandoned-tab scenario itself: a task is left hanging on an
+    // unanswered ASK (no respondPermission ever called, simulating the
+    // tab that would have sent it being closed), and the session is then
+    // cancelled (closeFreellmapiFallbackPanel's "Can't revert while a task
+    // is running" guard aside, this mirrors what closing a session's tab
+    // actually invokes server-side). The pending approval must be swept
+    // and the indicator cleared, not left dangling forever.
+    const registry = createSessionRegistry(sessionsDir);
+    const script: ChatResponse[] = [{ turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "echo hi" } }] } }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+
+    const runPromise = runTask(registry, sessionId, "run echo", () => {});
+    await waitFor(() => getSessionIdsWithPendingApproval(registry).has(sessionId));
+    check("the abandoned task is reported as pending before cleanup", getSessionIdsWithPendingApproval(registry).has(sessionId));
+
+    await cancelSession(registry, sessionId);
+    await runPromise.catch(() => {});
+    check("cancelSession sweeps the dangling approval — no longer reported as pending", !getSessionIdsWithPendingApproval(registry).has(sessionId));
+  }
+
+  console.log("\nwithPendingApprovalEntries synthesizes a row for a brand-new, never-persisted session (final-review finding I4):");
+  {
+    // A session's disk record is only ever written once a task completes
+    // (persistSession) — a session whose very FIRST task is still waiting
+    // on an approval has no disk record at all yet, so flagging only
+    // entries the disk-backed list already returned left it invisible no
+    // matter what. agent:list-sessions must synthesize a row for it.
+    const registry = createSessionRegistry(sessionsDir);
+    const script: ChatResponse[] = [{ turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "echo hi" } }] } }];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    const runPromise = runTask(registry, sessionId, "a brand new session's first task", () => {});
+    await waitFor(() => getSessionIdsWithPendingApproval(registry).has(sessionId));
+
+    check("this session genuinely has no disk record yet", (await loadSessionRecord(sessionsDir, sessionId)) === null);
+
+    const entries = withPendingApprovalEntries(registry, await listSessions(sessionsDir, null), null);
+    const synthesized = entries.find((e) => e.id === sessionId);
+    check("a synthetic row is included even though nothing is on disk", synthesized !== undefined);
+    check("its waitingForApproval flag is true", synthesized?.waitingForApproval === true);
+    check("its title comes from the live entry (derived from the task text)", synthesized?.title === "a brand new session's first task");
+
+    // A DIFFERENT account's view must never see another account's pending session.
+    const otherAccountEntries = withPendingApprovalEntries(registry, await listSessions(sessionsDir, "someone-else@example.com"), "someone-else@example.com");
+    check("a different signed-in account never sees it", otherAccountEntries.every((e) => e.id !== sessionId));
+
+    // A search for unrelated text must not surface it either.
+    const searchMiss = withPendingApprovalEntries(registry, await searchSessions(sessionsDir, "unrelated query", null), null, "unrelated query");
+    check("an unrelated search query doesn't surface it", searchMiss.every((e) => e.id !== sessionId));
+
+    await cancelSession(registry, sessionId);
+    await runPromise.catch(() => {});
+  }
+
   {
     const registry = createSessionRegistry(sessionsDir);
     check(
@@ -528,7 +682,7 @@ await (async () => {
       { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
       {
         providerFactory: () => new MockProvider([]),
-        resume: { sessionId, initialMessages: [{ role: "system", content: "sys" }], priorEvents: [], title: "t", createdAt: Date.now(), ownerEmail: null },
+        resume: { sessionId, initialMessages: [{ role: "system", content: "sys" }], priorEvents: [], title: "t", createdAt: Date.now(), ownerEmail: null, checkpointHash: null, checkpointWorkspaceRoot: null },
       }
     );
     check("starting a new session under the same just-cancelled id succeeds", restarted.sessionId === sessionId);
@@ -635,6 +789,8 @@ await (async () => {
           title: "earlier task title",
           createdAt: 12345,
           ownerEmail: null,
+          checkpointHash: null,
+          checkpointWorkspaceRoot: null,
         },
       }
     );
@@ -730,6 +886,7 @@ await (async () => {
       uploadSession: async (token, record) => {
         uploadedToken = token;
         uploadedRecordId = record.id;
+        return { modifiedTime: "2024-01-01T00:00:00.000Z" };
       },
       getOwnerEmail: async () => null,
     });
@@ -752,6 +909,7 @@ await (async () => {
       onScopeError: () => {},
       uploadSession: async () => {
         uploadCalled = true;
+        return { modifiedTime: "2024-01-01T00:00:00.000Z" };
       },
       getOwnerEmail: async () => null,
     });
@@ -830,12 +988,91 @@ await (async () => {
     check("removeSession best-effort deletes the remote copy when signed in", deletedSessionId === sessionId);
   }
 
+  console.log("\nsyncUploadToCloud doesn't overwrite newer local state with a stale snapshot (final-review finding C1):");
+  {
+    // Reproduces the exact race: task 1 finishes and starts a SLOW upload
+    // of its own record. Before that upload's post-upload checkpoint save
+    // completes, task 2 finishes and saves ITS OWN newer record. The slow
+    // upload's checkpoint save must not then overwrite task 2's record
+    // with the stale snapshot it captured when it started.
+    let uploadCalls = 0;
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {
+        throw new Error("should not be called");
+      },
+      uploadSession: async () => {
+        uploadCalls++;
+        if (uploadCalls === 1) {
+          // Task 1's upload is slow — long enough for task 2 to finish and
+          // save first.
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        return { modifiedTime: `modified-${uploadCalls}` };
+      },
+      getOwnerEmail: async () => null,
+    });
+    const provider = new MockProvider([{ turn: { type: "final", content: "first" } }, { turn: { type: "final", content: "second" } }]);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => provider }
+    );
+
+    // Deliberately not awaited — task 1's own persistSession/saveSession
+    // completes synchronously as part of runTask, but its fire-and-forget
+    // upload (the slow one) is still in flight when this call returns.
+    await runTask(registry, sessionId, "task one", () => {});
+    await runTask(registry, sessionId, "task two", () => {});
+    const afterTaskTwo = await loadSessionRecord(sessionsDir, sessionId);
+    check("task two's record is on disk right after it completes", afterTaskTwo?.messages.some((m) => m.content === "task two") ?? false);
+
+    // Give task 1's slow upload (and its post-upload checkpoint save) time
+    // to actually finish.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const afterSlowUpload = await loadSessionRecord(sessionsDir, sessionId);
+    check(
+      "task two's content survives task one's slow, late-finishing upload — not rolled back to a stale snapshot",
+      afterSlowUpload?.messages.some((m) => m.content === "task two") ?? false
+    );
+  }
+  {
+    // The deleted-session-resurrection variant: removeSession's file
+    // delete doesn't wait for an in-flight upload from an earlier task to
+    // finish, so a slow upload completing AFTER the delete must not bring
+    // the file back.
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {},
+      uploadSession: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return { modifiedTime: "modified-late" };
+      },
+      deleteRemoteSession: async () => {},
+      getOwnerEmail: async () => null,
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
+    );
+    await runTask(registry, sessionId, "a task", () => {});
+    await removeSession(registry, sessionId);
+    const rightAfterDelete = await loadSessionRecord(sessionsDir, sessionId);
+    check("the session is gone right after removeSession", rightAfterDelete === null);
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const afterSlowUpload = await loadSessionRecord(sessionsDir, sessionId);
+    check("the deleted session does NOT come back once the slow upload finally finishes", afterSlowUpload === null);
+  }
+
   console.log("\nSession ownership:");
   {
     const registry = createSessionRegistry(sessionsDir, {
       getAccessToken: async () => "fake-token",
       onScopeError: () => {},
-      uploadSession: async () => {},
+      uploadSession: async () => ({ modifiedTime: "2024-01-01T00:00:00.000Z" }),
       getOwnerEmail: async () => "owner@example.com",
     });
     const { sessionId } = await startSession(
@@ -855,7 +1092,7 @@ await (async () => {
     const registry = createSessionRegistry(sessionsDir, {
       getAccessToken: async () => "fake-token",
       onScopeError: () => {},
-      uploadSession: async () => {},
+      uploadSession: async () => ({ modifiedTime: "2024-01-01T00:00:00.000Z" }),
       getOwnerEmail: async () => "someone-else@example.com",
     });
     const { sessionId } = await startSession(
@@ -870,6 +1107,8 @@ await (async () => {
           title: "resumed",
           createdAt: Date.now(),
           ownerEmail: "original-owner@example.com",
+          checkpointHash: null,
+          checkpointWorkspaceRoot: null,
         },
       }
     );
@@ -999,6 +1238,70 @@ await (async () => {
   }
 
   {
+    // Correctness audit finding (session Medium #3): revertSessionCheckpoint
+    // had no try/catch around revertToCheckpoint, unlike getSessionChanges'
+    // own identical-shaped call a few lines below it — any real failure
+    // (not just the workspace-switch case setWorkspaceRoot now prevents by
+    // clearing checkpointHash) propagated as an unhandled rejection
+    // instead of the clear {ok:false, error} this function's own return
+    // type promises. Reproduced with a REAL failure mode, not a mock: a
+    // checkpoint is a deliberately dangling, unreferenced git commit (see
+    // checkpoints.ts's own doc comment — "eventually GC'd"), so an
+    // aggressive gc can genuinely prune it out from under a later revert.
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessionregistry-checkpoint-gc-test-"));
+    const execFileAsync2 = promisify(execFile);
+    const git2 = async (args: string[]) => (await execFileAsync2("git", args, { cwd: repo })).stdout.trim();
+    await git2(["init", "-q"]);
+    await git2(["config", "user.email", "t@t.com"]);
+    await git2(["config", "user.name", "T"]);
+    await fs.writeFile(path.join(repo, "a.txt"), "v1\n", "utf-8");
+    await git2(["add", "-A"]);
+    await git2(["commit", "-q", "-m", "initial"]);
+
+    const registry = createSessionRegistry(sessionsDir);
+    // read_file first, matching this file's established pattern — edit_file
+    // on a path never read this session gets ASKed even in ACCEPT_EDITS
+    // (the read-before-write override), and nothing here answers that ask.
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "a.txt" } },
+            { id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v2\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot: repo, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    await runTask(registry, sessionId, "bump the file", () => {});
+    check("a real checkpoint exists", typeof getCheckpointHash(registry, sessionId) === "string");
+
+    // Prune the dangling checkpoint commit out from under the session —
+    // a real, reproducible way revertToCheckpoint can genuinely fail
+    // without any test-only hook or mock.
+    await git2(["reflog", "expire", "--expire=now", "--all"]);
+    await git2(["gc", "--prune=now"]);
+
+    let threw = false;
+    let revertResult: { ok: boolean; error?: string } | undefined;
+    try {
+      revertResult = await revertSessionCheckpoint(registry, sessionId);
+    } catch {
+      threw = true;
+    }
+    check("revertSessionCheckpoint never throws uncaught — it returns {ok:false, error} like getSessionChanges already does", !threw);
+    check("the failure is reported with a real error message, not silently swallowed either", revertResult?.ok === false && !!revertResult.error);
+
+    await fs.rm(repo, { recursive: true, force: true });
+  }
+
+  {
     const registry = createSessionRegistry(sessionsDir);
     const noSession = await getSessionChanges(registry, "nope");
     check("getSessionChanges returns ok:false for an unknown session id", noSession.ok === false && !!noSession.error);
@@ -1068,6 +1371,66 @@ await (async () => {
   }
 
   {
+    // Correctness audit finding (session Medium #2): the OPPOSITE
+    // direction of the guard above — a runTask call started WHILE a
+    // revert is still mid-flight must be refused too, not race a live
+    // agent write against the revert's own checkout+cleanup. Before this
+    // fix, revertSessionCheckpoint only checked entry.running ONCE
+    // (synchronously) then ran several awaited git subprocess calls with
+    // no lock held across that window — nothing stopped a runTask call
+    // issued during that window from starting a real task concurrently.
+    const registry = createSessionRegistry(sessionsDir);
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessionregistry-revertrace-test-"));
+    const execFileAsync2 = promisify(execFile);
+    const git2 = async (args: string[]) => (await execFileAsync2("git", args, { cwd: repo })).stdout.trim();
+    await git2(["init", "-q"]);
+    await git2(["config", "user.email", "t@t.com"]);
+    await git2(["config", "user.name", "T"]);
+    await fs.writeFile(path.join(repo, "a.txt"), "v1\n", "utf-8");
+    await git2(["add", "-A"]);
+    await git2(["commit", "-q", "-m", "initial"]);
+
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "a.txt" } },
+            { id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v2\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot: repo, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    await runTask(registry, sessionId, "bump the file", () => {});
+    check("a real checkpoint exists before the race", typeof getCheckpointHash(registry, sessionId) === "string");
+
+    // entry.running is set synchronously inside revertSessionCheckpoint
+    // too (this fix), before its first await — so a runTask call made
+    // immediately after, without awaiting the revert first, reliably
+    // lands while the revert is still "running" from the registry's
+    // view, same reliability guarantee the existing test above already
+    // relies on for the opposite direction.
+    const revertPromise = revertSessionCheckpoint(registry, sessionId);
+    let rejected = false;
+    try {
+      await runTask(registry, sessionId, "a second task racing the revert", () => {});
+    } catch {
+      rejected = true;
+    }
+    check("runTask refuses to start while a revert is mid-flight for this session", rejected);
+    const revertResult = await revertPromise;
+    check("the revert itself still completed successfully, undisturbed", revertResult.ok === true);
+
+    await fs.rm(repo, { recursive: true, force: true });
+  }
+
+  {
     // Real end-to-end: attachments passed to runTask actually reach the
     // first pushed message, proving the plumbing through doRunTask ->
     // AgentSession.run is wired, not just type-compatible.
@@ -1122,6 +1485,169 @@ await (async () => {
     const snapshot = getLiveSessionSnapshot(registry, sessionId);
     check("no text.delta events are persisted into the session's event history", !snapshot?.events.some((e) => e.type === "text.delta"));
     check("the terminal, non-ephemeral text event is still persisted normally", !!snapshot?.events.some((e) => e.type === "text" && e.text === "Hello"));
+  }
+
+  console.log("\npersistSession writes real provider/mode/planFirst/checkpointHash to disk, and resuming restores them (correctness audit: session High #1, #2):");
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-sessionregistry-checkpoint-test-"));
+    const execFileAsync2 = promisify(execFile);
+    const git2 = async (args: string[]) => (await execFileAsync2("git", args, { cwd: repo })).stdout.trim();
+    await git2(["init", "-q"]);
+    await git2(["config", "user.email", "t@t.com"]);
+    await git2(["config", "user.name", "T"]);
+    await fs.writeFile(path.join(repo, "a.txt"), "v1\n", "utf-8");
+    await git2(["add", "-A"]);
+    await git2(["commit", "-q", "-m", "initial"]);
+
+    // read_file first, matching the pattern this file's other tests use —
+    // edit_file on a path never read this session gets ASKed even in
+    // ACCEPT_EDITS (the read-before-write override), and this test has no
+    // onApprovalNeeded wired up to ever answer that ask.
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "a.txt" } },
+            { id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v2\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot: repo, provider: { kind: "anthropic", model: "claude-opus-4" }, mode: "DEFAULT", planFirst: true },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    // A live mode change before the task runs, to prove persistSession
+    // reads mode LIVE (entry.session.getPermissionMode()) rather than
+    // whatever mode the session originally started with.
+    updateLiveSessionSettings(registry, sessionId, { mode: "ACCEPT_EDITS" });
+    // planFirst holds the task's first turn for approval — respond to it
+    // so this task can actually reach completion (and take its
+    // checkpoint) rather than hanging indefinitely. setImmediate (not a
+    // synchronous call here) matches this file's own established pattern
+    // elsewhere: respondPlan is called from the SAME onEvent callback
+    // that's still synchronously processing the just-yielded
+    // "plan.proposed" event, before agent.ts's generator has resumed
+    // past the yield to actually register pendingPlanApproval.resolve —
+    // calling it synchronously here is a no-op race that hangs forever.
+    await runTask(registry, sessionId, "bump the file", (event) => {
+      if (event.type === "plan.proposed") setImmediate(() => respondPlan(registry, sessionId, true));
+    });
+
+    const saved = await loadSessionRecord(sessionsDir, sessionId);
+    check("the persisted record's provider.kind matches what the session was started with", saved?.provider?.kind === "anthropic");
+    check("the persisted record's provider.model matches what the session was started with", (saved?.provider as any)?.model === "claude-opus-4");
+    check("the persisted record's mode reflects the LIVE mode (after updateLiveSessionSettings), not the original DEFAULT", saved?.mode === "ACCEPT_EDITS");
+    check("the persisted record's planFirst matches what the session was started with", saved?.planFirst === true);
+    check("the persisted record's checkpointHash matches the live session's real checkpoint", typeof saved?.checkpointHash === "string" && saved.checkpointHash === registry.sessions.get(sessionId)?.session.getCheckpointHash());
+
+    // Full round trip: resume a NEW registry (simulating an app restart)
+    // from the persisted record and confirm settings/checkpoint restore.
+    const registry2 = createSessionRegistry(sessionsDir);
+    const resumeResult = await startSession(
+      registry2,
+      { workspaceRoot: repo, provider: saved!.provider as any, mode: saved!.mode as any, planFirst: saved!.planFirst },
+      {
+        providerFactory: () => new MockProvider([{ turn: { type: "final", content: "resumed" } }]),
+        resume: {
+          sessionId,
+          initialMessages: saved!.messages,
+          priorEvents: saved!.events,
+          title: saved!.title,
+          createdAt: saved!.createdAt,
+          ownerEmail: saved!.ownerEmail,
+          checkpointHash: saved!.checkpointHash,
+          checkpointWorkspaceRoot: saved!.checkpointWorkspaceRoot,
+        },
+      }
+    );
+    check(
+      "resuming from the persisted record restores getCheckpointHash() to the real checkpoint, not null",
+      registry2.sessions.get(sessionId)?.session.getCheckpointHash() === saved?.checkpointHash
+    );
+    check(
+      "startSession's own return value also carries the restored checkpointHash (final-review finding I3) — the renderer uses this to show Revert immediately on resume, not just after a later tab-switch replay",
+      resumeResult.checkpointHash === saved?.checkpointHash && resumeResult.checkpointHash !== null
+    );
+    check(
+      "the persisted record's checkpointWorkspaceRoot matches the workspace the checkpoint was actually made in (final-review finding C3)",
+      saved?.checkpointWorkspaceRoot === repo
+    );
+
+    await fs.rm(repo, { recursive: true, force: true });
+  }
+
+  console.log("\nstartSession refuses to restore a checkpoint into a DIFFERENT workspace than it was made in (final-review finding C3):");
+  {
+    // The exact bug this closes: a checkpoint hash is a commit inside a
+    // SPECIFIC git repo. Resuming (or a provider-change mid-session
+    // restart) into some OTHER workspace with the old hash still attached
+    // must not carry it over — usually that just makes a later revert
+    // fail with "unknown revision", but git worktrees of the same
+    // repository share one object database, where the hash can resolve
+    // successfully in the WRONG worktree and overwrite its files.
+    const execFileAsync = promisify(execFile);
+    const repoA = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-checkpoint-workspace-a-"));
+    const repoB = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-checkpoint-workspace-b-"));
+    for (const repo of [repoA, repoB]) {
+      await execFileAsync("git", ["init", "-q"], { cwd: repo });
+      await execFileAsync("git", ["config", "user.email", "t@t.com"], { cwd: repo });
+      await execFileAsync("git", ["config", "user.name", "T"], { cwd: repo });
+      // createCheckpoint needs at least one real commit (it diffs against
+      // HEAD) — an empty repo with zero commits always returns null.
+      await fs.writeFile(path.join(repo, "seed.txt"), "seed\n", "utf-8");
+      await execFileAsync("git", ["add", "-A"], { cwd: repo });
+      await execFileAsync("git", ["commit", "-q", "-m", "seed"], { cwd: repo });
+    }
+
+    const registry = createSessionRegistry(sessionsDir);
+    // read_file first, matching this file's own established pattern —
+    // edit_file on a path never read this session gets ASKed even in
+    // ACCEPT_EDITS (the read-before-write override), and this test has no
+    // onApprovalNeeded wired up to ever answer that ask.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "a.txt" } }, { id: "e1", name: "edit_file", arguments: { path: "a.txt", content: "v1\n" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot: repoA, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      { providerFactory: () => new MockProvider(script) }
+    );
+    await runTask(registry, sessionId, "make a.txt", () => {});
+    const saved = await loadSessionRecord(sessionsDir, sessionId);
+    check("a real checkpoint was persisted, paired with repoA as its workspace", typeof saved?.checkpointHash === "string" && saved.checkpointWorkspaceRoot === repoA);
+
+    // Resume the SAME session id, but into repoB this time.
+    const registry2 = createSessionRegistry(sessionsDir);
+    await startSession(
+      registry2,
+      { workspaceRoot: repoB, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "ACCEPT_EDITS" },
+      {
+        providerFactory: () => new MockProvider([]),
+        resume: {
+          sessionId,
+          initialMessages: saved!.messages,
+          priorEvents: saved!.events,
+          title: saved!.title,
+          createdAt: saved!.createdAt,
+          ownerEmail: saved!.ownerEmail,
+          checkpointHash: saved!.checkpointHash,
+          checkpointWorkspaceRoot: saved!.checkpointWorkspaceRoot,
+        },
+      }
+    );
+    check(
+      "the checkpoint is NOT restored into the mismatched workspace — getCheckpointHash() is null, not the old repoA hash",
+      registry2.sessions.get(sessionId)?.session.getCheckpointHash() === null
+    );
+
+    await fs.rm(repoA, { recursive: true, force: true });
+    await fs.rm(repoB, { recursive: true, force: true });
   }
 
   await fs.rm(sessionsDir, { recursive: true, force: true });
