@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.63 — 2026-10-03
+
+- fix: functional-correctness audit fixes across agent core, providers, GitHub, FreeLLMAPI, MCP, and cloud sync
+
 ## v0.1.0-beta.62 — 2026-10-02
 
 - fix: address final-review findings in provider streaming (SSE robustness, in-band stream errors, Gemini converter reuse, renderer tool-card cleanup, event persistence, embedded fallback-tool-call text)
