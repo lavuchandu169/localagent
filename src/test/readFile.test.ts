@@ -67,6 +67,43 @@ async function main() {
     await fs.rm(path.join(root, ".git"), { recursive: true, force: true });
   }
 
+  console.log("\nreadFileTool: offset/limit lets a large file be read past the default character cutoff:");
+  {
+    // 5000 numbered lines — far more than the default 20000-character cap
+    // would ever show from the start alone (each "line N\n" is ~7-9 bytes,
+    // so the whole file is comfortably past the cap).
+    const lineCount = 5000;
+    const bigContent = Array.from({ length: lineCount }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+    await fs.writeFile(path.join(root, "big.txt"), bigContent, "utf-8");
+
+    const plain = await readFileTool.execute({ path: "big.txt" }, ctx);
+    check("a plain read (no offset/limit) reports the file's real total line count", plain.ok && plain.output?.totalLines === lineCount);
+    check("a plain read is still truncated by the character cap, same as before", plain.truncated === true);
+
+    const ranged = await readFileTool.execute({ path: "big.txt", offset: 4001, limit: 10 }, ctx);
+    check("offset/limit reads the requested range successfully", ranged.ok === true);
+    check("the range starts at the requested line", ranged.output?.content.startsWith("line 4001") ?? false);
+    check("the range ends at the requested line, not beyond it", ranged.output?.content.split("\n").pop() === "line 4010");
+    check("the range covers exactly 10 lines", ranged.output?.content.split("\n").length === 10);
+    check("startLine/endLine reflect the actual range returned", ranged.output?.startLine === 4001 && ranged.output?.endLine === 4010);
+    check("totalLines is still reported alongside the range", ranged.output?.totalLines === lineCount);
+    check("truncated is true — there's more past line 4010", ranged.truncated === true);
+  }
+
+  console.log("\nreadFileTool: offset/limit near the end of the file doesn't overrun or report truncated:");
+  {
+    const result = await readFileTool.execute({ path: "big.txt", offset: 4995, limit: 100 }, ctx);
+    check("a limit extending past the file's end is clamped, not an error", result.ok === true);
+    check("endLine is clamped to the real last line", result.output?.endLine === 5000);
+    check("nothing is reported as truncated once the range reaches the real end", result.truncated === false);
+  }
+
+  console.log("\nreadFileTool: offset/limit still applies the workspace-escape and protected-path checks (same resolution path as a plain read):");
+  {
+    const result = await readFileTool.execute({ path: "../../etc/hosts", offset: 1, limit: 10 }, ctx);
+    check("a path escaping the workspace is still refused with offset/limit set", result.ok === false);
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
