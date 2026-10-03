@@ -427,7 +427,7 @@ const tabStripList = byId<HTMLDivElement>("tab-strip-list");
 const tabStripNew = byId<HTMLButtonElement>("tab-strip-new");
 const tabStripCapMessage = byId<HTMLDivElement>("tab-strip-cap-message");
 
-// Theme (Warm Dark / Mono Ink) — a per-viewer UI preference only, so
+// Theme (Warm Dark / Mono Ink / OLED Black / Light) — a per-viewer UI preference only, so
 // localStorage is the right tool here (same reasoning as the onboarding
 // seen-flag above), not the main-process settings store the API keys use.
 const THEME_KEY = "localagent:theme";

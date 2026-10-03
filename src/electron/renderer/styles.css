@@ -35,12 +35,17 @@
 }
 
 /*
- * Two IDE-inspired dark themes, switched at runtime via [data-theme] on
- * <html> (see renderer.ts's applyTheme/themeSelect). "Warm Dark" (default)
- * carries localagent's existing terracotta accent into a dark shell; "Mono
- * Ink" is pure grayscale with one quiet teal accent. Every color used
- * anywhere below reads from one of these tokens — never a bare hex — so a
- * theme switch is a single attribute change, not a stylesheet swap.
+ * Four themes, switched at runtime via [data-theme] on <html> (see
+ * renderer.ts's applyTheme/themeSelect). "Warm Dark" (default) carries
+ * localagent's existing terracotta accent into a dark shell; "Mono Ink" is
+ * pure grayscale with one quiet teal accent; "OLED Black" drops to a true
+ * #000000 background (saves battery and avoids the grey-crush a merely-dark
+ * theme shows on OLED panels) with a violet accent chosen to stay readable
+ * against pure black; "Light" is the one bright theme, for daylight use or
+ * anyone who just prefers it. Every color used anywhere below reads from
+ * one of these tokens — never a bare hex — so a theme switch is a single
+ * attribute change, not a stylesheet swap. Every text/background pairing
+ * across all four themes was checked against WCAG AA's 4.5:1 minimum.
  */
 :root {
   color-scheme: dark;
@@ -96,6 +101,53 @@
   --info: #7fa8d8;
   --statusbar-bg: #262626;
   --statusbar-text: #d4d4d4;
+}
+
+:root[data-theme="oled-black"] {
+  --bg: #000000;
+  /* True black only for the base layer — panels/raised surfaces need to be
+     a shade lighter than #000 to read as "raised" at all against it, the
+     same reason mono-ink's own panel/raised shades sit above its bg. */
+  --bg-panel: #0a0a0a;
+  --bg-raised: #121212;
+  --border: #1a1a1a;
+  --text: #e8e8e8;
+  --text-dim: #8a8a8a;
+  --accent: #b89cfb;
+  --accent-contrast: #1a1025;
+  --warn: #f0b429;
+  --danger: #ff5c5c;
+  --success: #4ade80;
+  --info: #60a5fa;
+  --statusbar-bg: #b89cfb;
+  --statusbar-text: #1a1025;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --bg-panel: #f6f5f3;
+  --bg-raised: #ececea;
+  --border: #d9d6d0;
+  --text: #1f1c17;
+  --text-dim: #6b6558;
+  --accent: #ac4e2d;
+  --accent-contrast: #fff6ee;
+  --warn: #b45309;
+  --danger: #dc2626;
+  --success: #15803d;
+  --info: #2563eb;
+  --statusbar-bg: #ac4e2d;
+  --statusbar-text: #fff6ee;
+  /* The shared (dark-theme-tuned) --diff-added/--diff-removed in :root
+     fall below WCAG AA as text on a white background (2.5:1 / 3.3:1,
+     checked) — darker shades of the same colors clear 4.5:1 here while
+     staying visually "green"/"red" in meaning. */
+  --diff-added: #15803d;
+  --diff-added-bg: rgba(21, 128, 61, 0.12);
+  --diff-removed: #b91c1c;
+  --diff-removed-bg: rgba(185, 28, 28, 0.12);
 }
 
 @media (prefers-reduced-motion: reduce) {
