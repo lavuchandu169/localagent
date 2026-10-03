@@ -92,21 +92,37 @@ jobs:
       # including the release-bump PR's own squash-merge commit (opened by
       # this very workflow, below). Without this guard, that merge would
       # itself trigger another run, which would cut another release, whose
-      # merge would trigger another run — an infinite release loop. The
-      # release-bump PR's title always starts with "Release vX.Y.Z" (set
-      # explicitly below) and a squash-merge's commit message always
-      # starts with the PR title, regardless of this repo's "default squash
-      # commit message" setting — so this is a reliable, precise match, not
-      # a guess. workflow_dispatch runs are never guarded: a maintainer
-      # triggering one manually is never the automation seeing its own tail.
+      # merge would trigger another run — an infinite release loop.
+      #
+      # This used to just regex-match github.event.head_commit.message
+      # against "^Release vX.Y.Z", on the assumption that a squash-merge's
+      # commit message always starts with the PR title. Confirmed false
+      # live: this repo's squash setting is squash_merge_commit_title:
+      # COMMIT_OR_PR_TITLE, which — for a single-commit PR, exactly what
+      # every release-bump PR is — reuses that one commit's OWN message
+      # ("chore: bump version...") instead of the PR's title ("Release
+      # vX.Y.Z..."), so the guard missed its own release and cut a second
+      # one (v0.1.0-beta.65) right behind v0.1.0-beta.64, which failed for
+      # an unrelated reason (the push-permission issue below) rather than
+      # actually landing — but would not have been caught by this guard
+      # either way. Looking up the merged PR's real title through the API
+      # (same technique the changelog step below already uses) is
+      # immune to whatever the commit message itself ended up saying.
+      # workflow_dispatch runs are never guarded: a maintainer triggering
+      # one manually is never the automation seeing its own tail.
       - name: Guard against re-releasing our own release-bump merge
         id: guard
         env:
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ] && echo "$COMMIT_MESSAGE" | grep -qE '^Release v[0-9]+\.[0-9]+\.[0-9]+'; then
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PR_TITLE=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].title // empty')
+          if echo "$PR_TITLE" | grep -qE '^Release v[0-9]+\.[0-9]+\.[0-9]+'; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "This push is the release-bump PR's own merge — not cutting another release."
+            echo "This push is the release-bump PR's own merge (PR title: $PR_TITLE) — not cutting another release."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
