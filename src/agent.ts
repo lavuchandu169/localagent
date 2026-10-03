@@ -125,6 +125,37 @@ function containsFencedCode(content: string): boolean {
   return (content.match(/```/g)?.length ?? 0) >= 2 || (content.match(/~~~/g)?.length ?? 0) >= 2;
 }
 
+/** A single nudge wasn't always enough to get a smaller/more reluctant
+ * model to actually call edit_file instead of apologizing in prose again
+ * — verified live. Capped at a small fixed number of attempts (not
+ * unbounded) so a model that never complies still fails the task instead
+ * of burning its whole turn budget on nudges alone; each attempt also
+ * consumes one of the existing per-task maxTurns slots regardless. */
+const MAX_CORRECTIVE_NUDGE_ATTEMPTS = 3;
+
+/** Escalates in directness with each attempt — a flat, identically-worded
+ * repeat didn't read as urgent (or even as a correction at all) to a
+ * model that just ignored the first one. */
+function correctiveNudgeMessage(attemptNumber: number): string {
+  if (attemptNumber === 1) {
+    return (
+      "You wrote file content in your reply but never called edit_file, so nothing was actually created or changed. " +
+      "If you meant to create or modify files, call edit_file now for each one — one call per file, using the real content you just described. " +
+      "If you were only explaining and didn't mean to produce real files, say that explicitly instead of including full file contents."
+    );
+  }
+  if (attemptNumber < MAX_CORRECTIVE_NUDGE_ATTEMPTS) {
+    return (
+      "This is the second time: you still haven't called edit_file, and the file still doesn't exist. " +
+      "Stop describing or apologizing — your very next action must be a real edit_file tool call with the content you already wrote out, one call per file."
+    );
+  }
+  return (
+    "Final attempt: you have not called edit_file after being asked twice. Call it now, in this reply, with no further explanation first — " +
+    "or if you genuinely cannot or will not create the file, say exactly that and nothing else."
+  );
+}
+
 export class AgentSession {
   private messages: ChatMessage[] = [];
   private permissions: PermissionEngine;
@@ -189,8 +220,8 @@ export class AgentSession {
    * existing per-task turn budget either way.
    */
   private writeSucceededSinceLastVerify = false;
-  /** Whether the one-shot corrective nudge (see the "final" branch in run()) has already fired this task — reset at the start of every run() call. At most one nudge per task, so a model that ignores it too doesn't loop forever. */
-  private correctiveNudgeSentThisTask = false;
+  /** How many corrective nudges (see the "final" branch in run()) have fired this task — reset to 0 at the start of every run() call. Capped at MAX_CORRECTIVE_NUDGE_ATTEMPTS so a model that ignores every attempt doesn't loop forever; verified live that a single nudge isn't always enough for a smaller/more reluctant model, which can apologize in prose right back instead of complying the first time but still comply on a later attempt. */
+  private correctiveNudgeAttemptsThisTask = 0;
   /** Whether THIS task's first-turn plan has already been proposed — reset at the start of every run() call. Gates only turn 1; once a task's plan has been shown (and approved), later turns in that same task run normally. */
   private planProposedThisTask = false;
 
@@ -448,7 +479,7 @@ export class AgentSession {
     this.wroteThisTask = false;
     this.anyWriteSucceededThisTask = false;
     this.writeSucceededSinceLastVerify = false;
-    this.correctiveNudgeSentThisTask = false;
+    this.correctiveNudgeAttemptsThisTask = 0;
     this.planProposedThisTask = false;
     yield* this.autoReadNamedFiles(task);
     const maxTurns = this.opts.maxTurns ?? 25;
@@ -565,26 +596,26 @@ export class AgentSession {
         // local model from answering a "create/build/design X" task with
         // the code written out in prose instead of real edit_file calls
         // (verified live — the model repeated this exact failure even with
-        // an explicit system-prompt rule against it). Fires at most once
-        // per task, and only when the model never even tried to write —
-        // if it tried and got denied, that's a real policy decision to
-        // respect, not this failure mode.
+        // an explicit system-prompt rule against it). Retried up to
+        // MAX_CORRECTIVE_NUDGE_ATTEMPTS times (not just once — a single
+        // nudge verified live as still sometimes ignored by a reluctant
+        // model, which then complied on a later attempt), and only when
+        // the model never even tried to write — if it tried and got
+        // denied, that's a real policy decision to respect, not this
+        // failure mode.
         if (
-          !this.correctiveNudgeSentThisTask &&
+          this.correctiveNudgeAttemptsThisTask < MAX_CORRECTIVE_NUDGE_ATTEMPTS &&
           !this.wroteThisTask &&
           taskImpliesCreation(task) &&
           containsFencedCode(response.turn.content)
         ) {
-          this.correctiveNudgeSentThisTask = true;
+          this.correctiveNudgeAttemptsThisTask++;
           this.messages.push({ role: "assistant", content: response.turn.content });
-          this.messages.push({
-            role: "user",
-            content:
-              "You wrote file content in your reply but never called edit_file, so nothing was actually created or changed. " +
-              "If you meant to create or modify files, call edit_file now for each one — one call per file, using the real content you just described. " +
-              "If you were only explaining and didn't mean to produce real files, say that explicitly instead of including full file contents.",
-          });
-          yield { type: "status", message: "Turn produced code without writing it — nudging the model to call edit_file instead." };
+          this.messages.push({ role: "user", content: correctiveNudgeMessage(this.correctiveNudgeAttemptsThisTask) });
+          yield {
+            type: "status",
+            message: `Turn produced code without writing it — nudging the model to call edit_file instead (attempt ${this.correctiveNudgeAttemptsThisTask}/${MAX_CORRECTIVE_NUDGE_ATTEMPTS}).`,
+          };
           this.turn++;
           this.state = "THINKING";
           continue;
@@ -604,13 +635,13 @@ export class AgentSession {
         }
 
         this.state = "COMPLETED";
-        // A task whose corrective nudge already fired (the model was
+        // A task whose corrective nudge fired at least once (the model was
         // explicitly told to call edit_file instead of describing files)
         // and which STILL never got a single successful write this task
         // didn't actually do what it claimed — verified live: a small model
         // can apologize in prose right back instead of complying, and that
         // used to still report success:true with nothing ever written.
-        const nudgeFailedToProduceAWrite = this.correctiveNudgeSentThisTask && !this.anyWriteSucceededThisTask;
+        const nudgeFailedToProduceAWrite = this.correctiveNudgeAttemptsThisTask > 0 && !this.anyWriteSucceededThisTask;
         yield nudgeFailedToProduceAWrite
           ? {
               type: "done",

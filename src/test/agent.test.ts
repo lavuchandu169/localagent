@@ -1229,14 +1229,29 @@ await (async () => {
   }
 
   {
-    // A real reported failure, seen live: the nudge fires (once), but a
-    // small model can just apologize in prose again instead of actually
-    // calling edit_file. correctiveNudgeSentThisTask correctly stops it from
-    // being nudged a second time — but the task must not then silently
-    // report success when nothing was ever written.
+    // A real reported failure, seen live: the model apologizes in prose
+    // again instead of calling edit_file, EVEN after being nudged once.
+    // A single nudge wasn't enough to get a reluctant/weak model to
+    // comply — it now gets retried, with increasingly direct wording, up
+    // to a small fixed limit (3 total attempts) before the task finally
+    // gives up and fails honestly. This script apologizes twice in a row
+    // (exhausting all 3 nudge attempts) before finally complying on the
+    // last one, so this also proves the retried nudges aren't purely
+    // cosmetic — the model DOES eventually call edit_file once it's
+    // nudged enough times.
     const script: ChatResponse[] = [
       { turn: { type: "final", content: "Here's foo.py:\n```python\nprint('hi')\n```" } },
-      { turn: { type: "final", content: "Sorry for the confusion — I was only explaining, nothing was written." } },
+      { turn: { type: "final", content: "Sorry for the confusion — here's foo.py again:\n```python\nprint('hi')\n```" } },
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r1", name: "read_file", arguments: { path: "foo.py" } },
+            { id: "e1", name: "edit_file", arguments: { path: "foo.py", content: "print('hi')\n" } },
+          ],
+        },
+      },
+      { turn: { type: "final", content: "Created foo.py." } },
     ];
     const session = new AgentSession({
       workspaceRoot: tmpDir,
@@ -1250,12 +1265,44 @@ await (async () => {
     for await (const event of session.run("create foo.py that prints hi")) {
       events.push(event);
     }
-    check("the nudge still fires exactly once", events.filter((e) => e.type === "status" && e.message.includes("nudging")).length === 1);
+    const nudgeEvents = events.filter((e) => e.type === "status" && e.message.includes("nudging"));
+    check("the model gets nudged twice before it finally complies on the third attempt", nudgeEvents.length === 2);
+    const writtenContent = await fs.readFile(path.join(tmpDir, "foo.py"), "utf-8").catch(() => null);
+    check("edit_file was actually called once the model finally complied", writtenContent === "print('hi')\n");
+    const doneEvent = events.find((e) => e.type === "done");
+    check("the task reports real success once edit_file actually ran", doneEvent?.type === "done" && doneEvent.success === true);
+  }
+
+  {
+    // The model NEVER complies, even after all 3 nudge attempts are
+    // exhausted — the task must still fail honestly (never a false
+    // success), same principle as before, just at a higher retry count.
+    const script: ChatResponse[] = [
+      { turn: { type: "final", content: "Here's bar.py:\n```python\nprint('bye')\n```" } },
+      { turn: { type: "final", content: "Sorry — here's bar.py again:\n```python\nprint('bye')\n```" } },
+      { turn: { type: "final", content: "Apologies, one more time, bar.py:\n```python\nprint('bye')\n```" } },
+      { turn: { type: "final", content: "I understand, but I was only explaining, nothing was written." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("create bar.py that prints bye")) {
+      events.push(event);
+    }
+    check("exactly 3 nudge attempts fire, then the model is left alone", events.filter((e) => e.type === "status" && e.message.includes("nudging")).length === 3);
     const doneEvent = events.find((e) => e.type === "done");
     check(
-      "a task where the nudge fired but nothing was ever written reports success:false, not a false success",
+      "a task where every nudge attempt was ignored reports success:false, not a false success",
       doneEvent?.type === "done" && doneEvent.success === false
     );
+    const writtenContent = await fs.readFile(path.join(tmpDir, "bar.py"), "utf-8").catch(() => null);
+    check("bar.py was never actually written", writtenContent === null);
   }
 
   await fs.rm(tmpDir, { recursive: true, force: true });
