@@ -102,9 +102,12 @@ remaining gaps, instead of burying them.
   [Automatic fallback on rate limits](#automatic-fallback-on-rate-limits).
 
 **Tools & safety, not vibes**
-- `read_file`, `list_directory`, `grep` (ripgrep with a pure-JS fallback),
-  `edit_file`, `run_command` — plus every tool an MCP server offers, once
-  you connect one.
+- `read_file` (full file, or offset/limit to page through a large one),
+  `list_directory`, `grep` (ripgrep with a pure-JS fallback), `edit_file`
+  (full content for a new file or a big rewrite, or `old_string`/`new_string`
+  for a targeted change without rewriting the whole file), `delete_file`
+  (a file, or a whole directory with `recursive: true`), `run_command` —
+  plus every tool an MCP server offers, once you connect one.
 - Every file tool refuses to touch protected paths (`.env*`, `*.pem`,
   `*.key`, `id_rsa*`, `credentials.*`, `secrets.*`, `.ssh/`, `.aws/`,
   `.git/`) and redacts secret-shaped strings before they ever reach the
@@ -130,8 +133,9 @@ remaining gaps, instead of burying them.
 - A Mac/Windows Electron shell around the same core, with zero changes to
   `agent.ts` — workspace picker, provider/mode selection, task input
   (with file/image attachments), and a live event log with inline
-  Approve/Deny, all with a real dark IDE theme (Warm Dark / Mono Ink) and
-  fluid entrance/transition animations throughout.
+  Approve/Deny, all with a choice of four themes (two dark IDE-style —
+  Warm Dark / Mono Ink — plus an OLED Black and a Light theme) and fluid
+  entrance/transition animations throughout.
 - **Multi-session tabs** — run up to 6 sessions at once, each one still
   running and updating in the background whether or not you're looking
   at it.
@@ -570,7 +574,7 @@ of opening a public issue.
 | `src/types.ts` | The `ModelProvider` interface everything else depends on |
 | `src/models.ts` | The curated embedded-model catalog |
 | `src/providers/` | `EmbeddedLlamaProvider`, `OpenAICompatibleProvider`, `AnthropicProvider`, `OpenAIProvider`, `GeminiProvider`, `FreellmapiProxyProvider`, `MockProvider` |
-| `src/tools/` | `read_file`, `list_directory`, `grep`, `edit_file`, `run_command` |
+| `src/tools/` | `read_file`, `list_directory`, `grep`, `edit_file`, `delete_file`, `run_command` |
 | `src/permissions.ts` | `PermissionEngine` — the deterministic policy layer |
 | `src/protected.ts` | Protected-path matching and secret redaction |
 | `src/checkpoints.ts` / `src/changesSince.ts` | Scratch-index checkpoint/revert and the "Files changed" diff computation |
