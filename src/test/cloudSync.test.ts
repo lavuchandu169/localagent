@@ -137,6 +137,12 @@ console.log("\nuploadSession — redacts secrets before upload (security audit M
     createdAt: 100,
     updatedAt: 100,
     ownerEmail: null,
+    provider: null,
+    mode: null,
+    planFirst: false,
+    checkpointHash: null,
+    checkpointWorkspaceRoot: null,
+    lastSyncCheckpoint: null,
   };
   let uploadedBody: string | undefined;
   const fakeFetch: typeof fetch = async (url, init) => {
