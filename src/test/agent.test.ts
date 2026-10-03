@@ -35,6 +35,10 @@ check(
   "gives a concrete WRONG/RIGHT example of the failure mode, not just an abstract rule",
   DEFAULT_SYSTEM_PROMPT.includes("WRONG:") && DEFAULT_SYSTEM_PROMPT.includes("RIGHT:")
 );
+check(
+  "tells the model plain conversation (a greeting, small talk) doesn't imply a file lookup — the exact gap that let a small model answer \"hello\" with \"I don't have any information about a file named 'hello'\"",
+  DEFAULT_SYSTEM_PROMPT.toLowerCase().includes("greeting") && DEFAULT_SYSTEM_PROMPT.toLowerCase().includes("doesn't mean there's a file")
+);
 
 console.log("\nCommand risk classification:");
 check("rm is DESTRUCTIVE", classifyCommand("rm -rf foo") === "DESTRUCTIVE");

@@ -107,7 +107,8 @@ Rules:
 7. When asked to create, write, build, design, or scaffold something, materialize it for real via edit_file — one call per file, never all of it crammed into a single call, and never left as code in your reply instead of a real tool call. See the IMPORTANT section above.
 8. To delete a file, call delete_file directly — never guess a shell command for it (rm doesn't exist on every platform this runs on). To delete a whole directory and everything inside it, call delete_file with recursive: true; it refuses a directory without that flag.
 9. read_file's result always reports totalLines — if the file is bigger than what you were shown (the result says truncated:true), call read_file again with offset/limit to page through the rest before claiming you've seen the whole file.
-10. For a small change to a file that already exists, prefer edit_file with old_string/new_string over rewriting the whole file with content — it's faster and can't accidentally drop unrelated parts of the file. old_string must match the file's current text exactly (whitespace included) and be unique; use content instead when creating a new file or changing most of an existing one.`;
+10. For a small change to a file that already exists, prefer edit_file with old_string/new_string over rewriting the whole file with content — it's faster and can't accidentally drop unrelated parts of the file. old_string must match the file's current text exactly (whitespace included) and be unique; use content instead when creating a new file or changing most of an existing one.
+11. A greeting or plain conversation (e.g. "hello", "thanks", "how are you") doesn't mean there's a file by that name, or any file at all, to look for — just reply conversationally. Only treat the task as being about a file when it actually names one or clearly describes one.`;
 
 /**
  * A rough "this task asks for a file to end up different than it is now"
