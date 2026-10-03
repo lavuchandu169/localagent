@@ -10,9 +10,12 @@ import {
   activeTab,
   resetTabToUnconfigured,
   lastEventStillRunning,
+  providerSupportsImages,
+  filterAttachmentsForProvider,
   type TabState,
 } from "../electron/renderer/tabState.js";
 import type { AgentEvent } from "../types.js";
+import type { PickedAttachment } from "../electron/attachments.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -274,6 +277,48 @@ console.log("\nresetTabToUnconfigured:");
   check("editingSession resets to false", tab.editingSession === false);
   check("running resets to false", tab.running === false);
   check("title is deliberately left alone — the caller owns it", tab.title === "Some old session");
+}
+
+console.log("\nproviderSupportsImages:");
+{
+  check(
+    "the embedded local model has no vision capability — it's text-only, so it can't actually use an attached image",
+    providerSupportsImages({ kind: "embedded", size: "qwen-coder-1.5b" }) === false
+  );
+  check("Anthropic forwards images correctly, so it's supported", providerSupportsImages({ kind: "anthropic", model: "claude-opus-4" } as any) === true);
+  check("OpenAI forwards images correctly, so it's supported", providerSupportsImages({ kind: "openai", model: "gpt-5" } as any) === true);
+  check("Gemini forwards images correctly, so it's supported", providerSupportsImages({ kind: "gemini", model: "gemini-pro" } as any) === true);
+  check(
+    "a custom OpenAI-compatible server forwards images correctly, so it's supported",
+    providerSupportsImages({ kind: "openai-compatible", baseUrl: "http://localhost:8080", model: "local-model" } as any) === true
+  );
+  check(
+    "FreeLLMAPI delegates through the OpenAI-compatible path, so it's supported",
+    providerSupportsImages({ kind: "freellmapi" } as any) === true
+  );
+}
+
+console.log("\nfilterAttachmentsForProvider:");
+{
+  const image: PickedAttachment = { kind: "image", name: "screenshot.png", mediaType: "image/png", dataBase64: "abc" };
+  const text: PickedAttachment = { kind: "text", name: "notes.txt", content: "hello" };
+
+  {
+    const result = filterAttachmentsForProvider([image, text], { kind: "embedded", size: "qwen-coder-1.5b" });
+    check("an image is rejected for the embedded (text-only) model", result.accepted.length === 1 && result.accepted[0] === text);
+    check("a text attachment in the same batch is still accepted — only images are the problem", result.rejected.length === 1 && result.rejected[0]!.name === "screenshot.png");
+    check("the rejection reason explains why, for the log line the caller shows", result.rejected[0]!.reason.length > 0);
+  }
+
+  {
+    const result = filterAttachmentsForProvider([image, text], { kind: "anthropic", model: "claude-opus-4" } as any);
+    check("a provider that supports images accepts both the image and the text unchanged", result.accepted.length === 2 && result.rejected.length === 0);
+  }
+
+  {
+    const result = filterAttachmentsForProvider([text], { kind: "embedded", size: "qwen-coder-1.5b" });
+    check("a text-only batch is fully accepted even for the embedded model — nothing to reject", result.accepted.length === 1 && result.rejected.length === 0);
+  }
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

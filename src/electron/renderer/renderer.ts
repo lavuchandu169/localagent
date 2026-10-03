@@ -17,6 +17,7 @@ import {
   resetTabToUnconfigured,
   defaultTabConfig,
   lastEventStillRunning,
+  filterAttachmentsForProvider,
   MAX_OPEN_TABS,
   type TabRegistry,
   type TabState,
@@ -584,7 +585,17 @@ attachFileBtn.addEventListener("click", () => {
       logLine(`[attachments] Only added ${attachments.length} of ${attachments.length + skipped} picked files — the ${MAX_ATTACHMENTS_PER_TASK}-attachment limit was reached.`, "log-status");
     }
     const tab = requireActiveTab();
-    tab.pendingAttachments = [...tab.pendingAttachments, ...attachments];
+    // The embedded local model has no vision capability at all (see
+    // filterAttachmentsForProvider) — attaching a screenshot to it used to
+    // get silently sent and come back as the model's own confused "I can't
+    // see images" reply instead of a clear reason up front. Text
+    // attachments are unaffected: every provider, embedded included, can
+    // use plain text fine.
+    const { accepted, rejected } = filterAttachmentsForProvider(attachments, tab.activeProvider ?? tab.provider);
+    for (const r of rejected) {
+      logLine(`[attachments] Couldn't attach ${r.name}: ${r.reason}`, "log-error");
+    }
+    tab.pendingAttachments = [...tab.pendingAttachments, ...accepted];
     renderAttachmentChips();
   });
 });
