@@ -1666,6 +1666,56 @@ await (async () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
+
+  {
+    // Security audit finding (confirmed, high): projectScriptApprovedThisTask
+    // reused the category-level approval from a PLAIN "npm test" for ANY
+    // later command classifyCommand also puts in PROJECT_SCRIPT, with none
+    // of the shell-metacharacter/escaping-argument checks SAFE_READ's own
+    // auto-allow already gets. A model that gets one ordinary approval
+    // could follow it with the same prefix plus an injected shell suffix
+    // and have it run with zero further confirmation. The fix re-applies
+    // those same checks before honoring the memo — this proves an injected
+    // command is forced through a fresh ASK instead of silently reusing
+    // the earlier approval, while a second call with the SAME exact safe
+    // command still auto-allows (the memo isn't simply disabled outright).
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-projectscript-injection-test-"));
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "npm test" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c2", name: "run_command", arguments: { command: "npm test; echo injected" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c3", name: "run_command", arguments: { command: "npm test" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const approvalRequests: ToolCall[] = [];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "AUTO_SAFE",
+      onApprovalNeeded: async (call) => {
+        approvalRequests.push(call);
+        return { approved: true };
+      },
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("run the tests, then run them again with something else mixed in")) events.push(event);
+
+    const permissionRequests = events.filter((e) => e.type === "permission.request" && e.call.name === "run_command");
+    check("the first plain 'npm test' is asked for normally", permissionRequests[0]?.type === "permission.request" && permissionRequests[0].decision === "ASK");
+    check(
+      "a later command with an injected shell suffix is NOT auto-allowed by the earlier approval, even though classifyCommand still calls it PROJECT_SCRIPT",
+      permissionRequests[1]?.type === "permission.request" && permissionRequests[1].decision === "ASK"
+    );
+    check(
+      "a third, exactly-the-same-safe-command call still auto-allows — the fix narrows the memo, it doesn't disable it",
+      permissionRequests[2]?.type === "permission.request" && permissionRequests[2].decision === "ALLOW"
+    );
+    check("the user was actually asked about the injected command, not silently bypassed", approvalRequests.some((c) => c.arguments.command === "npm test; echo injected"));
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 })();
 
 console.log("\nFallback to another configured provider on a retryable error:");
