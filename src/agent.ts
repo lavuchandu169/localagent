@@ -15,7 +15,7 @@ import type {
 } from "./types.js";
 import { ProviderChatError } from "./types.js";
 import { ToolRegistry } from "./toolRegistry.js";
-import { PermissionEngine, classifyCommand } from "./permissions.js";
+import { PermissionEngine, classifyCommand, hasShellMetacharacters, hasEscapingArguments } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
 import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
@@ -798,7 +798,26 @@ export class AgentSession {
         // first approval this task, same memo autoVerifyAfterEdit shares
         // below. Without this, the model's own direct call was the one
         // path the original H3 fix never covered.
-        if (decision === "ASK" && call.name === "run_command" && classifyCommand(String(call.arguments.command ?? "")) === "PROJECT_SCRIPT" && this.projectScriptApprovedThisTask) {
+        //
+        // Security audit finding (confirmed, high): classifyCommand's
+        // PROJECT_SCRIPT regexes are bare prefix+word-boundary matches —
+        // "npm test; rm -rf ~" classifies identically to a bare "npm
+        // test". Reusing the memo on CATEGORY alone, with none of the
+        // shell-metacharacter/escaping-argument checks SAFE_READ's own
+        // auto-allow already requires, let one approval of an ordinary
+        // command silently authorize a later, differently-shaped command
+        // in the same task. Applying the same two checks here closes that
+        // gap without weakening the legitimate "don't ask again for the
+        // same kind of safe command" case the memo exists for.
+        const projectScriptCommand = String(call.arguments.command ?? "");
+        if (
+          decision === "ASK" &&
+          call.name === "run_command" &&
+          classifyCommand(projectScriptCommand) === "PROJECT_SCRIPT" &&
+          this.projectScriptApprovedThisTask &&
+          !hasShellMetacharacters(projectScriptCommand) &&
+          !hasEscapingArguments(projectScriptCommand)
+        ) {
           decision = "ALLOW";
         }
         const diff = await this.computeEditDiffForCall(call);
