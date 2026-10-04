@@ -13,8 +13,17 @@ import {
   classifyRefreshResponse,
   buildTokenRequestBody,
   getFreshAccessToken,
+  signOut,
   type StorageCrypto,
 } from "../electron/googleAuth.js";
+
+function fakeFetch(handler: (url: string, init?: RequestInit) => Response) {
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => handler(String(url), init)) as typeof fetch;
+  return () => {
+    globalThis.fetch = real;
+  };
+}
 
 /** Not real encryption — just reversible enough to prove the plumbing actually calls encrypt on write and decrypt on read, without depending on Electron's safeStorage (which secureStorage.ts wraps and is verified separately, live). */
 const fakeStorageCrypto: StorageCrypto = {
@@ -190,6 +199,64 @@ console.log("\ngetFreshAccessToken:");
   await saveStoredIdentity(authFilePath, { email: "a@b.com", name: "A", pictureUrl: null, refreshToken: null });
   const token = await getFreshAccessToken(authFilePath, "client-id");
   check("returns null when the stored identity has no refresh token", token === null);
+}
+
+console.log("\nsignOut (security audit finding: oauth-signout-no-remote-token-revocation):");
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-auth-signout-test-"));
+  const authFilePath = path.join(dir, "auth.json");
+  await saveStoredIdentity(authFilePath, { email: "a@b.com", name: "A", pictureUrl: null, refreshToken: "real-refresh-token" });
+
+  let revokeCalledWith: { url: string; body: string } | undefined;
+  const restore = fakeFetch((url, init) => {
+    revokeCalledWith = { url, body: String(init?.body ?? "") };
+    return new Response(null, { status: 200 });
+  });
+  await signOut(authFilePath);
+  restore();
+
+  check("POSTs to Google's revoke endpoint", revokeCalledWith?.url === "https://oauth2.googleapis.com/revoke");
+  check("sends the stored refresh token as the token to revoke", revokeCalledWith?.body.includes("token=real-refresh-token") ?? false);
+  check("the local identity is still cleared afterward", (await loadStoredIdentity(authFilePath)) === null);
+}
+{
+  // Revocation failing (network error, Google outage) must not block
+  // signing out locally - the user explicitly asked to sign out, and
+  // "can't reach Google right now" is not a reason to leave the local
+  // credential in place.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-auth-signout-fail-test-"));
+  const authFilePath = path.join(dir, "auth.json");
+  await saveStoredIdentity(authFilePath, { email: "a@b.com", name: "A", pictureUrl: null, refreshToken: "real-refresh-token" });
+
+  const restore = fakeFetch(() => {
+    throw new Error("network down");
+  });
+  let threw = false;
+  try {
+    await signOut(authFilePath);
+  } catch {
+    threw = true;
+  }
+  restore();
+
+  check("signOut does not throw even when revocation fails", threw === false);
+  check("the local identity is still cleared even when revocation fails", (await loadStoredIdentity(authFilePath)) === null);
+}
+{
+  // No stored identity (or no refresh token) at all - nothing to revoke,
+  // so no network call should even be attempted.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-auth-signout-none-test-"));
+  const authFilePath = path.join(dir, "auth.json");
+
+  let fetchCalled = false;
+  const restore = fakeFetch(() => {
+    fetchCalled = true;
+    return new Response(null, { status: 200 });
+  });
+  await signOut(authFilePath);
+  restore();
+
+  check("no revoke call is attempted when there was never a stored identity", fetchCalled === false);
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
