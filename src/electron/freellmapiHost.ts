@@ -1,5 +1,7 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { StorageCrypto } from "./googleAuth.js";
+import { getOrCreateFreellmapiEncryptionKey } from "./freellmapiEncryptionKey.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,6 +29,25 @@ const DEFAULT_STOP_TIMEOUT_MS = 5000;
 let bundle: FreellmapiBundle | null = null;
 let running: { server: { close(cb?: () => void): void }; port: number } | null = null;
 let startPromise: Promise<{ port: number }> | null = null;
+let storageCrypto: StorageCrypto | undefined;
+
+/**
+ * Set once by main.ts at startup, with the exact same storageCrypto every
+ * other credential in this app already uses (safeStorage-backed when
+ * available, undefined otherwise). startFreellmapiServer() is a
+ * process-wide singleton already (see its own doc comment), so this
+ * module-level value — rather than threading a new parameter through
+ * buildProvider()/FreellmapiProxyProvider's constructor across several
+ * files — is how it reaches the ENCRYPTION_KEY generation/persistence
+ * below regardless of whether freellmapiProxy.ts's healthCheck() or
+ * main.ts's freellmapiConn() is the caller that actually starts the
+ * server first. Never calling this (e.g. in tests) just means the key is
+ * persisted as a 0600 plaintext file instead — the same unavailable-
+ * secure-storage fallback every other credential in this app already has.
+ */
+export function setFreellmapiStorageCrypto(crypto: StorageCrypto | undefined): void {
+  storageCrypto = crypto;
+}
 
 /**
  * Process-wide singleton: every caller (regardless of how many sessions/tabs
@@ -90,7 +111,27 @@ export async function startFreellmapiServer(deps: FreellmapiHostDeps): Promise<{
       process.env.NODE_ENV = "production";
     }
 
+    const originalEncryptionKey = process.env.ENCRYPTION_KEY;
+
     try {
+      // Security audit finding: freellmapi-server:encryption-key-plaintext-colocated.
+      // With no ENCRYPTION_KEY env var, the vendored server's own
+      // isDevFallbackAllowed() (NODE_ENV !== "production") silently writes
+      // the key that protects every stored provider API key as a plaintext
+      // file next to its database — readable by any other process running
+      // as the same OS user, no auth or race needed. initEncryptionKey()
+      // runs synchronously during the vendored server's own DB-init step,
+      // which happens before bundle.startServer() below resolves (confirmed
+      // by reading vendor/freellmapi/server/src/db/index.ts directly), so
+      // setting ENCRYPTION_KEY here and restoring it in the finally block —
+      // the same pattern already used for NODE_ENV above — is safe: by the
+      // time this function returns, the vendored module has already cached
+      // the real key for the rest of this process's life and never consults
+      // the env var again. Inside this try (not before it) so a failure
+      // here still restores NODE_ENV via the existing finally below.
+      const keyFilePath = path.join(deps.userDataDir, "freellmapi", ".localagent-encryption-key");
+      process.env.ENCRYPTION_KEY = await getOrCreateFreellmapiEncryptionKey(keyFilePath, storageCrypto);
+
       bundle = (await import(pathToFileURL(bundlePath).href)) as unknown as FreellmapiBundle;
       const { server, port } = await bundle.startServer({
         dbPath,
@@ -116,6 +157,12 @@ export async function startFreellmapiServer(deps: FreellmapiHostDeps): Promise<{
       // bogus NODE_ENV=undefined behind for the rest of the app.
       if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = originalNodeEnv;
+      // Same undefined-vs-"undefined" restore for ENCRYPTION_KEY — it's
+      // already cached inside the vendored module by this point (see the
+      // comment above), so nothing observes this real secret sitting in
+      // the ambient environment for the rest of the process's life.
+      if (originalEncryptionKey === undefined) delete process.env.ENCRYPTION_KEY;
+      else process.env.ENCRYPTION_KEY = originalEncryptionKey;
       // Whether it succeeded or threw, this attempt is over - a later call
       // must be free to try again rather than seeing a stale in-flight
       // promise from a failed attempt forever.
