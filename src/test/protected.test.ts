@@ -67,6 +67,21 @@ console.log("\nisProtectedPath is case-insensitive (security audit M5 — APFS/N
   check("an ordinary non-secret path is still NOT protected", isProtectedPath("src/Index.ts") === false);
 }
 
+console.log(
+  "\nisProtectedPath tolerates a trailing dot/space on .pem/.key (security audit finding: trailing-dot-space-anchor-gap — Windows' Win32 file APIs strip trailing dots/spaces from a path component at actual file-creation/open/delete time, so a model-supplied 'secret.pem ' or 'secret.pem.' could pass this check yet have the OS normalize the on-disk operation to the literal protected filename):"
+);
+{
+  check("'secret.pem ' (trailing space) is still protected", isProtectedPath("secret.pem ") === true);
+  check("'secret.pem.' (trailing dot) is still protected", isProtectedPath("secret.pem.") === true);
+  check("'secret.pem..  ' (multiple trailing dots/spaces) is still protected", isProtectedPath("secret.pem..  ") === true);
+  // "private.key", not "id_rsa.key" — the latter would also match the
+  // separate, unanchored id_rsa pattern regardless of this fix, which
+  // would mask whether the .key$ anchor itself was actually widened.
+  check("'private.key ' (trailing space) is still protected", isProtectedPath("private.key ") === true);
+  check("'private.key.' (trailing dot) is still protected", isProtectedPath("private.key.") === true);
+  check("a genuinely different file ('secret.pem.txt', not just trailing dots/spaces) is still NOT protected", isProtectedPath("secret.pem.txt") === false);
+}
+
 console.log("\nredactSecrets covers a bare Gemini API key, not just OpenAI/GitHub prefixes (security audit — Gemini's key rides in the request URL query string, not a header, so any future accidental URL logging needs this):");
 {
   const geminiKey = "AIzaSy" + "g".repeat(33);
