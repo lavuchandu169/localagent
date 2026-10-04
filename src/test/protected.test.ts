@@ -52,6 +52,21 @@ console.log("redactSecrets:");
   check("sk- keys are now actually redacted, not just suffixed", !redactSecrets(`key: ${skKey}`).includes(skKey));
 }
 {
+  // Security audit finding (confirmed, medium): sk-prefix-hyphen-gap. The
+  // bare sk- pattern's character class was [A-Za-z0-9]{20,} — no hyphen
+  // or underscore — so it never matched Anthropic's real key shape
+  // (sk-ant-api03-...) or OpenAI's modern project-scoped keys
+  // (sk-proj-...), both of which place a hyphen a few characters after
+  // "sk-": the required 20+ alphanumeric run never accumulates. The
+  // sibling AIza (Gemini) pattern already allows hyphen/underscore in
+  // its own class, confirming this was an inconsistency, not a
+  // deliberate choice.
+  const anthropicKey = "sk-ant-api03-" + "a".repeat(30);
+  check("a bare Anthropic-shaped key (sk-ant-api03-...) is redacted", !redactSecrets(`x-api-key: ${anthropicKey}`).includes(anthropicKey));
+  const openaiProjectKey = "sk-proj-" + "b".repeat(30);
+  check("a bare OpenAI project-scoped key (sk-proj-...) is redacted", !redactSecrets(`Authorization: Bearer ${openaiProjectKey}`).includes(openaiProjectKey));
+}
+{
   check("the KEY=VALUE prefix is still preserved (no regression in the one case that needs it)", redactSecrets("API_KEY=supersecretvalue123").startsWith("API_KEY="));
 }
 {
