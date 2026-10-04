@@ -340,9 +340,17 @@ export class AgentSession {
     const relPath = call.arguments.path;
     const newContent = call.arguments.content;
     if (typeof relPath !== "string" || typeof newContent !== "string") return undefined;
-    const workspaceRoot = path.resolve(this.opts.workspaceRoot);
-    const abs = path.resolve(workspaceRoot, relPath);
-    if (!abs.startsWith(workspaceRoot)) return undefined;
+    // Security audit finding (confirmed, medium): naive-workspace-check.
+    // This used to be its own inline path.resolve+startsWith check, which
+    // workspacePath.ts's own header comment documents as broken (findings
+    // H2/M2: no trailing-separator guard, no symlink resolution) — exactly
+    // the pattern editFileTool itself was hardened away from. Reusing
+    // resolveWithinWorkspace here means a symlink escaping the workspace
+    // is refused before this pre-approval diff ever reads anything,
+    // matching editFileTool's own containment check exactly.
+    const resolved = await resolveWithinWorkspace(this.opts.workspaceRoot, relPath);
+    if (!resolved.ok) return undefined;
+    const abs = resolved.abs;
     let oldContent: string | null;
     try {
       oldContent = await fs.readFile(abs, "utf8");
