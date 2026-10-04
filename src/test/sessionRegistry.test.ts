@@ -20,6 +20,7 @@ import {
   respondPlan,
   getSessionIdsWithPendingApproval,
   withPendingApprovalEntries,
+  getSessionOwnerEmail,
 } from "../electron/sessionRegistry.js";
 import { MockProvider } from "../providers/mockProvider.js";
 import { loadSessionRecord, listSessions, searchSessions } from "../sessionStore.js";
@@ -1449,6 +1450,54 @@ await (async () => {
     const snapshot = getLiveSessionSnapshot(registry, sessionId);
     const firstUserMessage = snapshot?.messages.find((m) => m.role === "user");
     check("runTask's attachments argument reaches the session's actual message history", firstUserMessage?.images?.[0]?.name === "a.png");
+  }
+
+  console.log("\ngetSessionOwnerEmail (security audit finding: session-ipc-missing-owner-authorization):");
+  {
+    // Live session, never yet persisted to disk — ownership must come
+    // from the in-memory entry, not a disk read (there's nothing on disk
+    // yet to read).
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {},
+      uploadSession: async () => ({ modifiedTime: "2024-01-01T00:00:00.000Z" }),
+      getOwnerEmail: async () => "live-owner@example.com",
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([]) }
+    );
+    check("resolves the live entry's owner for a session never yet persisted to disk", (await getSessionOwnerEmail(registry, sessionId)) === "live-owner@example.com");
+  }
+  {
+    // Persisted to disk, then the in-memory registry forgotten (simulates
+    // an app restart) — ownership must fall back to the on-disk record.
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      {
+        providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]),
+        resume: {
+          sessionId: "disk-only-owned-session",
+          initialMessages: [{ role: "system", content: "sys" }],
+          priorEvents: [],
+          title: "t",
+          createdAt: Date.now(),
+          ownerEmail: "disk-owner@example.com",
+          checkpointHash: null,
+          checkpointWorkspaceRoot: null,
+        },
+      }
+    );
+    await runTask(registry, sessionId, "persist it", () => {});
+    registry.sessions.delete(sessionId); // simulate the live entry being gone (app restart)
+    check("falls back to the on-disk record's owner once the live entry is gone", (await getSessionOwnerEmail(registry, sessionId)) === "disk-owner@example.com");
+  }
+  {
+    const registry = createSessionRegistry(sessionsDir);
+    check("returns undefined for a session id that exists nowhere at all — distinct from a real null owner", (await getSessionOwnerEmail(registry, "no-such-session-anywhere")) === undefined);
   }
 
   console.log("\ndoRunTask does not persist/replay ephemeral streaming deltas (final review I4):");
