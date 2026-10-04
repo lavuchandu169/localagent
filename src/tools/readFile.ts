@@ -74,28 +74,48 @@ export const readFileTool: Tool<Input, Output> = {
       // artifact must be dropped to avoid reporting one line too many —
       // but only ever the LAST one: a genuine blank line elsewhere (or a
       // genuine blank line at the very end, from TWO trailing newlines)
-      // must still count for real.
+      // must still count for real. totalLines is always computed from
+      // the ORIGINAL content, never the redacted one below — pagination
+      // math (startLine/endLine/totalLines) must stay tied to the real
+      // file structure regardless of how many lines a redacted secret
+      // collapses into.
       const rawLines = content.split("\n");
       const lines = rawLines.length > 0 && rawLines[rawLines.length - 1] === "" ? rawLines.slice(0, -1) : rawLines;
       const totalLines = lines.length;
 
+      // Security audit finding: truncate-before-redact-order. Redacting
+      // against the FULL original content, before either branch below
+      // truncates for display, is what both of them share — a secret
+      // whose required shape (closing PEM "-----END...-----" marker, or
+      // a bare token's own minimum length) straddles either truncation
+      // boundary previously survived as an unmatchable partial fragment,
+      // returned completely unredacted. A multi-line match (the PEM
+      // pattern) collapsing into a single "[REDACTED]" line can shift
+      // which exact lines the ranged branch below returns relative to
+      // the original file's own numbering — an accepted, display-only
+      // side effect; the content returned is never a partial, unredacted
+      // secret either way.
+      const redactedContent = redactSecrets(content);
+
       if (input.offset === undefined && input.limit === undefined) {
-        const truncated = content.length > MAX_CONTENT_CHARS;
+        const truncated = redactedContent.length > MAX_CONTENT_CHARS;
         return {
           ok: true,
-          output: { path: rel, content: redactSecrets(truncated ? content.slice(0, MAX_CONTENT_CHARS) : content), totalLines },
+          output: { path: rel, content: truncated ? redactedContent.slice(0, MAX_CONTENT_CHARS) : redactedContent, totalLines },
           truncated,
         };
       }
 
+      const redactedRawLines = redactedContent.split("\n");
+      const redactedLines = redactedRawLines.length > 0 && redactedRawLines[redactedRawLines.length - 1] === "" ? redactedRawLines.slice(0, -1) : redactedRawLines;
       const startLine = Math.max(1, input.offset ?? 1);
       const limit = Math.max(1, Math.min(MAX_LINE_LIMIT, input.limit ?? DEFAULT_LINE_LIMIT));
       const endLine = Math.min(totalLines, startLine + limit - 1);
-      const selected = lines.slice(startLine - 1, endLine).join("\n");
+      const selected = redactedLines.slice(startLine - 1, endLine).join("\n");
       const truncated = endLine < totalLines;
       return {
         ok: true,
-        output: { path: rel, content: redactSecrets(selected), totalLines, startLine, endLine },
+        output: { path: rel, content: selected, totalLines, startLine, endLine },
         truncated,
       };
     } catch (err: any) {

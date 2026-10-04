@@ -104,6 +104,55 @@ async function main() {
     check("a path escaping the workspace is still refused with offset/limit set", result.ok === false);
   }
 
+  console.log("\nreadFileTool: a secret straddling the whole-file character-truncation boundary is still fully redacted, not partially leaked (security audit finding: truncate-before-redact-order):");
+  {
+    // MAX_CONTENT_CHARS is 20000 — the BEGIN line and secret body land
+    // comfortably BEFORE that boundary, with padding pushing the closing
+    // END marker comfortably PAST it. Under the old (buggy) order,
+    // slicing to 20000 chars BEFORE redacting excludes the closing END
+    // marker entirely, so the PEM regex (which requires it) never
+    // matches and the body — fully present in the truncated slice —
+    // survives completely raw in the output.
+    const filler = "A".repeat(19000);
+    const secretBody = "SECRETPEMBODYDATA1234567890";
+    const padding = "B".repeat(2000); // pushes the closing END marker past the 20000-char cutoff
+    const pemBlock = `-----BEGIN RSA PRIVATE KEY-----\n${secretBody}\n${padding}\n-----END RSA PRIVATE KEY-----\n`;
+    await fs.writeFile(path.join(root, "straddle.txt"), filler + pemBlock, "utf-8");
+
+    const result = await readFileTool.execute({ path: "straddle.txt" }, ctx);
+    check("the result is ok", result.ok === true);
+    check("the PEM body never appears raw in the truncated output", !(result.output?.content ?? "").includes(secretBody));
+    check("the redaction marker is present instead", (result.output?.content ?? "").includes("[REDACTED]"));
+  }
+
+  console.log("\nreadFileTool: a secret straddling an offset/limit line-range boundary is still fully redacted, not partially leaked (security audit finding: truncate-before-redact-order, ranged branch):");
+  {
+    // The requested range (lines 11-12) covers the PEM's BEGIN line and
+    // body, but deliberately stops one line short of its closing END
+    // marker (line 13) — exactly the shape that let a multi-line secret
+    // survive raw under the old per-branch slice-then-redact order, since
+    // redactSecrets never saw a complete BEGIN...END span to match.
+    // Redacting against the full file content first (this fix) means the
+    // match is found regardless of where the requested line range cuts
+    // off; the precise line numbering of what comes after a collapsed
+    // multi-line match is a known, accepted display-only side effect —
+    // this only asserts the actual security property, not exact
+    // post-redaction line indices.
+    const before = Array.from({ length: 10 }, (_, i) => `before-${i + 1}`);
+    const secretBody = "RANGEDSECRETBODYDATA";
+    const pemLines = ["-----BEGIN RSA PRIVATE KEY-----", secretBody, "-----END RSA PRIVATE KEY-----"];
+    const after = Array.from({ length: 10 }, (_, i) => `after-${i + 1}`);
+    const content = [...before, ...pemLines, ...after].join("\n") + "\n";
+    await fs.writeFile(path.join(root, "ranged-straddle.txt"), content, "utf-8");
+
+    const result = await readFileTool.execute({ path: "ranged-straddle.txt", offset: 11, limit: 2 }, ctx);
+    check("the result is ok", result.ok === true);
+    check(
+      "the secret body never appears raw, even though the requested range cuts off before the closing END marker",
+      !(result.output?.content ?? "").includes(secretBody)
+    );
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
