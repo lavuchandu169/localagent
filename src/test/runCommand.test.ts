@@ -57,8 +57,21 @@ async function main() {
     // Before the fix, nothing stops accumulation until close(), so this
     // would run for the full timeout; after the fix, the cap triggers a
     // kill almost immediately once ~1MB has accumulated.
+    //
+    // `& wait` (not a bare `yes ...`) is deliberate: it forces the shell
+    // to background `yes` and stay alive to wait for it, so the shell
+    // can NEVER exec-optimize itself away into `yes` the way a bare
+    // trailing command can on some shells (confirmed live: this is
+    // exactly what let an earlier, bare-command version of this test
+    // pass locally on macOS's shell while hanging for ~20 minutes on
+    // Ubuntu CI's dash — only `& wait` guarantees `yes` is a genuine
+    // grandchild of this process on every shell, which is the actual
+    // shape killProcessTree exists to handle).
     const start = Date.now();
-    const result = await runCommandTool.execute({ command: "yes AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", timeoutMs: 10000 }, ctx);
+    const result = await runCommandTool.execute(
+      { command: "yes AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA & wait", timeoutMs: 10000 },
+      ctx
+    );
     const elapsedMs = Date.now() - start;
     check("resolves well before its own generous timeout — the accumulation cap, not the timeout, ended it", elapsedMs < 5000);
     check("still returns a usable result rather than hanging or crashing the test process", result.output !== undefined || result.error !== undefined);
