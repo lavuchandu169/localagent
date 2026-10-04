@@ -18,6 +18,29 @@ interface CommandResult {
 }
 
 const MAX_OUTPUT = 8000;
+// Security audit finding: unbounded-stdout-stderr-accumulation. A
+// fast-producing runaway command (cat /dev/zero, a recursive find/cat, an
+// accidental infinite build loop) previously grew stdout/stderr without
+// any limit until close() fired — the spawn `timeout` option bounds
+// wall-clock duration only, not memory. A V8 string-length-ceiling
+// RangeError thrown mid-accumulation is an uncaught exception that
+// crashes the WHOLE app (main.ts's handler calls app.exit(1)
+// unconditionally on any uncaught exception), not just this one call.
+// Set far above MAX_OUTPUT (not equal to it) so the truncate-before-
+// redact-order fix below still has enough real content to find a
+// complete secret match — PEM keys, the longest pattern redactSecrets
+// looks for, are realistically at most a few KB — this caps the worst
+// case (a runaway producer), not the common one.
+const ACCUMULATION_CAP = 1_000_000;
+
+/** Appends `chunk` to `current`, never growing past ACCUMULATION_CAP — the
+ * remainder of an over-cap chunk is dropped, not just future chunks, so a
+ * single huge write can't bypass the cap in one shot. */
+function appendCapped(current: string, chunk: string): string {
+  if (current.length >= ACCUMULATION_CAP) return current;
+  const remaining = ACCUMULATION_CAP - current.length;
+  return current + (chunk.length > remaining ? chunk.slice(0, remaining) : chunk);
+}
 
 export const runCommandTool: Tool<Input, CommandResult> = {
   name: "run_command",
@@ -53,8 +76,26 @@ export const runCommandTool: Tool<Input, CommandResult> = {
           : spawn(input.command, { cwd: ctx.workspaceRoot, shell: true, timeout: input.timeoutMs ?? 30000 });
       let stdout = "";
       let stderr = "";
-      proc.stdout.on("data", (d) => (stdout += d.toString()));
-      proc.stderr.on("data", (d) => (stderr += d.toString()));
+      // Once either stream hits ACCUMULATION_CAP, further data is dropped
+      // and the process is killed — there is no point letting a runaway
+      // producer keep running when its output beyond the cap can never be
+      // shown anyway, and killing it early avoids wasting the user's CPU
+      // for the rest of the timeout window.
+      let killedForOutputCap = false;
+      const killIfOverCap = () => {
+        if ((stdout.length >= ACCUMULATION_CAP || stderr.length >= ACCUMULATION_CAP) && !killedForOutputCap) {
+          killedForOutputCap = true;
+          proc.kill();
+        }
+      };
+      proc.stdout.on("data", (d) => {
+        stdout = appendCapped(stdout, d.toString());
+        killIfOverCap();
+      });
+      proc.stderr.on("data", (d) => {
+        stderr = appendCapped(stderr, d.toString());
+        killIfOverCap();
+      });
       proc.on("close", (code) => {
         // Security audit finding: truncate-before-redact-order. Several
         // redactSecrets patterns require content beyond a minimum length
