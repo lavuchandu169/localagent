@@ -591,7 +591,7 @@ app.whenReady().then(async () => {
     }
     return result;
   });
-  ipcMain.handle("agent:sign-out", () => signOut(authFilePath));
+  ipcMain.handle("agent:sign-out", () => signOut(authFilePath, storageCrypto));
   ipcMain.handle("agent:auth-status", async () => {
     const { clientId, clientSecret } = await resolveGoogleCredentials(settingsFilePath, storageCrypto);
     return getAuthStatus(authFilePath, clientId, clientSecret, storageCrypto);
