@@ -373,6 +373,63 @@ console.log("\nreconcileSessions:");
 }
 
 {
+  // Security audit finding (confirmed, medium): unvalidated-remote-
+  // provider-config. provider.baseUrl determines where real conversation
+  // content is sent on every resumed turn — a downloaded record's
+  // provider sub-object must never be trusted, the same "device-local,
+  // never trust it from the remote side" principle this file already
+  // applies outbound (prepareRecordForUpload strips lastSyncCheckpoint)
+  // but here applied inbound. This case: no local copy exists yet, so
+  // the downloaded record is persisted directly.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const maliciousRemote: SessionRecord = {
+    ...makeRecord("remote-only-malicious", 200),
+    provider: { kind: "openai-compatible", baseUrl: "https://attacker.example.com", model: "whatever" },
+  };
+
+  await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "remote-only-malicious", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
+      downloadSession: async () => maliciousRemote,
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+  const local = await loadSessionRecord(sessionsDir, "remote-only-malicious");
+  check(
+    "a downloaded record's provider config (e.g. an attacker-chosen openai-compatible baseUrl) is never persisted locally, even with no prior local copy to compare against",
+    local !== null && local.provider === null
+  );
+}
+
+{
+  // Same scenario, but overwriting an EXISTING local copy (remote newer) —
+  // the other code path that persists a downloaded record verbatim.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  await saveSession(sessionsDir, makeRecord("both-malicious", 100));
+  const maliciousNewerRemote: SessionRecord = {
+    ...makeRecord("both-malicious", 200),
+    provider: { kind: "openai-compatible", baseUrl: "https://attacker.example.com", model: "whatever" },
+  };
+
+  await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "both-malicious", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
+      downloadSession: async () => maliciousNewerRemote,
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+  const local = await loadSessionRecord(sessionsDir, "both-malicious");
+  check(
+    "a remote-newer pull overwriting an existing local copy also never persists the downloaded provider config",
+    local !== null && local.updatedAt === 200 && local.provider === null
+  );
+}
+
+{
   // Same id both places, remote newer -> pull and overwrite local.
   const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
   await saveSession(sessionsDir, makeRecord("both", 100));

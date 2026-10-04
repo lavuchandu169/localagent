@@ -138,6 +138,33 @@ function prepareRecordForUpload(record: SessionRecord): Omit<SessionRecord, "las
   };
 }
 
+/**
+ * Security audit finding (confirmed, medium): unvalidated-remote-provider-
+ * config. provider.baseUrl (for the "openai-compatible" kind) determines
+ * where real conversation content is sent on every resumed turn —
+ * sessionRegistry.ts's buildProvider constructs a live network client
+ * from it with no allowlist, and startSession fires a health-check fetch
+ * before the UI ever shows the user which baseUrl is in play. A record
+ * downloaded from Drive is never trusted provenance (an attacker who
+ * compromises the user's Google account, or a second device signed into
+ * it, could write a crafted record with an attacker-controlled baseUrl),
+ * the same "device-local, never trust it from the remote side"
+ * principle prepareRecordForUpload above already applies OUTBOUND
+ * (stripping lastSyncCheckpoint) — this is that guard's inbound
+ * counterpart. A resumed session with provider: null simply falls back
+ * to whatever this device's own Settings already configure for that
+ * provider kind (sessionStore.ts's own doc comment on this field
+ * confirms that's the existing, intended fallback for a record that
+ * never had a provider at all). Local-disk tampering is a separate,
+ * already-accepted trust boundary elsewhere in this app's model — it
+ * requires local write access to the sessions directory, the same
+ * precondition several other audit findings already treat as out of
+ * scope.
+ */
+function stripUntrustedRemoteProvider(record: SessionRecord): SessionRecord {
+  return { ...record, provider: null };
+}
+
 /** Creates or updates (by sessionId lookup) the Drive file for this session
  * record. Returns Drive's own server-assigned modifiedTime for the result —
  * reconcileSessions uses it to seed/refresh a clock-skew-safe sync
@@ -315,7 +342,7 @@ export async function reconcileSessions(
           // A tombstone with no local copy anywhere means nothing here ever
           // knew about this session in the first place — nothing to delete.
           if (isTombstone(record)) return "skipped";
-          await saveSession(sessionsDir, withCheckpoint(record, remote.modifiedTime, record.updatedAt));
+          await saveSession(sessionsDir, withCheckpoint(stripUntrustedRemoteProvider(record), remote.modifiedTime, record.updatedAt));
           return "pulled";
         }
         const remoteData = await ops.downloadSession(accessToken, remote.driveFileId);
@@ -342,7 +369,7 @@ export async function reconcileSessions(
           await deleteSession(sessionsDir, remote.sessionId);
           return localChangedSinceSync ? "conflict" : "deletedLocal";
         }
-        const remoteRecord = remoteData;
+        const remoteRecord = stripUntrustedRemoteProvider(remoteData);
 
         if (checkpoint === null) {
           // No robust history yet — fall back to the previous behavior for
