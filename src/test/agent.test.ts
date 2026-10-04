@@ -617,6 +617,48 @@ await (async () => {
       editEvent?.type === "permission.request" && editEvent.diff?.length === 1 && editEvent.diff[0]?.added === true && editEvent.diff[0]?.value === newFileContent
     );
   }
+
+  {
+    // Security audit finding (confirmed, medium): naive-workspace-check.
+    // computeEditDiffForCall used its own inline path.resolve+startsWith
+    // check instead of resolveWithinWorkspace (workspacePath.ts) -
+    // editFileTool's own hardened check - so a symlink inside the
+    // workspace pointing OUTSIDE it let this pre-approval diff computation
+    // read and disclose that outside file's content, even for a call PLAN
+    // denies outright.
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-diffescape-test-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-diffescape-outside-"));
+    const secretPath = path.join(outsideDir, "secret.txt");
+    await fs.writeFile(secretPath, "outside-secret-content\n", "utf-8");
+    const linkPath = path.join(workspace, "escape-link");
+    await fs.symlink(outsideDir, linkPath, "dir");
+
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e3", name: "edit_file", arguments: { path: "escape-link/secret.txt", content: "owned\n" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: workspace,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+
+    let editEvent: AgentEvent | undefined;
+    for await (const event of session.run("edit the symlinked file")) {
+      if (event.type === "permission.request" && event.call.id === "e3") editEvent = event;
+    }
+
+    check(
+      "a symlink escaping the workspace gets no diff at all, not the outside file's real content",
+      editEvent?.type === "permission.request" && editEvent.diff === undefined
+    );
+
+    await fs.rm(linkPath, { force: true });
+    await fs.rm(workspace, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  }
 })();
 
 console.log("\nedit_file with old_string/new_string resolves to a full write, end to end:");

@@ -13,7 +13,7 @@ import os from "node:os";
 import fsPromises from "node:fs/promises";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries, getSessionOwnerEmail } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import type { AttachedImage, AttachedText, PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
@@ -439,8 +439,13 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     "agent:run-task",
-    (event, sessionId: string, task: string, attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }) =>
-      runTask(
+    async (event, sessionId: string, task: string, attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }) => {
+      // Security audit finding: session-ipc-missing-owner-authorization.
+      // Same "indistinguishable from doesn't exist" message runTask's own
+      // !entry check already throws, so a denied foreign-owned session
+      // can't be told apart from a genuinely unknown id.
+      if (!(await isSessionOwnedByCurrentAccount(sessionId))) throw new Error(`Unknown session: ${sessionId}`);
+      return runTask(
         registry,
         sessionId,
         task,
@@ -448,7 +453,8 @@ app.whenReady().then(async () => {
           event.sender.send("agent:event", sessionId, agentEvent);
         },
         attachments
-      )
+      );
+    }
   );
 
   ipcMain.handle("agent:pick-attachments", async (_event, limit?: number) => {
@@ -478,17 +484,32 @@ app.whenReady().then(async () => {
     return { attachments, errors, skipped };
   });
 
-  ipcMain.handle("agent:respond-permission", (_event, sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]) =>
-    respondPermission(registry, sessionId, callId, approved, approvedHunkIds)
+  // Security audit finding: session-ipc-missing-owner-authorization. Each
+  // of these no-ops (or returns the same "nothing to report" shape its
+  // own !entry/missing-checkpoint case already uses) for a foreign-owned
+  // session, exactly as if the id didn't exist.
+  ipcMain.handle("agent:respond-permission", async (_event, sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]) => {
+    if (!(await isSessionOwnedByCurrentAccount(sessionId))) return;
+    respondPermission(registry, sessionId, callId, approved, approvedHunkIds);
+  });
+
+  ipcMain.handle("agent:respond-plan", async (_event, sessionId: string, approved: boolean) => {
+    if (!(await isSessionOwnedByCurrentAccount(sessionId))) return;
+    respondPlan(registry, sessionId, approved);
+  });
+
+  ipcMain.handle("agent:cancel-session", async (_event, sessionId: string) => {
+    if (!(await isSessionOwnedByCurrentAccount(sessionId))) return;
+    await cancelSession(registry, sessionId);
+  });
+
+  ipcMain.handle("agent:get-checkpoint", async (_event, sessionId: string) => ((await isSessionOwnedByCurrentAccount(sessionId)) ? getCheckpointHash(registry, sessionId) : null));
+  ipcMain.handle("agent:revert-checkpoint", async (_event, sessionId: string) =>
+    (await isSessionOwnedByCurrentAccount(sessionId)) ? revertSessionCheckpoint(registry, sessionId) : { ok: false, error: "Unknown session." }
   );
-
-  ipcMain.handle("agent:respond-plan", (_event, sessionId: string, approved: boolean) => respondPlan(registry, sessionId, approved));
-
-  ipcMain.handle("agent:cancel-session", (_event, sessionId: string) => cancelSession(registry, sessionId));
-
-  ipcMain.handle("agent:get-checkpoint", (_event, sessionId: string) => getCheckpointHash(registry, sessionId));
-  ipcMain.handle("agent:revert-checkpoint", (_event, sessionId: string) => revertSessionCheckpoint(registry, sessionId));
-  ipcMain.handle("agent:get-changes", (_event, sessionId: string) => getSessionChanges(registry, sessionId));
+  ipcMain.handle("agent:get-changes", async (_event, sessionId: string) =>
+    (await isSessionOwnedByCurrentAccount(sessionId)) ? getSessionChanges(registry, sessionId) : { ok: false, error: "Unknown session." }
+  );
 
   ipcMain.handle("agent:list-cached-models", () => checkCachedModels());
 
@@ -780,6 +801,29 @@ app.whenReady().then(async () => {
     const { sortModelList } = await import("./freellmapiFallbackApi.js");
     return sortModelList(await freellmapiConn(), preset);
   });
+  // Security audit finding: session-ipc-missing-owner-authorization.
+  // agent:list-sessions/agent:search-sessions (below) already filter by
+  // the signed-in account's ownerEmail, but every other session-
+  // mutating/controlling handler used to accept a bare session id with
+  // no ownership check at all — any caller holding a foreign session id
+  // could load/run/modify/delete it. Every such handler now calls this
+  // first: resolves the CURRENTLY signed-in account server-side (never
+  // trusting anything the renderer itself claims about identity, exactly
+  // like getStoredEmail is already used for list/search below) and
+  // compares it against the target session's real owner — live entry
+  // first, on-disk record as fallback (getSessionOwnerEmail's own doc
+  // comment explains why). A session that exists nowhere at all (owner
+  // === undefined) is allowed through unchanged: the underlying call
+  // still returns its own normal "not found" result, exactly as before
+  // this fix — only an existing, DIFFERENTLY-owned session is newly
+  // denied, and a denial is indistinguishable from "doesn't exist" to
+  // avoid leaking which ids are real.
+  async function isSessionOwnedByCurrentAccount(sessionId: string): Promise<boolean> {
+    const [callerEmail, ownerEmail] = await Promise.all([getStoredEmail(authFilePath, storageCrypto), getSessionOwnerEmail(registry, sessionId)]);
+    if (ownerEmail === undefined) return true;
+    return ownerEmail === callerEmail;
+  }
+
   // Session history is gated by the signed-in account: signed out (or no
   // account ever stored) shows nothing, matching the app's per-account
   // model rather than exposing every local session unconditionally.
@@ -797,17 +841,19 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("agent:load-session", async (_event, id: string) => {
     try {
+      if (!(await isSessionOwnedByCurrentAccount(id))) return null;
       return await loadSessionRecord(sessionsDir, id);
     } catch {
       return null;
     }
   });
-  ipcMain.handle("agent:get-live-session", (_event, id: string) => getLiveSessionSnapshot(registry, id));
-  ipcMain.handle("agent:update-session-settings", (_event, id: string, updates: { workspaceRoot?: string; mode?: PermissionMode; planFirst?: boolean }) =>
-    updateLiveSessionSettings(registry, id, updates)
+  ipcMain.handle("agent:get-live-session", async (_event, id: string) => ((await isSessionOwnedByCurrentAccount(id)) ? getLiveSessionSnapshot(registry, id) : null));
+  ipcMain.handle("agent:update-session-settings", async (_event, id: string, updates: { workspaceRoot?: string; mode?: PermissionMode; planFirst?: boolean }) =>
+    (await isSessionOwnedByCurrentAccount(id)) ? updateLiveSessionSettings(registry, id, updates) : false
   );
   ipcMain.handle("agent:delete-session", async (_event, id: string) => {
     try {
+      if (!(await isSessionOwnedByCurrentAccount(id))) return;
       await removeSession(registry, id);
     } catch {
       // Invalid id — nothing to delete.
