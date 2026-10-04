@@ -26,7 +26,13 @@ export function isProtectedPath(relPath: string): boolean {
 // redaction below prior to this fix — see the callback's own comment.
 const SECRET_LIKE: { pattern: RegExp; keepPrefix: boolean }[] = [
   { pattern: /([A-Za-z0-9_\-]*(SECRET|TOKEN|PASSWORD|API_KEY|APIKEY)[A-Za-z0-9_\-]*\s*=\s*)(\S+)/gi, keepPrefix: true },
-  { pattern: /(sk-[A-Za-z0-9]{20,})/g, keepPrefix: false },
+  // Security audit finding: sk-prefix-hyphen-gap. Both Anthropic's real key
+  // shape (sk-ant-api03-...) and OpenAI's modern project-scoped keys
+  // (sk-proj-...) place a hyphen a few characters after "sk-" — the old
+  // alphanumeric-only class never accumulated the required 20+ run for
+  // either. Hyphen/underscore now allowed, matching the sibling AIza
+  // pattern below.
+  { pattern: /(sk-[A-Za-z0-9_-]{20,})/g, keepPrefix: false },
   // ghp_ = classic personal access token. gho_/ghu_/ghs_/ghr_ = OAuth App,
   // GitHub App user, GitHub App server, and GitHub App refresh tokens
   // respectively (github.com/settings/developers). This feature's Device
