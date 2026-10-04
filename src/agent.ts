@@ -462,7 +462,7 @@ export class AgentSession {
     if (!tool) return false;
 
     const call: ToolCall = { id: `auto_verify_${this.turn}`, name: "run_command", arguments: { command } };
-    let decision = this.permissions.evaluate(call, tool.permission);
+    let decision = this.permissions.evaluate(call, tool.permission, this.opts.workspaceRoot);
     // Security audit finding H3 / final-review Critical #2: detectVerifyCommand's
     // commands all classify as PROJECT_SCRIPT, which evaluate() always
     // answers ASK for from its own stateless perspective — running them
@@ -779,7 +779,7 @@ export class AgentSession {
           }
         }
 
-        let decision = this.permissions.evaluate(call, tool.permission);
+        let decision = this.permissions.evaluate(call, tool.permission, this.opts.workspaceRoot);
         if (
           decision === "ALLOW" &&
           call.name === "edit_file" &&
@@ -816,7 +816,7 @@ export class AgentSession {
           classifyCommand(projectScriptCommand) === "PROJECT_SCRIPT" &&
           this.projectScriptApprovedThisTask &&
           !hasShellMetacharacters(projectScriptCommand) &&
-          !hasEscapingArguments(projectScriptCommand)
+          !hasEscapingArguments(projectScriptCommand, this.opts.workspaceRoot)
         ) {
           decision = "ALLOW";
         }

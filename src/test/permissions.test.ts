@@ -1,3 +1,6 @@
+import { promises as fsPromises } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { PermissionEngine, classifyCommand } from "../permissions.js";
 import type { ToolCall } from "../types.js";
 
@@ -104,6 +107,38 @@ console.log("\nPermissionEngine.evaluate: flag-injected variants of a project-sc
     check(`"${cmd}" is not auto-ALLOW`, engine.evaluate(runCommandCall(cmd), "EXECUTE") !== "ALLOW");
   }
 }
+
+console.log("\nPermissionEngine.evaluate: a SAFE_READ command whose plain relative argument traverses an in-workspace symlink pointing outside the workspace must never auto-ALLOW (security audit finding: symlink-relative-path-gap):");
+await (async () => {
+  const workspaceRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "localagent-permissions-symlink-test-"));
+  const outsideDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "localagent-permissions-symlink-outside-"));
+  await fsPromises.writeFile(path.join(outsideDir, "secret.txt"), "outside-secret-content\n", "utf-8");
+  const linkPath = path.join(workspaceRoot, "escape-link");
+  await fsPromises.symlink(outsideDir, linkPath, "dir");
+  await fsPromises.writeFile(path.join(workspaceRoot, "normal.txt"), "ordinary in-workspace content\n", "utf-8");
+
+  const engine = new PermissionEngine("DEFAULT");
+  check(
+    "a plain relative argument traversing a workspace-escaping symlink is never auto-ALLOW",
+    engine.evaluate(runCommandCall("cat escape-link/secret.txt"), "EXECUTE", workspaceRoot) !== "ALLOW"
+  );
+  check(
+    "an ordinary relative argument to a real in-workspace file still auto-allows",
+    engine.evaluate(runCommandCall("cat normal.txt"), "EXECUTE", workspaceRoot) === "ALLOW"
+  );
+  check(
+    "a relative argument to a file that doesn't exist at all still auto-allows (nothing to leak, no filesystem escape to find)",
+    engine.evaluate(runCommandCall("cat does-not-exist.txt"), "EXECUTE", workspaceRoot) === "ALLOW"
+  );
+  check(
+    "omitting workspaceRoot entirely preserves the old behavior (no filesystem check attempted)",
+    engine.evaluate(runCommandCall("cat escape-link/secret.txt"), "EXECUTE") === "ALLOW"
+  );
+
+  await fsPromises.rm(linkPath, { force: true });
+  await fsPromises.rm(workspaceRoot, { recursive: true, force: true });
+  await fsPromises.rm(outsideDir, { recursive: true, force: true });
+})();
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
