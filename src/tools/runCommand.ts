@@ -56,12 +56,26 @@ export const runCommandTool: Tool<Input, CommandResult> = {
       proc.stdout.on("data", (d) => (stdout += d.toString()));
       proc.stderr.on("data", (d) => (stderr += d.toString()));
       proc.on("close", (code) => {
-        const truncated = stdout.length > MAX_OUTPUT || stderr.length > MAX_OUTPUT;
+        // Security audit finding: truncate-before-redact-order. Several
+        // redactSecrets patterns require content beyond a minimum length
+        // or a closing delimiter to match (the bare sk-/gho_/AIza
+        // patterns need 20-30+ trailing characters; the PEM pattern needs
+        // the full closing "-----END...PRIVATE KEY-----" marker) — if a
+        // real secret straddled the MAX_OUTPUT boundary, slicing BEFORE
+        // redacting left only an unmatchable partial fragment, which then
+        // passed through completely unredacted. Redacting the full
+        // accumulated output first, then slicing the (usually shorter,
+        // since "[REDACTED]" replaces the matched secret) result for
+        // display, means a secret is either fully redacted or fully
+        // excluded by truncation — never partially exposed by it.
+        const redactedStdout = redactSecrets(stdout);
+        const redactedStderr = redactSecrets(stderr);
+        const truncated = redactedStdout.length > MAX_OUTPUT || redactedStderr.length > MAX_OUTPUT;
         const result: CommandResult = {
           command: input.command,
           exitCode: code,
-          stdout: redactSecrets(stdout.slice(0, MAX_OUTPUT)),
-          stderr: redactSecrets(stderr.slice(0, MAX_OUTPUT)),
+          stdout: redactedStdout.slice(0, MAX_OUTPUT),
+          stderr: redactedStderr.slice(0, MAX_OUTPUT),
           durationMs: Date.now() - start,
           truncated,
         };
