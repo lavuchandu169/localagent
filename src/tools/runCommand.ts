@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, execFile, type ChildProcess } from "node:child_process";
 import type { Tool, ToolContext } from "../types.js";
 import { redactSecrets } from "../protected.js";
 import { prepareGitPushCommand } from "../electron/githubPushAuth.js";
@@ -42,6 +42,45 @@ function appendCapped(current: string, chunk: string): string {
   return current + (chunk.length > remaining ? chunk.slice(0, remaining) : chunk);
 }
 
+/**
+ * Confirmed live (CI hang, ~20 minutes, during the unbounded-accumulation
+ * test's own real-world first run): a bare `proc.kill()` only signals the
+ * DIRECT child. With `shell: true`, that direct child is the shell, not
+ * the real command — on a shell that doesn't exec-optimize a single
+ * trailing command away (dash on Ubuntu CI doesn't; some shells do, which
+ * is why this looked fine testing locally on macOS first), the real
+ * command keeps running as an orphaned grandchild that still holds the
+ * stdout pipe open. Node's 'close' event — and this function's whole
+ * returned Promise — then never fires at all, since it waits for that
+ * pipe to actually close, not just for the direct child to exit. This is
+ * also a LATENT problem for the pre-existing spawn `timeout` option's own
+ * kill, not only the accumulation-cap kill added above — both go through
+ * this same tree-aware kill now instead of a bare `.kill()`.
+ *
+ * `detached: true` (POSIX only — see the spawn call) puts the shell in
+ * its own process group with itself as leader; every further descendant
+ * it forks inherits that same group unless it explicitly changes it, so
+ * signaling the negative pid reaches the whole tree. Windows has no such
+ * concept — `taskkill /t` (kill the tree) is Node's own documented
+ * recommendation there.
+ */
+function killProcessTree(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  if (process.platform === "win32") {
+    // taskkill has no concept of signals — /f (force) is the only
+    // escalation available, used identically whichever signal was asked
+    // for; there is no softer "/t" without it.
+    if (proc.pid !== undefined) execFile("taskkill", ["/pid", String(proc.pid), "/t", "/f"]);
+    return;
+  }
+  try {
+    if (proc.pid !== undefined) process.kill(-proc.pid, signal);
+  } catch {
+    // ESRCH (already gone) or some other edge case — fall back to the
+    // direct child alone rather than leaving nothing signaled at all.
+    proc.kill(signal);
+  }
+}
+
 export const runCommandTool: Tool<Input, CommandResult> = {
   name: "run_command",
   description: "Run a shell command in the workspace root. Subject to permission approval.",
@@ -70,12 +109,35 @@ export const runCommandTool: Tool<Input, CommandResult> = {
       // compound command ever seeing the injected token (there is no
       // shell metacharacter interpretation to exploit when there's no
       // shell in the first place — see isSimpleGitPushCommand's own gate).
+      // detached (POSIX only — see killProcessTree's doc comment) puts the
+      // shell in its own process group so a tree-kill can reach every
+      // descendant it forks, not just the shell itself.
       const proc =
         prepared.kind === "authenticated"
-          ? spawn(prepared.argv[0]!, prepared.argv.slice(1), { cwd: ctx.workspaceRoot, timeout: input.timeoutMs ?? 30000, env: { ...process.env, ...prepared.env } })
-          : spawn(input.command, { cwd: ctx.workspaceRoot, shell: true, timeout: input.timeoutMs ?? 30000 });
+          ? spawn(prepared.argv[0]!, prepared.argv.slice(1), { cwd: ctx.workspaceRoot, env: { ...process.env, ...prepared.env }, detached: process.platform !== "win32" })
+          : spawn(input.command, { cwd: ctx.workspaceRoot, shell: true, detached: process.platform !== "win32" });
       let stdout = "";
       let stderr = "";
+      let settled = false;
+
+      // Replaces spawn's own `timeout` option — confirmed live (see
+      // killProcessTree's doc comment) that option's bare `.kill()` has
+      // the identical tree-escape problem this whole function exists to
+      // close, just on a different trigger (wall-clock instead of output
+      // volume). escalateToKill below is shared between both triggers.
+      const timeoutMs = input.timeoutMs ?? 30000;
+      const wallClockTimer = setTimeout(() => escalateToKill(), timeoutMs);
+
+      // SIGTERM first, SIGKILL only if the tree is still alive 2s later —
+      // a command trapping/ignoring SIGTERM must not hang this forever.
+      function escalateToKill() {
+        if (settled) return;
+        killProcessTree(proc);
+        setTimeout(() => {
+          if (!settled) killProcessTree(proc, "SIGKILL");
+        }, 2000);
+      }
+
       // Once either stream hits ACCUMULATION_CAP, further data is dropped
       // and the process is killed — there is no point letting a runaway
       // producer keep running when its output beyond the cap can never be
@@ -85,7 +147,7 @@ export const runCommandTool: Tool<Input, CommandResult> = {
       const killIfOverCap = () => {
         if ((stdout.length >= ACCUMULATION_CAP || stderr.length >= ACCUMULATION_CAP) && !killedForOutputCap) {
           killedForOutputCap = true;
-          proc.kill();
+          escalateToKill();
         }
       };
       proc.stdout.on("data", (d) => {
@@ -97,6 +159,8 @@ export const runCommandTool: Tool<Input, CommandResult> = {
         killIfOverCap();
       });
       proc.on("close", (code) => {
+        settled = true;
+        clearTimeout(wallClockTimer);
         // Security audit finding: truncate-before-redact-order. Several
         // redactSecrets patterns require content beyond a minimum length
         // or a closing delimiter to match (the bare sk-/gho_/AIza
@@ -123,6 +187,8 @@ export const runCommandTool: Tool<Input, CommandResult> = {
         resolve({ ok: code === 0, output: result, truncated });
       });
       proc.on("error", (err) => {
+        settled = true;
+        clearTimeout(wallClockTimer);
         resolve({ ok: false, output: null, error: err.message });
       });
     });
