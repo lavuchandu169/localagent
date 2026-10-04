@@ -52,6 +52,21 @@ console.log("redactSecrets:");
   check("sk- keys are now actually redacted, not just suffixed", !redactSecrets(`key: ${skKey}`).includes(skKey));
 }
 {
+  // Security audit finding (confirmed, medium): sk-prefix-hyphen-gap. The
+  // bare sk- pattern's character class was [A-Za-z0-9]{20,} — no hyphen
+  // or underscore — so it never matched Anthropic's real key shape
+  // (sk-ant-api03-...) or OpenAI's modern project-scoped keys
+  // (sk-proj-...), both of which place a hyphen a few characters after
+  // "sk-": the required 20+ alphanumeric run never accumulates. The
+  // sibling AIza (Gemini) pattern already allows hyphen/underscore in
+  // its own class, confirming this was an inconsistency, not a
+  // deliberate choice.
+  const anthropicKey = "sk-ant-api03-" + "a".repeat(30);
+  check("a bare Anthropic-shaped key (sk-ant-api03-...) is redacted", !redactSecrets(`x-api-key: ${anthropicKey}`).includes(anthropicKey));
+  const openaiProjectKey = "sk-proj-" + "b".repeat(30);
+  check("a bare OpenAI project-scoped key (sk-proj-...) is redacted", !redactSecrets(`Authorization: Bearer ${openaiProjectKey}`).includes(openaiProjectKey));
+}
+{
   check("the KEY=VALUE prefix is still preserved (no regression in the one case that needs it)", redactSecrets("API_KEY=supersecretvalue123").startsWith("API_KEY="));
 }
 {
@@ -65,6 +80,21 @@ console.log("\nisProtectedPath is case-insensitive (security audit M5 — APFS/N
   check("'.ENV' (uppercase) is still protected", isProtectedPath(".ENV") === true);
   check("'Secrets.YAML' (uppercase) is still protected", isProtectedPath("Secrets.YAML") === true);
   check("an ordinary non-secret path is still NOT protected", isProtectedPath("src/Index.ts") === false);
+}
+
+console.log(
+  "\nisProtectedPath tolerates a trailing dot/space on .pem/.key (security audit finding: trailing-dot-space-anchor-gap — Windows' Win32 file APIs strip trailing dots/spaces from a path component at actual file-creation/open/delete time, so a model-supplied 'secret.pem ' or 'secret.pem.' could pass this check yet have the OS normalize the on-disk operation to the literal protected filename):"
+);
+{
+  check("'secret.pem ' (trailing space) is still protected", isProtectedPath("secret.pem ") === true);
+  check("'secret.pem.' (trailing dot) is still protected", isProtectedPath("secret.pem.") === true);
+  check("'secret.pem..  ' (multiple trailing dots/spaces) is still protected", isProtectedPath("secret.pem..  ") === true);
+  // "private.key", not "id_rsa.key" — the latter would also match the
+  // separate, unanchored id_rsa pattern regardless of this fix, which
+  // would mask whether the .key$ anchor itself was actually widened.
+  check("'private.key ' (trailing space) is still protected", isProtectedPath("private.key ") === true);
+  check("'private.key.' (trailing dot) is still protected", isProtectedPath("private.key.") === true);
+  check("a genuinely different file ('secret.pem.txt', not just trailing dots/spaces) is still NOT protected", isProtectedPath("secret.pem.txt") === false);
 }
 
 console.log("\nredactSecrets covers a bare Gemini API key, not just OpenAI/GitHub prefixes (security audit — Gemini's key rides in the request URL query string, not a header, so any future accidental URL logging needs this):");

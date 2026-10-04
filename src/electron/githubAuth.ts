@@ -27,6 +27,19 @@ export async function saveStoredGithubIdentity(authFilePath: string, identity: S
   await fs.writeFile(authFilePath, toWrite, { encoding: "utf-8", mode: 0o600 });
 }
 
+/**
+ * Security audit finding (confirmed, medium): oauth-signout-no-remote-
+ * token-revocation. Unlike Google's signOut (googleAuth.ts), this is
+ * local-only, deliberately: GitHub's token-revocation API
+ * (DELETE /applications/{client_id}/{grant|token}) requires Basic Auth
+ * with client_id:client_secret, and this app's GitHub connection is a
+ * public Device Flow client with no client_secret anywhere in its auth
+ * model (see connectGithub/requestDeviceCode below) — there is no
+ * credential this app could send to that endpoint. "Disconnect" removes
+ * this app's own ability to use the stored token; the token itself stays
+ * valid at GitHub until the user revokes it from
+ * github.com/settings/applications or it naturally expires.
+ */
 export async function clearStoredGithubIdentity(authFilePath: string): Promise<void> {
   await fs.rm(authFilePath, { force: true });
 }

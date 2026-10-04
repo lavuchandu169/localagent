@@ -39,6 +39,7 @@ import { appendErrorLog } from "./errorLog.js";
 import { readAttachment, type PickedAttachment } from "./attachments.js";
 import { wireAutoUpdater, type UpdateManager } from "./updateManager.js";
 import { isFreellmapiRunning, stopFreellmapiServer, setFreellmapiStorageCrypto } from "./freellmapiHost.js";
+import { isAllowedExternalUrl } from "./externalUrl.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -115,7 +116,8 @@ function createWindow(): BrowserWindow {
     },
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    // Security audit finding: open-external-no-url-scheme-allowlist.
+    if (isAllowedExternalUrl(url)) shell.openExternal(url);
     return { action: "deny" };
   });
   // Security audit finding M1: with no guard, dropping an untrusted HTML
@@ -591,7 +593,7 @@ app.whenReady().then(async () => {
     }
     return result;
   });
-  ipcMain.handle("agent:sign-out", () => signOut(authFilePath));
+  ipcMain.handle("agent:sign-out", () => signOut(authFilePath, storageCrypto));
   ipcMain.handle("agent:auth-status", async () => {
     const { clientId, clientSecret } = await resolveGoogleCredentials(settingsFilePath, storageCrypto);
     return getAuthStatus(authFilePath, clientId, clientSecret, storageCrypto);
@@ -772,6 +774,8 @@ app.whenReady().then(async () => {
   // own main window opens external links through a setWindowOpenHandler
   // callback, not an IPC method. The panel's "Get key ->" links need one.
   ipcMain.handle("agent:open-external", async (_event, url: string) => {
+    // Security audit finding: open-external-no-url-scheme-allowlist.
+    if (!isAllowedExternalUrl(url)) return;
     await shell.openExternal(url);
   });
   // Native Fallback panel - second of FreeLLMAPI's vendored dashboard pages
