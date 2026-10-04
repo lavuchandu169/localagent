@@ -10,10 +10,58 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// Security audit finding (confirmed, high):
+// build-freellmapi.mjs:npm-ci:inherits-release-signing-secrets. release.yml's
+// build-mac/build-win jobs write these into $GITHUB_ENV (or the step's own
+// `env:`) before the `npm run build` step that ends up here — see that
+// workflow's "Prepare signing/notarization environment" step (mac) and
+// "Prepare signing environment" step (windows), plus the GH_TOKEN/
+// GOOGLE_OAUTH_* pair set directly on the package:mac/package:win steps.
+// Keep this list in sync with exactly what those steps export.
+export const RELEASE_SECRET_ENV_KEYS = [
+  // macOS code-signing/notarization (release.yml build-mac)
+  "CSC_LINK",
+  "CSC_KEY_PASSWORD",
+  "APPLE_API_KEY",
+  "APPLE_API_KEY_ID",
+  "APPLE_API_ISSUER",
+  "APPLE_TEAM_ID",
+  "APPLE_ID",
+  "APPLE_APP_SPECIFIC_PASSWORD",
+  // Windows code-signing (release.yml build-win)
+  "ES_USERNAME",
+  "ES_PASSWORD",
+  "CREDENTIAL_ID",
+  "ES_TOTP_SECRET",
+  // Set directly on both package:mac/package:win steps
+  "GH_TOKEN",
+  "GOOGLE_OAUTH_CLIENT_ID_EMBED",
+  "GOOGLE_OAUTH_CLIENT_SECRET_EMBED",
+];
+
+/**
+ * A privileged release-build step holding code-signing/notarization
+ * credentials must not hand them to vendor/freellmapi's own `npm ci` —
+ * real lifecycle scripts already exist in its dependency tree today
+ * (better-sqlite3, esbuild, fsevents, msw all have hasInstallScript:true),
+ * and execFileSync with no `env` override inherits the full parent
+ * process.env per Node's own documented child_process semantics. Returns a
+ * shallow copy with every known release secret removed, never mutating the
+ * caller's own env object.
+ */
+export function sanitizeEnvForVendorInstall(env) {
+  const sanitized = { ...env };
+  for (const key of RELEASE_SECRET_ENV_KEYS) {
+    delete sanitized[key];
+  }
+  return sanitized;
+}
+
 export async function buildFreellmapiBundle(repoRoot) {
   const vendorDir = path.join(repoRoot, "vendor", "freellmapi");
   const outDir = path.join(repoRoot, "dist", "freellmapi");
   fs.mkdirSync(outDir, { recursive: true });
+  const vendorInstallEnv = sanitizeEnvForVendorInstall(process.env);
 
   // The dashboard: vendor/freellmapi's own client workspace, built with its
   // own toolchain (tsc -b && vite build per client/package.json), then
@@ -27,8 +75,8 @@ export async function buildFreellmapiBundle(repoRoot) {
   // interaction, not a hypothetical). All arguments here are fixed,
   // known-safe literals (no user input), so shell interpretation adds no
   // injection risk.
-  execFileSync("npm", ["ci"], { cwd: vendorDir, stdio: "inherit", shell: true });
-  execFileSync("npm", ["run", "build", "-w", "client"], { cwd: vendorDir, stdio: "inherit", shell: true });
+  execFileSync("npm", ["ci"], { cwd: vendorDir, stdio: "inherit", shell: true, env: vendorInstallEnv });
+  execFileSync("npm", ["run", "build", "-w", "client"], { cwd: vendorDir, stdio: "inherit", shell: true, env: vendorInstallEnv });
   const clientSrc = path.join(vendorDir, "client", "dist");
   const clientDest = path.join(outDir, "client-dist");
   fs.rmSync(clientDest, { recursive: true, force: true });
