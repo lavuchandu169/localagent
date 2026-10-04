@@ -55,7 +55,12 @@ async function writeFakeBundle(dir: string, opts: { failStart?: boolean; simulat
       return { server: { close: (cb) => cb && cb() }, port: actualPort };
     }
     export function getUnifiedApiKey() { return "fake-unified-key"; }
-    export function ensureSessionToken() { return "fake-session-token"; }
+    let ensureSessionTokenCalls = 0;
+    export function ensureSessionToken() {
+      ensureSessionTokenCalls++;
+      globalThis.__fakeBundleEnsureSessionTokenCalls = ensureSessionTokenCalls;
+      return "fake-session-token";
+    }
     `,
     "utf-8"
   );
@@ -476,6 +481,40 @@ console.log("\nstartFreellmapiServer encrypts the persisted key at rest when a s
 
   await stopFreellmapiServer();
   setFreellmapiStorageCrypto(undefined);
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log(
+  "\nstartFreellmapiServer claims the dashboard session immediately on boot, instead of leaving the account unclaimed until the user opens Manage free providers (security audit finding: freellmapi-server:auth-setup-loopback-trust-bypass):"
+);
+{
+  // Before this fix, the one-time dashboard account stayed unclaimed from
+  // the moment the server's port opened (as soon as ANY session selected
+  // the freellmapi provider) until the user happened to open "Manage free
+  // providers" — a window, confirmed in the audit, that any other local
+  // process reaching 127.0.0.1 (e.g. an unsandboxed MCP server subprocess
+  // this app itself spawns) could win a race against. Calling
+  // ensureSessionToken() eagerly, right after the bundle's own
+  // startServer() resolves, collapses that window to the time between the
+  // port opening and this next synchronous line — not however long until
+  // a human clicks a settings button.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const bundlePath = await writeFakeBundle(dir);
+  resetFreellmapiHostForTests();
+  // __fakeBundleEnsureSessionTokenCalls is a shared global an EARLIER
+  // test's own (different) fake bundle instance may have already set —
+  // reset it so this check is attributable only to the call (or absence
+  // of one) made during THIS test's startFreellmapiServer.
+  delete (globalThis as any).__fakeBundleEnsureSessionTokenCalls;
+
+  await startFreellmapiServer({ userDataDir: dir, bundlePath, clientDistPath: dir, preferredPort: 19977 });
+
+  check(
+    "ensureSessionToken was already called by the time startFreellmapiServer itself resolves, not deferred until some later caller asks for it",
+    (globalThis as any).__fakeBundleEnsureSessionTokenCalls >= 1
+  );
+
+  await stopFreellmapiServer();
   await fs.rm(dir, { recursive: true, force: true });
 }
 
