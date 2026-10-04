@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.71 — 2026-10-04
+
+- fix: widen bare sk- key redaction pattern to cover real Anthropic/OpenAI key shapes
+
 ## v0.1.0-beta.70 — 2026-10-04
 
 - fix: require session ownership before any session-mutating/controlling IPC call
