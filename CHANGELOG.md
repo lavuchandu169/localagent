@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.68 — 2026-10-04
+
+- fix: claim the FreeLLMAPI dashboard session eagerly on server start
+
 ## v0.1.0-beta.67 — 2026-10-04
 
 - fix: protect the FreeLLMAPI encryption key with safeStorage; re-check shell metacharacters before reusing project-script approval; drop colliding MCP tool names instead of letting schema and dispatch disagree
