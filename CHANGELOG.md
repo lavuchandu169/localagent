@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.70 — 2026-10-04
+
+- fix: reuse resolveWithinWorkspace for edit_file's pre-approval diff computation
+
 ## v0.1.0-beta.69 — 2026-10-04
 
 - fix: strip code-signing/notarization/OAuth secrets before vendor/freellmapi's npm ci
