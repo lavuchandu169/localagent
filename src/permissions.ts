@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { PermissionMode, PermissionDecision, ToolCall, PermissionLevel } from "./types.js";
 
 // Deterministic command risk classification (Section 16).
@@ -80,8 +82,75 @@ const ESCAPING_ARGUMENT_PATTERNS = [
   /(^|\s)-O\S*/, // git diff -O<orderfile> / an attacker-chosen diff-driver config path
 ];
 
-export function hasEscapingArguments(cmd: string): boolean {
-  return ESCAPING_ARGUMENT_PATTERNS.some((r) => r.test(cmd));
+/**
+ * Security audit finding (confirmed, medium): symlink-relative-path-gap.
+ * ESCAPING_ARGUMENT_PATTERNS is purely lexical and never resolves the
+ * filesystem, so a plain relative argument like "escape-link/secret.txt"
+ * matches none of its shapes — even when escape-link is an in-workspace
+ * symlink pointing outside the workspace (shipped by a cloned repo, or
+ * planted by an earlier approved write). "cat escape-link/secret.txt"
+ * would classify SAFE_READ and auto-ALLOW with zero approval, then the
+ * real shell follows the symlink and returns the outside file's content
+ * as the model's tool-call result — the same symlink-escape class
+ * resolveWithinWorkspace (workspacePath.ts) already closes for every
+ * file tool, reachable here with no containment check at all.
+ *
+ * Only checks tokens that look like plain relative-path arguments — not
+ * the command name itself, and not flags (a token starting with "-") —
+ * since those are either already covered by ESCAPING_ARGUMENT_PATTERNS
+ * above or aren't filesystem paths at all. A token that doesn't resolve
+ * to anything on disk (ENOENT) is left alone: nothing exists there to
+ * leak, and over-flagging a plain "file not found" read as an escape
+ * would just be noise.
+ */
+function hasFilesystemEscapingArgument(cmd: string, workspaceRoot: string): boolean {
+  const tokens = cmd.trim().split(/\s+/).slice(1);
+  for (const token of tokens) {
+    if (token === "" || token.startsWith("-")) continue;
+    if (escapesWorkspaceOnDisk(workspaceRoot, token)) return true;
+  }
+  return false;
+}
+
+/**
+ * Synchronous counterpart to workspacePath.ts's resolveWithinWorkspace —
+ * PermissionEngine.evaluate() is synchronous by design (Section 16: a
+ * deterministic classification step with no filesystem I/O previously
+ * needed at all), so this mirrors that function's symlink-escape logic
+ * (sibling-prefix guard, then realpath-resolving both the candidate and
+ * the workspace root) using the sync fs API instead of awaiting it.
+ * Unlike that function, a path that simply doesn't exist is NOT treated
+ * as an escape here — there's nothing on disk to read, so nothing to
+ * leak, and this call site cares only about readable content a command
+ * might actually return.
+ */
+function escapesWorkspaceOnDisk(workspaceRoot: string, relPath: string): boolean {
+  const syntacticRoot = path.resolve(workspaceRoot);
+  const naive = path.resolve(syntacticRoot, relPath);
+  if (!isWithinSync(naive, syntacticRoot)) return true;
+  let resolvedRoot: string;
+  try {
+    resolvedRoot = fs.realpathSync(syntacticRoot);
+  } catch {
+    return true; // can't resolve the workspace root itself — treat as unsafe rather than guessing
+  }
+  let real: string;
+  try {
+    real = fs.realpathSync(naive);
+  } catch {
+    return false; // doesn't exist (or a dangling symlink) — nothing readable here to leak
+  }
+  return !isWithinSync(real, resolvedRoot);
+}
+
+function isWithinSync(candidate: string, root: string): boolean {
+  return candidate === root || candidate.startsWith(root + path.sep);
+}
+
+export function hasEscapingArguments(cmd: string, workspaceRoot?: string): boolean {
+  if (ESCAPING_ARGUMENT_PATTERNS.some((r) => r.test(cmd))) return true;
+  if (workspaceRoot !== undefined && hasFilesystemEscapingArgument(cmd, workspaceRoot)) return true;
+  return false;
 }
 
 export class PermissionEngine {
@@ -95,7 +164,7 @@ export class PermissionEngine {
     return this.mode;
   }
 
-  evaluate(call: ToolCall, toolPermission: PermissionLevel): PermissionDecision {
+  evaluate(call: ToolCall, toolPermission: PermissionLevel, workspaceRoot?: string): PermissionDecision {
     // READ tools are always allowed regardless of mode.
     if (toolPermission === "READ") return "ALLOW";
 
@@ -119,7 +188,7 @@ export class PermissionEngine {
       // everything after it, NOR about what the command's own arguments
       // point at — only auto-allow a command with no shell metacharacters
       // (hasShellMetacharacters) AND no escaping argument (hasEscapingArguments).
-      if (risk === "SAFE_READ") return hasShellMetacharacters(command) || hasEscapingArguments(command) ? "ASK" : "ALLOW";
+      if (risk === "SAFE_READ") return hasShellMetacharacters(command) || hasEscapingArguments(command, workspaceRoot) ? "ASK" : "ALLOW";
       return "ASK"; // UNKNOWN defaults to asking (Section 16).
     }
 

@@ -3,10 +3,22 @@
 // ".ENV" bypassed every one of these regexes even though it resolves to
 // the exact same file isProtectedPath exists to block. All patterns are
 // case-insensitive (`i` flag) for this reason.
+// Security audit finding (needs_validation, addressed defensively):
+// trailing-dot-space-anchor-gap. Windows' Win32 file APIs strip trailing
+// dots/spaces from a path component at actual file-creation/open/delete
+// time ("secret.pem " and "secret.pem." both normalize to "secret.pem"
+// on disk), but the old end-anchored $ required an exact match with
+// nothing after ".pem"/".key" — a model-supplied path with a trailing
+// dot/space would pass this check yet have the OS ultimately write/
+// delete the literal protected filename. [. ]*$ tolerates any number of
+// trailing dots/spaces while still requiring the match to reach the true
+// end of the string, so a genuinely different file like "secret.pem.txt"
+// (more than just trailing dots/spaces after ".pem") is correctly left
+// unprotected.
 const PROTECTED_PATTERNS = [
   /\.env(\..*)?$/i,
-  /\.pem$/i,
-  /\.key$/i,
+  /\.pem[. ]*$/i,
+  /\.key[. ]*$/i,
   /id_rsa/i,
   /credentials\..*/i,
   /secrets\..*/i,
@@ -26,7 +38,13 @@ export function isProtectedPath(relPath: string): boolean {
 // redaction below prior to this fix — see the callback's own comment.
 const SECRET_LIKE: { pattern: RegExp; keepPrefix: boolean }[] = [
   { pattern: /([A-Za-z0-9_\-]*(SECRET|TOKEN|PASSWORD|API_KEY|APIKEY)[A-Za-z0-9_\-]*\s*=\s*)(\S+)/gi, keepPrefix: true },
-  { pattern: /(sk-[A-Za-z0-9]{20,})/g, keepPrefix: false },
+  // Security audit finding: sk-prefix-hyphen-gap. Both Anthropic's real key
+  // shape (sk-ant-api03-...) and OpenAI's modern project-scoped keys
+  // (sk-proj-...) place a hyphen a few characters after "sk-" — the old
+  // alphanumeric-only class never accumulated the required 20+ run for
+  // either. Hyphen/underscore now allowed, matching the sibling AIza
+  // pattern below.
+  { pattern: /(sk-[A-Za-z0-9_-]{20,})/g, keepPrefix: false },
   // ghp_ = classic personal access token. gho_/ghu_/ghs_/ghr_ = OAuth App,
   // GitHub App user, GitHub App server, and GitHub App refresh tokens
   // respectively (github.com/settings/developers). This feature's Device

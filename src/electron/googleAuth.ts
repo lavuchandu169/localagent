@@ -355,6 +355,33 @@ export async function getFreshAccessToken(
   return refreshed.accessToken;
 }
 
-export async function signOut(authFilePath: string): Promise<void> {
+const GOOGLE_REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke";
+
+/**
+ * Security audit finding (confirmed, medium): oauth-signout-no-remote-
+ * token-revocation. This used to only delete the local identity file -
+ * the stored refresh token (and any access token derived from it) stayed
+ * valid at Google until separate expiry or manual revocation from the
+ * user's own Google account settings, even though the UI presents this
+ * as account sign-out. Revoking the refresh token invalidates its
+ * derived access tokens too (Google's own documented revoke behavior),
+ * so only the refresh token needs to be sent here. Best-effort: a failed
+ * revocation call (network, Google outage) must not block signing out
+ * locally - the user explicitly asked to sign out, and the local
+ * credential is removed either way.
+ */
+export async function signOut(authFilePath: string, storageCrypto?: StorageCrypto): Promise<void> {
+  const identity = await loadStoredIdentity(authFilePath, storageCrypto);
+  if (identity?.refreshToken) {
+    try {
+      await fetch(GOOGLE_REVOKE_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `token=${encodeURIComponent(identity.refreshToken)}`,
+      });
+    } catch {
+      // Best-effort — see doc comment above.
+    }
+  }
   await clearStoredIdentity(authFilePath);
 }
