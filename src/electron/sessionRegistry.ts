@@ -392,6 +392,42 @@ export interface LiveSessionSnapshot {
  * settings mid-conversation — can't rely on loadSessionRecord() returning
  * anything for a session that hasn't run a task yet. This works regardless.
  */
+/**
+ * Security audit finding (confirmed, medium): session-ipc-missing-owner-
+ * authorization. agent:list-sessions/agent:search-sessions filter by the
+ * signed-in account's ownerEmail, but every other session-mutating/
+ * controlling IPC handler (load-session, get-live-session,
+ * update-session-settings, delete-session, respond-permission,
+ * respond-plan, cancel-session, get-checkpoint, revert-checkpoint,
+ * get-changes, run-task) took a bare session id with no ownership check
+ * at all — any caller holding a foreign session id could load/run/
+ * modify/delete it. A concrete reachability path: account A starts a
+ * task, signs out mid-task, account B signs in within the same running
+ * window — A's task keeps running in the registry, and a generic,
+ * non-account-scoped agent:event listener could leak A's real session id
+ * to the now-B-signed-in renderer, which could then feed it to any of
+ * these unguarded handlers.
+ *
+ * This is the single shared authorization check main.ts's IPC handlers
+ * use before acting on a caller-supplied session id — checked at the
+ * actual IPC trust boundary (main.ts), not pushed down into this
+ * module's own session-mutating functions, so none of their existing
+ * signatures (or their many existing callers/tests) need to change.
+ * Checks the LIVE registry entry first (an active session not yet
+ * persisted to disk has no on-disk record to read at all), falling back
+ * to the on-disk record for a session the live registry has forgotten
+ * (e.g. after an app restart). Returns undefined — distinct from a real
+ * `null` owner — when the session exists nowhere at all, so a caller can
+ * tell "doesn't exist" apart from "exists, but isn't yours" without an
+ * extra lookup.
+ */
+export async function getSessionOwnerEmail(registry: SessionRegistry, sessionId: string): Promise<string | null | undefined> {
+  const live = registry.sessions.get(sessionId);
+  if (live) return live.ownerEmail;
+  const record = await loadSessionRecord(registry.sessionsDir, sessionId);
+  return record ? record.ownerEmail : undefined;
+}
+
 export function getLiveSessionSnapshot(registry: SessionRegistry, sessionId: string): LiveSessionSnapshot | null {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return null;
