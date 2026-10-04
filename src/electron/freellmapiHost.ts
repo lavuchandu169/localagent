@@ -140,6 +140,32 @@ export async function startFreellmapiServer(deps: FreellmapiHostDeps): Promise<{
         preferredPort: deps.preferredPort ?? DEFAULT_PORT,
       });
       running = { server, port };
+      // Security audit finding: freellmapi-server:auth-setup-loopback-trust-bypass.
+      // The vendored server's one-time dashboard account can be claimed by
+      // ANY loopback caller — not specifically this app's own process —
+      // via its own POST /api/auth/setup (loopback alone bypasses that
+      // endpoint's setup-code check, confirmed by reading
+      // vendor/freellmapi/server/src/routes/auth.ts directly; this is a
+      // third-party submodule this app can't durably patch). Before this
+      // call, the port opened above left the account unclaimed until
+      // ensureFreellmapiSessionToken() was eventually called — previously
+      // only from main.ts's freellmapiConn(), lazily, whenever the user
+      // happened to open "Manage free providers". That left a window
+      // (confirmed in the audit: potentially the app's whole session) for
+      // another local process — e.g. an unsandboxed MCP server subprocess
+      // this app itself spawns with no sandboxing — to win the race and
+      // become the permanent sole admin. Calling it eagerly here, in the
+      // same synchronous continuation as the port opening (no awaited
+      // user interaction in between), collapses that window to whatever
+      // this one call itself takes, not however long until a human clicks
+      // a settings button. Best-effort: if it fails, the later lazy call
+      // from freellmapiConn() still works exactly as before — this is a
+      // mitigation of the race window, not a new hard dependency.
+      try {
+        bundle.ensureSessionToken();
+      } catch (err) {
+        console.warn(`[freellmapi] Eager session-claim after server start failed (will retry lazily on first use): ${err instanceof Error ? err.message : String(err)}`);
+      }
       return { port };
     } finally {
       for (const listener of process.listeners("uncaughtException")) {
