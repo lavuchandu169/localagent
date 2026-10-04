@@ -3,10 +3,22 @@
 // ".ENV" bypassed every one of these regexes even though it resolves to
 // the exact same file isProtectedPath exists to block. All patterns are
 // case-insensitive (`i` flag) for this reason.
+// Security audit finding (needs_validation, addressed defensively):
+// trailing-dot-space-anchor-gap. Windows' Win32 file APIs strip trailing
+// dots/spaces from a path component at actual file-creation/open/delete
+// time ("secret.pem " and "secret.pem." both normalize to "secret.pem"
+// on disk), but the old end-anchored $ required an exact match with
+// nothing after ".pem"/".key" — a model-supplied path with a trailing
+// dot/space would pass this check yet have the OS ultimately write/
+// delete the literal protected filename. [. ]*$ tolerates any number of
+// trailing dots/spaces while still requiring the match to reach the true
+// end of the string, so a genuinely different file like "secret.pem.txt"
+// (more than just trailing dots/spaces after ".pem") is correctly left
+// unprotected.
 const PROTECTED_PATTERNS = [
   /\.env(\..*)?$/i,
-  /\.pem$/i,
-  /\.key$/i,
+  /\.pem[. ]*$/i,
+  /\.key[. ]*$/i,
   /id_rsa/i,
   /credentials\..*/i,
   /secrets\..*/i,
