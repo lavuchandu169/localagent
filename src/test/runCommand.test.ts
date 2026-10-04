@@ -47,6 +47,23 @@ async function main() {
     check("the redaction marker is present instead", stdout.includes("[REDACTED]"));
   }
 
+  console.log("\nrunCommandTool: a fast, unbounded-output command is capped and killed during accumulation, not left to grow until close (security audit finding: unbounded-stdout-stderr-accumulation):");
+  {
+    // `yes` is a genuine, truly open-ended producer (a real OS process,
+    // not a Node script that would just stall once the OS pipe buffer
+    // fills without ever yielding its own event loop) — the ONLY thing
+    // that can end this before its own generous timeout is
+    // runCommandTool's own accumulation cap killing the process early.
+    // Before the fix, nothing stops accumulation until close(), so this
+    // would run for the full timeout; after the fix, the cap triggers a
+    // kill almost immediately once ~1MB has accumulated.
+    const start = Date.now();
+    const result = await runCommandTool.execute({ command: "yes AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", timeoutMs: 10000 }, ctx);
+    const elapsedMs = Date.now() - start;
+    check("resolves well before its own generous timeout — the accumulation cap, not the timeout, ended it", elapsedMs < 5000);
+    check("still returns a usable result rather than hanging or crashing the test process", result.output !== undefined || result.error !== undefined);
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
