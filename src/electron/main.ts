@@ -38,7 +38,7 @@ import { createGithubCreateRepoTool, createGithubCreatePrTool } from "./githubTo
 import { appendErrorLog } from "./errorLog.js";
 import { readAttachment, type PickedAttachment } from "./attachments.js";
 import { wireAutoUpdater, type UpdateManager } from "./updateManager.js";
-import { isFreellmapiRunning, stopFreellmapiServer } from "./freellmapiHost.js";
+import { isFreellmapiRunning, stopFreellmapiServer, setFreellmapiStorageCrypto } from "./freellmapiHost.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -154,15 +154,30 @@ app.whenReady().then(async () => {
   if (!storageCrypto) {
     // Security audit finding M4: this one `storageCrypto` value governs
     // EVERY secret this app stores — not just the Google identity file:
-    // the Anthropic/OpenAI/Gemini API keys, the GitHub OAuth token, and
-    // MCP server configs all fall back to plain text (still 0600) the
-    // same way. The warning said only "the Google identity file", which
+    // the Anthropic/OpenAI/Gemini API keys, the GitHub OAuth token, MCP
+    // server configs, and (as of the fix for finding
+    // freellmapi-server:encryption-key-plaintext-colocated) the generated
+    // encryption key for the bundled FreeLLMAPI server's own stored
+    // provider keys all fall back to plain text (still 0600) the same
+    // way. The warning said only "the Google identity file", which
     // understated the real scope of what's affected on a system with no
     // OS keychain/DPAPI/libsecret available.
     console.warn(
-      "[auth] OS-native secure storage isn't available on this system — every credential this app stores (provider API keys, the GitHub token, the Google identity file, MCP server configs) will be saved as plain text (0600 permissions) instead of OS-encrypted."
+      "[auth] OS-native secure storage isn't available on this system — every credential this app stores (provider API keys, the GitHub token, the Google identity file, MCP server configs, the FreeLLMAPI encryption key) will be saved as plain text (0600 permissions) instead of OS-encrypted."
     );
   }
+  // Security audit finding freellmapi-server:encryption-key-plaintext-colocated:
+  // without this, the bundled FreeLLMAPI server generates its own
+  // ENCRYPTION_KEY and writes it as a plaintext file next to its database
+  // whenever NODE_ENV isn't exactly "production" (the normal packaged-app
+  // case) — readable by any other process running as this OS user, no
+  // auth or race needed. Set once here, before any session can select the
+  // freellmapi provider and trigger startFreellmapiServer() from either of
+  // its two call sites (freellmapiProxy.ts's healthCheck, or this file's
+  // own freellmapiConn()) — see freellmapiHost.ts's own doc comment for
+  // why a module-level setter, not a threaded parameter, is how it reaches
+  // the key-generation step regardless of which call site goes first.
+  setFreellmapiStorageCrypto(storageCrypto);
 
   const getGithubToken = () => getGithubAccessToken(githubAuthFilePath, storageCrypto);
   // Correctness audit finding (GitHub Medium #2): a 401 from a GitHub tool

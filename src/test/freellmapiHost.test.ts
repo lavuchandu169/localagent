@@ -8,7 +8,9 @@ import {
   stopFreellmapiServer,
   resetFreellmapiHostForTests,
   isFreellmapiRunning,
+  setFreellmapiStorageCrypto,
 } from "../electron/freellmapiHost.js";
+import type { StorageCrypto } from "../electron/googleAuth.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -41,6 +43,7 @@ async function writeFakeBundle(dir: string, opts: { failStart?: boolean; simulat
       startCount++;
       globalThis.__fakeBundleStartCount = startCount;
       globalThis.__fakeBundleLastOpts = opts;
+      globalThis.__encryptionKeyDuringStart = process.env.ENCRYPTION_KEY;
       ${opts.failStart ? "throw new Error('fake boot failure');" : ""}
       // The REAL vendored server-host.ts does its own scan-and-retry
       // (listenWithScan) when opts.preferredPort is taken, and can end up
@@ -401,6 +404,78 @@ console.log("\nstopFreellmapiServer does not hang forever if server.close() neve
   check("stopFreellmapiServer resolves via its own timeout instead of hanging forever", elapsedMs < 2000);
   check("isFreellmapiRunning() is false after a timed-out stop, so app exit isn't blocked", !isFreellmapiRunning());
 
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log(
+  "\nstartFreellmapiServer generates a real ENCRYPTION_KEY and injects it before the bundle boots (security audit finding: freellmapi-server:encryption-key-plaintext-colocated):"
+);
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const bundlePath = await writeFakeBundle(dir);
+  resetFreellmapiHostForTests();
+  setFreellmapiStorageCrypto(undefined);
+
+  const before = process.env.ENCRYPTION_KEY;
+  delete process.env.ENCRYPTION_KEY;
+
+  await startFreellmapiServer({ userDataDir: dir, bundlePath, clientDistPath: dir, preferredPort: 19980 });
+
+  const seenByBundle = (globalThis as any).__encryptionKeyDuringStart as string | undefined;
+  check("the bundle saw a real 64-char hex ENCRYPTION_KEY during boot, never undefined/empty", !!seenByBundle && /^[0-9a-fA-F]{64}$/.test(seenByBundle));
+  check("ENCRYPTION_KEY is restored to unset afterward, not left lingering in the ambient environment", process.env.ENCRYPTION_KEY === undefined);
+
+  await stopFreellmapiServer();
+  if (before === undefined) delete process.env.ENCRYPTION_KEY;
+  else process.env.ENCRYPTION_KEY = before;
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log("\nstartFreellmapiServer reuses the SAME persisted key across restarts, never a fresh one each launch:");
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const bundlePath = await writeFakeBundle(dir);
+  setFreellmapiStorageCrypto(undefined);
+
+  resetFreellmapiHostForTests();
+  await startFreellmapiServer({ userDataDir: dir, bundlePath, clientDistPath: dir, preferredPort: 19979 });
+  const key1 = (globalThis as any).__encryptionKeyDuringStart as string;
+  await stopFreellmapiServer();
+
+  resetFreellmapiHostForTests();
+  await startFreellmapiServer({ userDataDir: dir, bundlePath, clientDistPath: dir, preferredPort: 19979 });
+  const key2 = (globalThis as any).__encryptionKeyDuringStart as string;
+  await stopFreellmapiServer();
+
+  check("the key persists across a stop/restart cycle — otherwise every already-stored provider key would become undecryptable on every app launch", key1 === key2);
+
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log("\nstartFreellmapiServer encrypts the persisted key at rest when a storageCrypto is set (matching every other credential this app stores):");
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "freellmapi-host-test-"));
+  const bundlePath = await writeFakeBundle(dir);
+  resetFreellmapiHostForTests();
+
+  const calls: string[] = [];
+  const fakeCrypto: StorageCrypto = {
+    encrypt: (plainText) => {
+      calls.push("encrypt");
+      return `ENCRYPTED(${plainText})`;
+    },
+    decrypt: (cipherText) => {
+      calls.push("decrypt");
+      return /^ENCRYPTED\((.*)\)$/.exec(cipherText)![1]!;
+    },
+  };
+  setFreellmapiStorageCrypto(fakeCrypto);
+
+  await startFreellmapiServer({ userDataDir: dir, bundlePath, clientDistPath: dir, preferredPort: 19978 });
+  check("the generated key was encrypted via the injected storageCrypto before being persisted", calls.includes("encrypt"));
+
+  await stopFreellmapiServer();
+  setFreellmapiStorageCrypto(undefined);
   await fs.rm(dir, { recursive: true, force: true });
 }
 
