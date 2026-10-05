@@ -35,6 +35,19 @@ export function applyOldStringReplace(
     };
   }
 
-  const newContent = replaceAll ? content.split(oldString).join(newString) : content.replace(oldString, newString);
+  // Security audit finding (code-review-and-quality pass): content.replace(oldString, newString)
+  // interprets special $-replacement-pattern sequences in newString ($$, $&,
+  // $`, $', $1..) even though oldString is a plain string, not a RegExp —
+  // per String.prototype.replace()'s own documented behavior, that
+  // interpretation always applies to the second argument. A model-issued
+  // edit whose replacement text happens to contain one of these sequences
+  // (shell $$, jQuery $', etc.) would have it silently mangled instead of
+  // inserted literally. split(oldString).join(newString) never interprets
+  // any pattern in its second argument, and correctly handles exactly one
+  // occurrence the same way a true single-replace would (by this point
+  // either occurrences === 1, or replaceAll is true — both are correct with
+  // this single implementation, so there is no need for the two branches
+  // split/join already replaced to keep as a ternary).
+  const newContent = content.split(oldString).join(newString);
   return { ok: true, newContent };
 }
