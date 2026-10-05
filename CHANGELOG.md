@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.87 — 2026-10-05
+
+- Deduplicate the Anthropic/OpenAI/Gemini API-key settings sections
+
 ## v0.1.0-beta.86 — 2026-10-05
 
 - Extract onboarding/what's-new into their own module (renderer.ts split, part 1)
