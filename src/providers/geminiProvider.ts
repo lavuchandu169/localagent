@@ -168,13 +168,25 @@ export class GeminiProvider implements ModelProvider {
     this.model = opts.model || "gemini-3.8-flash";
   }
 
+  // Security finding (code-review-and-quality pass): a `?key=...` query
+  // parameter is exactly as effective an API key as a header, but a URL
+  // is far more likely to end up somewhere it shouldn't — access logs,
+  // proxy logs, browser/request history, error messages/stack traces that
+  // print the request URL. Every other provider in this app already sends
+  // its key via a header (Authorization: Bearer); Gemini's API also
+  // accepts the key via `x-goog-api-key`, documented as the preferred
+  // alternative to the query parameter.
+  private headers(): Record<string, string> {
+    return { "Content-Type": "application/json", "x-goog-api-key": this.apiKey };
+  }
+
   async listModels(): Promise<ModelInfo[]> {
     return [{ id: this.model, local: false }];
   }
 
   async healthCheck(): Promise<HealthCheckResult> {
     try {
-      const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}?key=${this.apiKey}`);
+      const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}`, { headers: { "x-goog-api-key": this.apiKey } });
       if (!res.ok) return { ok: false, error: `Server responded ${res.status} ${res.statusText}` };
       return { ok: true };
     } catch (err) {
@@ -192,9 +204,9 @@ export class GeminiProvider implements ModelProvider {
         ...(tools ? { tools } : {}),
       };
 
-      const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}:generateContent?key=${this.apiKey}`, {
+      const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}:generateContent`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.headers(),
         body: JSON.stringify(body),
       });
 
@@ -228,9 +240,9 @@ export class GeminiProvider implements ModelProvider {
         ...(tools ? { tools } : {}),
       };
 
-      const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`, {
+      const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}:streamGenerateContent?alt=sse`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.headers(),
         body: JSON.stringify(body),
       });
 
