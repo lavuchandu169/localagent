@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import type { StorageCrypto } from "./googleAuth.js";
+import { loadEncryptedJson, saveEncryptedJson } from "./encryptedJsonFile.js";
 
 export interface McpServerConfig {
   id: string;
@@ -26,20 +26,15 @@ function isValidConfig(value: unknown): value is McpServerConfig {
   );
 }
 
+function parseMcpSettings(parsed: unknown): McpServerConfig[] {
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(isValidConfig);
+}
+
 export async function loadMcpSettings(settingsFilePath: string, storageCrypto?: StorageCrypto): Promise<McpServerConfig[]> {
-  try {
-    const raw = await fs.readFile(settingsFilePath, "utf-8");
-    const json = storageCrypto ? storageCrypto.decrypt(raw) : raw;
-    const parsed = JSON.parse(json) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isValidConfig);
-  } catch {
-    return [];
-  }
+  return loadEncryptedJson(settingsFilePath, storageCrypto, parseMcpSettings, []);
 }
 
 export async function saveMcpSettings(settingsFilePath: string, servers: McpServerConfig[], storageCrypto?: StorageCrypto): Promise<void> {
-  const json = JSON.stringify(servers, null, 2);
-  const toWrite = storageCrypto ? storageCrypto.encrypt(json) : json;
-  await fs.writeFile(settingsFilePath, toWrite, { encoding: "utf-8", mode: 0o600 });
+  await saveEncryptedJson(settingsFilePath, servers, storageCrypto);
 }

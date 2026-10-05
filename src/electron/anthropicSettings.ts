@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import type { StorageCrypto } from "./googleAuth.js";
+import { loadEncryptedJson, saveEncryptedJson } from "./encryptedJsonFile.js";
 
 export interface AnthropicSettings {
   apiKey: string | null;
@@ -9,20 +9,16 @@ export interface AnthropicSettings {
   addedAt: number | null;
 }
 
+function parseAnthropicSettings(parsed: unknown): AnthropicSettings {
+  const s = (parsed ?? {}) as Partial<AnthropicSettings>;
+  return {
+    apiKey: typeof s.apiKey === "string" ? s.apiKey : null,
+    addedAt: typeof s.addedAt === "number" ? s.addedAt : null,
+  };
+}
+
 export async function loadAnthropicSettings(settingsFilePath: string, storageCrypto?: StorageCrypto): Promise<AnthropicSettings> {
-  try {
-    const raw = await fs.readFile(settingsFilePath, "utf-8");
-    const json = storageCrypto ? storageCrypto.decrypt(raw) : raw;
-    const parsed = JSON.parse(json) as unknown;
-    if (!parsed || typeof parsed !== "object") return { apiKey: null, addedAt: null };
-    const s = parsed as Partial<AnthropicSettings>;
-    return {
-      apiKey: typeof s.apiKey === "string" ? s.apiKey : null,
-      addedAt: typeof s.addedAt === "number" ? s.addedAt : null,
-    };
-  } catch {
-    return { apiKey: null, addedAt: null };
-  }
+  return loadEncryptedJson(settingsFilePath, storageCrypto, parseAnthropicSettings, { apiKey: null, addedAt: null });
 }
 
 export async function saveAnthropicSettings(
@@ -33,9 +29,7 @@ export async function saveAnthropicSettings(
   const existing = await loadAnthropicSettings(settingsFilePath, storageCrypto);
   const addedAt = existing.addedAt ?? (settings.apiKey ? Date.now() : null);
   const toSave: AnthropicSettings = { apiKey: settings.apiKey, addedAt };
-  const json = JSON.stringify(toSave, null, 2);
-  const toWrite = storageCrypto ? storageCrypto.encrypt(json) : json;
-  await fs.writeFile(settingsFilePath, toWrite, { encoding: "utf-8", mode: 0o600 });
+  await saveEncryptedJson(settingsFilePath, toSave, storageCrypto);
 }
 
 /**
