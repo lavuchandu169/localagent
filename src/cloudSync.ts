@@ -173,13 +173,32 @@ function stripUntrustedRemoteProvider(record: SessionRecord): SessionRecord {
   return { ...record, provider: null };
 }
 
-/** Creates or updates (by sessionId lookup) the Drive file for this session
- * record. Returns Drive's own server-assigned modifiedTime for the result —
- * reconcileSessions uses it to seed/refresh a clock-skew-safe sync
- * checkpoint immediately after a successful push (see
- * SessionRecord.lastSyncCheckpoint). */
-export async function uploadSession(accessToken: string, record: SessionRecord, fetchImpl: FetchImpl = fetch): Promise<{ modifiedTime: string }> {
-  const existingFileId = await findRemoteFile(accessToken, record.id, fetchImpl);
+/** Creates or updates the Drive file for this session record, by sessionId
+ * lookup when the caller doesn't already know whether a remote file
+ * exists. Returns Drive's own server-assigned modifiedTime for the
+ * result — reconcileSessions uses it to seed/refresh a clock-skew-safe
+ * sync checkpoint immediately after a successful push (see
+ * SessionRecord.lastSyncCheckpoint).
+ *
+ * Performance finding (code-review-and-quality pass): reconcileSessions
+ * already knows the answer for every session it pushes — either the
+ * driveFileId from its own listRemoteSessions call (a push/conflict-
+ * resolve for a session present on both sides), or that no remote file
+ * exists at all (a local-only session, by construction of how
+ * reconcileSessions partitions its work) — so it always had to pay for
+ * this exact same Drive lookup a second time, immediately before every
+ * upload. `knownFileId` lets a caller that already knows skip it: pass
+ * the real id, or `null` to assert "known not to exist yet" (a create,
+ * not an update). Omitting it (undefined) preserves the original
+ * lookup-based behavior for the one caller that genuinely doesn't know —
+ * sessionRegistry.ts's post-task best-effort sync. */
+export async function uploadSession(
+  accessToken: string,
+  record: SessionRecord,
+  fetchImpl: FetchImpl = fetch,
+  knownFileId?: string | null
+): Promise<{ modifiedTime: string }> {
+  const existingFileId = knownFileId !== undefined ? knownFileId : await findRemoteFile(accessToken, record.id, fetchImpl);
   // Security audit finding M3: a session's own history can carry file
   // contents the agent read mid-task (e.g. a .env value quoted in a
   // run_command/read_file tool result) — redact the same way
@@ -270,14 +289,17 @@ export interface ReconcileResult {
 export interface ReconcileOps {
   listRemoteSessions: (accessToken: string) => Promise<RemoteSessionMeta[]>;
   downloadSession: (accessToken: string, driveFileId: string) => Promise<SessionRecord | SessionTombstone>;
-  uploadSession: (accessToken: string, record: SessionRecord) => Promise<{ modifiedTime: string }>;
+  /** `knownFileId`: pass the id when the caller already knows a remote file
+   * exists for this record, `null` when it already knows one doesn't —
+   * see uploadSession's doc comment. Omit it only when genuinely unknown. */
+  uploadSession: (accessToken: string, record: SessionRecord, knownFileId?: string | null) => Promise<{ modifiedTime: string }>;
 }
 
 function defaultReconcileOps(fetchImpl: FetchImpl): ReconcileOps {
   return {
     listRemoteSessions: (token) => listRemoteSessions(token, fetchImpl),
     downloadSession: (token, id) => downloadSession(token, id, fetchImpl),
-    uploadSession: (token, record) => uploadSession(token, record, fetchImpl),
+    uploadSession: (token, record, knownFileId) => uploadSession(token, record, fetchImpl, knownFileId),
   };
 }
 
@@ -441,7 +463,12 @@ export async function reconcileSessions(
             return "pulled";
           }
           if (localRecord.updatedAt > remoteRecord.updatedAt) {
-            const { modifiedTime } = await ops.uploadSession(accessToken, localRecord);
+            // Performance finding (code-review-and-quality pass): this
+            // session's remote.driveFileId is already known from the
+            // listRemoteSessions call at the top of this pass — passing it
+            // through skips uploadSession's own redundant lookup of the
+            // exact same thing.
+            const { modifiedTime } = await ops.uploadSession(accessToken, localRecord, remote.driveFileId);
             const pushed = withCheckpoint(localRecord, modifiedTime, localRecord.updatedAt);
             await writeSessionRecordFile(sessionsDir, pushed);
             indexUpserts.push(toIndexEntry(pushed));
@@ -459,7 +486,7 @@ export async function reconcileSessions(
         if (remoteUnchanged && localUnchanged) return "skipped";
 
         if (remoteUnchanged && !localUnchanged) {
-          const { modifiedTime } = await ops.uploadSession(accessToken, localRecord);
+          const { modifiedTime } = await ops.uploadSession(accessToken, localRecord, remote.driveFileId);
           const pushed = withCheckpoint(localRecord, modifiedTime, localRecord.updatedAt);
           await writeSessionRecordFile(sessionsDir, pushed);
           indexUpserts.push(toIndexEntry(pushed));
@@ -504,7 +531,11 @@ export async function reconcileSessions(
       try {
         const record = await loadSessionRecord(sessionsDir, local.id);
         if (!record) return "skipped";
-        const { modifiedTime } = await ops.uploadSession(accessToken, record);
+        // This session's id was filtered OUT of remoteIds just above (that's
+        // what makes it "local-only") — there is provably no remote file for
+        // it yet, so `null` here skips uploadSession's lookup entirely
+        // instead of re-confirming something already known.
+        const { modifiedTime } = await ops.uploadSession(accessToken, record, null);
         const pushed = withCheckpoint(record, modifiedTime, record.updatedAt);
         await writeSessionRecordFile(sessionsDir, pushed);
         indexUpserts.push(toIndexEntry(pushed));

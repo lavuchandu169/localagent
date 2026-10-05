@@ -116,6 +116,33 @@ console.log("\nuploadSession — update path (existing file):");
   check("returns Drive's real modifiedTime for the updated file", result.modifiedTime === "2024-02-03T00:00:00.000Z");
 }
 
+console.log("\nuploadSession — a known file id skips the lookup entirely (performance finding — code-review-and-quality pass):");
+{
+  const calls: { url: string; method?: string }[] = [];
+  const fakeFetch: typeof fetch = async (url, init) => {
+    calls.push({ url: url.toString(), method: init?.method });
+    return new Response(JSON.stringify({ modifiedTime: "2024-02-04T00:00:00.000Z" }), { status: 200 });
+  };
+  await uploadSession("tok", makeRecord("s1", 100), fakeFetch, "already-known-file-id");
+  check("no GET lookup call is made when the caller already knows the file id", !calls.some((c) => !c.method));
+  check(
+    "goes straight to a media PATCH against the known id",
+    calls.length === 1 && calls[0]!.method === "PATCH" && calls[0]!.url.includes("already-known-file-id")
+  );
+}
+
+console.log("\nuploadSession — knownFileId: null skips the lookup and goes straight to create (performance finding — code-review-and-quality pass):");
+{
+  const calls: { url: string; method?: string }[] = [];
+  const fakeFetch: typeof fetch = async (url, init) => {
+    calls.push({ url: url.toString(), method: init?.method });
+    return new Response(JSON.stringify({ modifiedTime: "2024-02-05T00:00:00.000Z" }), { status: 200 });
+  };
+  await uploadSession("tok", makeRecord("s1", 100), fakeFetch, null);
+  check("no GET lookup call is made when the caller already knows no file exists yet", !calls.some((c) => !c.method));
+  check("goes straight to a multipart create", calls.length === 1 && calls[0]!.method === "POST" && calls[0]!.url.includes("uploadType=multipart"));
+}
+
 console.log("\nuploadSession — redacts secrets before upload (security audit M3 — a session's own history can carry file contents the agent read, e.g. a .env value, which previously went to the user's Drive verbatim):");
 {
   const secretKey = "sk-" + "h".repeat(36);
@@ -338,20 +365,27 @@ console.log("\nreconcileSessions:");
   await saveSession(sessionsDir, makeRecord("local-only", 100));
 
   const uploaded: SessionRecord[] = [];
+  const knownFileIds: (string | null | undefined)[] = [];
   const result = await reconcileSessions(sessionsDir, "tok", {
     ops: {
       listRemoteSessions: async () => [],
       downloadSession: async () => {
         throw new Error("should not be called");
       },
-      uploadSession: async (_token, record) => {
+      uploadSession: async (_token, record, knownFileId) => {
         uploaded.push(record);
+        knownFileIds.push(knownFileId);
         return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
     },
   });
   check("pushes a local-only session to remote", uploaded.length === 1 && uploaded[0]?.id === "local-only");
   check("reports one pushed, zero pulled", result.pushed === 1 && result.pulled === 0);
+  // Performance finding (code-review-and-quality pass): this session was
+  // filtered out of remoteIds, so reconcileSessions already knows for
+  // certain no remote file exists — passing null here must skip
+  // uploadSession's own redundant lookup of the exact same fact.
+  check("passes knownFileId: null — no remote file exists, already known, don't look it up again", knownFileIds[0] === null);
 }
 
 {
@@ -454,13 +488,15 @@ console.log("\nreconcileSessions:");
   await saveSession(sessionsDir, makeRecord("both", 300));
   const olderRemote = makeRecord("both", 100);
   const uploaded: SessionRecord[] = [];
+  const knownFileIds: (string | null | undefined)[] = [];
 
   await reconcileSessions(sessionsDir, "tok", {
     ops: {
       listRemoteSessions: async () => [{ sessionId: "both", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
       downloadSession: async () => olderRemote,
-      uploadSession: async (_token, record) => {
+      uploadSession: async (_token, record, knownFileId) => {
         uploaded.push(record);
+        knownFileIds.push(knownFileId);
         return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
     },
@@ -468,6 +504,10 @@ console.log("\nreconcileSessions:");
   check("local-newer pushes the local copy to remote", uploaded.length === 1 && uploaded[0]?.updatedAt === 300);
   const local = await loadSessionRecord(sessionsDir, "both");
   check("local file is left untouched when local was already newer", local?.updatedAt === 300);
+  // Performance finding (code-review-and-quality pass): this session's
+  // remote.driveFileId ("f1") was already known from listRemoteSessions —
+  // passing it through must skip uploadSession's own redundant lookup.
+  check("passes the already-known driveFileId instead of re-looking it up", knownFileIds[0] === "f1");
 }
 
 {
@@ -505,13 +545,15 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
   const checkpoint = { remoteModifiedTime: "2024-01-01T00:00:00.000Z", localUpdatedAt: 100 };
   await saveSession(sessionsDir, makeRecord("robust-push", 999, checkpoint));
   const uploaded: SessionRecord[] = [];
+  const knownFileIds: (string | null | undefined)[] = [];
 
   const result = await reconcileSessions(sessionsDir, "tok", {
     ops: {
       listRemoteSessions: async () => [{ sessionId: "robust-push", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
       downloadSession: async () => makeRecord("robust-push", 100, checkpoint), // remote's own on-disk updatedAt is stale/irrelevant here
-      uploadSession: async (_token, record) => {
+      uploadSession: async (_token, record, knownFileId) => {
         uploaded.push(record);
+        knownFileIds.push(knownFileId);
         return { modifiedTime: "2024-01-02T00:00:00.000Z" };
       },
     },
@@ -520,6 +562,7 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
   const local = await loadSessionRecord(sessionsDir, "robust-push");
   check("the checkpoint is refreshed with the new remoteModifiedTime from the push response", local?.lastSyncCheckpoint?.remoteModifiedTime === "2024-01-02T00:00:00.000Z");
   check("the checkpoint's localUpdatedAt is refreshed too", local?.lastSyncCheckpoint?.localUpdatedAt === 999);
+  check("passes the already-known driveFileId instead of re-looking it up", knownFileIds[0] === "f1");
 }
 {
   // Checkpoint present, local's updatedAt still matches it exactly (this
