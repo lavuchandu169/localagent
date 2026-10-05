@@ -54,6 +54,36 @@ async function main() {
 
   await fs.rm(root, { recursive: true, force: true });
 
+  console.log("\nlistDirectoryTool: result is capped at 500 entries, and truncated is reported correctly (performance finding — code-review-and-quality pass):");
+  {
+    const bigRoot = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-listdir-big-"));
+    // 20 subdirectories x 30 files = 600 entries (+ 20 dir entries = 620),
+    // well past the 500 cap, flat enough to stay within the walk's own
+    // maxDepth of 3.
+    for (let d = 0; d < 20; d++) {
+      const dirPath = path.join(bigRoot, `dir-${d}`);
+      await fs.mkdir(dirPath, { recursive: true });
+      await Promise.all(Array.from({ length: 30 }, (_, f) => fs.writeFile(path.join(dirPath, `file-${f}.txt`), "", "utf-8")));
+    }
+    const bigCtx = { workspaceRoot: bigRoot, log: () => {} };
+    const result = await listDirectoryTool.execute({}, bigCtx);
+    check("the result is capped at exactly 500 entries, not 620", result.ok && result.output!.entries.length === 500);
+    check("truncated is reported as true", result.ok && result.truncated === true);
+    await fs.rm(bigRoot, { recursive: true, force: true });
+  }
+
+  console.log("\nlistDirectoryTool: truncated is false when genuinely everything fit (regression guard for the early-exit's cap-vs-naturally-finished distinction):");
+  {
+    const smallRoot = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-listdir-small-"));
+    await fs.writeFile(path.join(smallRoot, "one.txt"), "", "utf-8");
+    await fs.writeFile(path.join(smallRoot, "two.txt"), "", "utf-8");
+    const smallCtx = { workspaceRoot: smallRoot, log: () => {} };
+    const result = await listDirectoryTool.execute({}, smallCtx);
+    check("every entry is present (nothing dropped)", result.ok && result.output!.entries.length === 2);
+    check("truncated is false — this genuinely is everything, not a cap hit", result.ok && result.truncated === false);
+    await fs.rm(smallRoot, { recursive: true, force: true });
+  }
+
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
   process.exit(failures === 0 ? 0 : 1);
 }
