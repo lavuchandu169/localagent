@@ -9,6 +9,7 @@ import {
   deleteSession,
   rebuildIndex,
   claimUnownedSessions,
+  SEARCH_RESULT_CAP,
   type SessionRecord,
 } from "../sessionStore.js";
 import type { ChatMessage, AgentEvent } from "../types.js";
@@ -91,6 +92,27 @@ async function runTests() {
   const searchEmpty = await searchSessions(sessionsDir, "");
   const currentList = await listSessions(sessionsDir);
   check("empty query returns everything", searchEmpty.length === currentList.length);
+
+  console.log("\nSearch result cap (performance finding — code-review-and-quality pass):");
+  {
+    const capSessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-search-cap-test-"));
+    const TOTAL = SEARCH_RESULT_CAP + 50;
+    for (let i = 0; i < TOTAL; i++) {
+      await saveSession(capSessionsDir, makeRecord(`cap-${i}`, `matchme session ${i}`, i));
+    }
+    const results = await searchSessions(capSessionsDir, "matchme");
+    check(`a query matching every one of ${TOTAL} sessions is capped at SEARCH_RESULT_CAP (${SEARCH_RESULT_CAP})`, results.length === SEARCH_RESULT_CAP);
+    // Entries are sorted most-recently-updated first, so the capped result
+    // must be the TOP SEARCH_RESULT_CAP by updatedAt (ids TOTAL-1 down to
+    // TOTAL-SEARCH_RESULT_CAP), not an arbitrary subset from scan order.
+    const expectedNewestId = `cap-${TOTAL - 1}`;
+    const expectedOldestIncludedId = `cap-${TOTAL - SEARCH_RESULT_CAP}`;
+    check("the capped set is the MOST RECENT matches, not an arbitrary subset", results[0]?.id === expectedNewestId);
+    check(
+      "the oldest session outside the cap is correctly excluded",
+      !results.some((e) => e.id === `cap-${TOTAL - SEARCH_RESULT_CAP - 1}`) && results.some((e) => e.id === expectedOldestIncludedId)
+    );
+  }
 
   console.log("\nDelete:");
   await deleteSession(sessionsDir, "s2");

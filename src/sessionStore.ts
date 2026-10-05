@@ -352,6 +352,31 @@ export async function deleteSession(sessionsDir: string, id: string): Promise<vo
  * text/status event's text — not just the title. See `listSessions` for
  * the `ownerEmail` filtering contract.
  */
+/** searchSessions never returns more than this many matches — the sidebar
+ * list renders every result it gets back, and a broad query against a long
+ * history has no natural upper bound otherwise. Exported for tests. */
+export const SEARCH_RESULT_CAP = 200;
+
+/** How many record files searchSessions reads at once per batch — turns N
+ * sequential disk round trips into N/this many, while still bounding how
+ * many file descriptors are open simultaneously for a very large history. */
+const SEARCH_READ_CONCURRENCY = 16;
+
+/**
+ * Performance finding (code-review-and-quality pass): this used to read
+ * every session's record file one at a time in a sequential loop (N
+ * round trips back to back) and had no cap on how many matches it could
+ * return — a broad query against a long history read and held the ENTIRE
+ * matching set in memory before the sidebar ever got to render any of it.
+ * Reading in concurrent batches (not a single unbounded Promise.all —
+ * this still bounds simultaneous open file descriptors) turns that into
+ * N/SEARCH_READ_CONCURRENCY round trips, and the loop exits as soon as
+ * SEARCH_RESULT_CAP matches are found instead of scanning the rest of a
+ * long history for matches nobody will ever see. `entries` is already
+ * sorted most-recently-updated first (see writeIndexRaw's callers), so
+ * capping here means "the N most recent matches", not an arbitrary
+ * subset.
+ */
 export async function searchSessions(sessionsDir: string, query: string, ownerEmail?: string | null): Promise<SessionIndexEntry[]> {
   const entries = await listSessions(sessionsDir, ownerEmail);
   const trimmed = query.trim();
@@ -359,15 +384,22 @@ export async function searchSessions(sessionsDir: string, query: string, ownerEm
 
   const lower = trimmed.toLowerCase();
   const matches: SessionIndexEntry[] = [];
-  for (const entry of entries) {
-    const record = await loadSessionRecord(sessionsDir, entry.id);
-    if (!record) continue;
-    const haystackParts = [record.title, ...record.messages.map((m) => m.content)];
-    for (const event of record.events) {
-      if (event.type === "text") haystackParts.push(event.text);
-      else if (event.type === "status") haystackParts.push(event.message);
+  for (let i = 0; i < entries.length && matches.length < SEARCH_RESULT_CAP; i += SEARCH_READ_CONCURRENCY) {
+    const batch = entries.slice(i, i + SEARCH_READ_CONCURRENCY);
+    const records = await Promise.all(batch.map((entry) => loadSessionRecord(sessionsDir, entry.id)));
+    for (let j = 0; j < batch.length; j++) {
+      const record = records[j];
+      if (!record) continue;
+      const haystackParts = [record.title, ...record.messages.map((m) => m.content)];
+      for (const event of record.events) {
+        if (event.type === "text") haystackParts.push(event.text);
+        else if (event.type === "status") haystackParts.push(event.message);
+      }
+      if (haystackParts.join("\n").toLowerCase().includes(lower)) {
+        matches.push(batch[j]!);
+        if (matches.length >= SEARCH_RESULT_CAP) break;
+      }
     }
-    if (haystackParts.join("\n").toLowerCase().includes(lower)) matches.push(entry);
   }
   return matches;
 }
