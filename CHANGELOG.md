@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.82 — 2026-10-05
+
+- Refuse to read a file over 10MB instead of loading it whole
+
 ## v0.1.0-beta.81 — 2026-10-05
 
 - Skip binary/oversized files and stop early in the JS grep fallback
