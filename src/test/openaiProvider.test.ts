@@ -56,6 +56,30 @@ console.log("\nOpenAI provider does NOT mark a 401 as retryable:");
   }
 }
 
+console.log("\nOpenAI provider extracts the real message from a JSON error body instead of dumping it raw (readability finding — code-review-and-quality pass):");
+{
+  // Before this fix, a JSON error body's message was never extracted —
+  // the thrown ProviderChatError's message was the raw body text, braces
+  // and all, which is what the user actually saw on a task failure.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ error: { message: "The model `gpt-9000` does not exist." } }), { status: 404 })) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider({ apiKey: "test-key" });
+    try {
+      await provider.chat({ model: "gpt-9000", messages: [{ role: "user", content: "hi" }] });
+      check("a 404 response throws", false);
+    } catch (err) {
+      check(
+        "the real message is extracted, not the raw JSON body",
+        err instanceof ProviderChatError && err.message.includes("The model `gpt-9000` does not exist.") && !err.message.includes("{\"error\"")
+      );
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log("\nOpenAI provider parses a successful tool-call response:");
 {
   const realFetch = globalThis.fetch;
