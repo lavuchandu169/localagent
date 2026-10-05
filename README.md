@@ -595,6 +595,22 @@ to click through components, trace a path, or switch themes — download
 the file and open it locally, since GitHub doesn't execute the HTML
 inline.
 
+**Exploring deeper than one diagram:** `src/` is also mapped as a full
+knowledge graph with [graphify](https://github.com/Graphify-Labs/graphify)
+— 1223 nodes, 2951 edges, 70 detected communities, built from local AST
+parsing plus a semantic pass, with every edge tagged `EXTRACTED` (explicit
+in the source) or `INFERRED` (resolved by graphify) rather than asserted
+outright. It's not committed (a 1200-node force-directed render isn't
+legible as a static image, and it goes stale as the code changes), but
+it's reproducible: install the skill with
+`uv tool install graphifyy && graphify install`, then run `/graphify src`
+from the repo root. It surfaces things a file tree won't — e.g. `AgentBridge`
+(the renderer's IPC surface, `src/electron/renderer/renderer.ts`) touches
+25 of the 70 communities, by far the most connected node in the codebase;
+and the Anthropic and Gemini providers both reach into the same
+`formatTextAttachment()` helper (`src/attachmentFormat.ts`) despite never
+calling each other directly.
+
 ## Project structure
 
 | Path | What it is |
