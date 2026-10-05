@@ -80,6 +80,28 @@ async function readAtCheckpoint(workspaceRoot: string, checkpointHash: string, r
   }
 }
 
+// Performance finding (code-review-and-quality pass): with N changed
+// files, getChanges used to read them one at a time — N sequential `git
+// show` spawns (readAtCheckpoint) plus N sequential fs.readFile calls,
+// back to back, even though every file's diff is fully independent of
+// every other's. Capped (not a single unbounded Promise.all) so a huge
+// changeset doesn't spawn hundreds of `git show` child processes at once.
+const CHANGES_READ_CONCURRENCY = 8;
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = nextIndex++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
 /**
  * Same file list as listChangedFiles, with each entry's actual diff
  * attached — reusing computeFileDiff, the exact function the per-edit
@@ -90,19 +112,21 @@ async function readAtCheckpoint(workspaceRoot: string, checkpointHash: string, r
  */
 export async function getChanges(workspaceRoot: string, checkpointHash: string): Promise<FileChangeWithDiff[]> {
   const files = await listChangedFiles(workspaceRoot, checkpointHash);
-  const results: FileChangeWithDiff[] = [];
-  for (const file of files) {
+  return mapWithConcurrency(files, CHANGES_READ_CONCURRENCY, async (file): Promise<FileChangeWithDiff> => {
     let oldContent: string | null = null;
     let newContent = "";
     try {
       oldContent = file.status === "added" ? null : await readAtCheckpoint(workspaceRoot, checkpointHash, file.path);
       newContent = file.status === "deleted" ? "" : await fs.readFile(path.join(workspaceRoot, file.path), "utf-8");
-    } catch {
-      // Leave oldContent/newContent at their defaults — an unreadable file
-      // (permissions, binary, since replaced by a directory) still gets a
-      // list entry, just with an empty diff instead of crashing the batch.
+    } catch (err) {
+      // Observability finding (code-review-and-quality pass): this used to
+      // swallow ANY error silently — a genuine permission problem looked
+      // identical to "this file is binary/since-replaced-by-a-directory,
+      // just show an empty diff" with no way to tell them apart. Logged
+      // (not thrown): one unreadable file still shouldn't hide every other
+      // change in the batch, it just no longer does so silently.
+      console.warn(`[changesSince] could not read "${file.path}" for diffing, showing an empty diff:`, err);
     }
-    results.push({ ...file, diff: computeFileDiff(oldContent, newContent) });
-  }
-  return results;
+    return { ...file, diff: computeFileDiff(oldContent, newContent) };
+  });
 }
