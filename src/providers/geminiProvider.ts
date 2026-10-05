@@ -3,6 +3,7 @@ import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelIn
 import { ProviderChatError } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
 import { parseSseLines } from "./sseLines.js";
+import { wrapNonProviderError } from "./providerErrors.js";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -163,92 +164,104 @@ export class GeminiProvider implements ModelProvider {
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const { systemInstruction, contents } = toGeminiContents(request.messages);
-    const tools = toGeminiTools(request.tools);
-    const body = {
-      contents,
-      ...(systemInstruction ? { systemInstruction } : {}),
-      ...(tools ? { tools } : {}),
-    };
+    try {
+      const { systemInstruction, contents } = toGeminiContents(request.messages);
+      const tools = toGeminiTools(request.tools);
+      const body = {
+        contents,
+        ...(systemInstruction ? { systemInstruction } : {}),
+        ...(tools ? { tools } : {}),
+      };
 
-    const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}:generateContent?key=${this.apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const data: any = await res.json().catch(() => ({}));
-      const geminiStatus = data?.error?.status;
-      throw new ProviderChatError(data?.error?.message ?? `Gemini error ${res.status}`, {
-        status: res.status,
-        retryable: res.status === 429 || geminiStatus === "RESOURCE_EXHAUSTED",
+      const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}:generateContent?key=${this.apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
-    }
 
-    const data: any = await res.json();
-    return fromGeminiResult(data);
+      if (!res.ok) {
+        const data: any = await res.json().catch(() => ({}));
+        const geminiStatus = data?.error?.status;
+        throw new ProviderChatError(data?.error?.message ?? `Gemini error ${res.status}`, {
+          status: res.status,
+          retryable: res.status === 429 || geminiStatus === "RESOURCE_EXHAUSTED",
+        });
+      }
+
+      const data: any = await res.json();
+      return fromGeminiResult(data);
+    } catch (err) {
+      // Correctness finding (code-review-and-quality pass): a failure in
+      // fetch() itself (network down, DNS, TLS), not just a non-OK HTTP
+      // response, used to propagate as a bare Error — invisible to
+      // agent.ts's retryable-fallback check. See providerErrors.ts.
+      wrapNonProviderError(err);
+    }
   }
 
   async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
-    const { systemInstruction, contents } = toGeminiContents(request.messages);
-    const tools = toGeminiTools(request.tools);
-    const body = {
-      contents,
-      ...(systemInstruction ? { systemInstruction } : {}),
-      ...(tools ? { tools } : {}),
-    };
+    try {
+      const { systemInstruction, contents } = toGeminiContents(request.messages);
+      const tools = toGeminiTools(request.tools);
+      const body = {
+        contents,
+        ...(systemInstruction ? { systemInstruction } : {}),
+        ...(tools ? { tools } : {}),
+      };
 
-    const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const data: any = await res.json().catch(() => ({}));
-      const geminiStatus = data?.error?.status;
-      throw new ProviderChatError(data?.error?.message ?? `Gemini error ${res.status}`, {
-        status: res.status,
-        retryable: res.status === 429 || geminiStatus === "RESOURCE_EXHAUSTED",
+      const res = await fetch(`${GEMINI_BASE_URL}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
-    }
 
-    // Accumulated verbatim and handed to fromGeminiResult at the end,
-    // rather than re-deriving ChatResponse here — the exact same converter
-    // chat() uses, so any future change to it (e.g. preserving a
-    // functionCall's thoughtSignature) automatically covers streaming too,
-    // with no second copy of the parsing logic to keep in sync.
-    const allParts: GeminiPart[] = [];
-    // Correctness audit finding (provider High #1): Gemini sends
-    // usageMetadata on (typically) the final chunk — captured here and
-    // threaded into the synthetic raw object below, so fromGeminiResult's
-    // own usage extraction (shared with chat()) picks it up automatically.
-    let usageMetadata: unknown;
-    for await (const payload of parseSseLines(res)) {
-      const chunk = JSON.parse(payload);
-
-      // An in-band error chunk (Gemini's SSE stream can emit one mid-stream
-      // after a 200 response and real content already sent) — treating it
-      // as a successful "done" would report a task as complete with
-      // silently truncated content.
-      if (chunk.error) {
-        throw new ProviderChatError(chunk.error?.message ?? "Gemini returned an in-band stream error.", { retryable: false });
+      if (!res.ok) {
+        const data: any = await res.json().catch(() => ({}));
+        const geminiStatus = data?.error?.status;
+        throw new ProviderChatError(data?.error?.message ?? `Gemini error ${res.status}`, {
+          status: res.status,
+          retryable: res.status === 429 || geminiStatus === "RESOURCE_EXHAUSTED",
+        });
       }
 
-      if (chunk.usageMetadata) usageMetadata = chunk.usageMetadata;
+      // Accumulated verbatim and handed to fromGeminiResult at the end,
+      // rather than re-deriving ChatResponse here — the exact same converter
+      // chat() uses, so any future change to it (e.g. preserving a
+      // functionCall's thoughtSignature) automatically covers streaming too,
+      // with no second copy of the parsing logic to keep in sync.
+      const allParts: GeminiPart[] = [];
+      // Correctness audit finding (provider High #1): Gemini sends
+      // usageMetadata on (typically) the final chunk — captured here and
+      // threaded into the synthetic raw object below, so fromGeminiResult's
+      // own usage extraction (shared with chat()) picks it up automatically.
+      let usageMetadata: unknown;
+      for await (const payload of parseSseLines(res)) {
+        const chunk = JSON.parse(payload);
 
-      const parts: GeminiPart[] = chunk?.candidates?.[0]?.content?.parts ?? [];
-      for (const part of parts) {
-        if (part.text) yield { type: "text", text: part.text };
-        // functionCall parts arrive fully formed — see Global Constraints.
-        // Not streamed as tool_call_start/tool_call_delta; folded straight
-        // into the terminal done event below via fromGeminiResult, exactly
-        // like a non-streaming response.
-        allParts.push(part);
+        // An in-band error chunk (Gemini's SSE stream can emit one mid-stream
+        // after a 200 response and real content already sent) — treating it
+        // as a successful "done" would report a task as complete with
+        // silently truncated content.
+        if (chunk.error) {
+          throw new ProviderChatError(chunk.error?.message ?? "Gemini returned an in-band stream error.", { retryable: false });
+        }
+
+        if (chunk.usageMetadata) usageMetadata = chunk.usageMetadata;
+
+        const parts: GeminiPart[] = chunk?.candidates?.[0]?.content?.parts ?? [];
+        for (const part of parts) {
+          if (part.text) yield { type: "text", text: part.text };
+          // functionCall parts arrive fully formed — see Global Constraints.
+          // Not streamed as tool_call_start/tool_call_delta; folded straight
+          // into the terminal done event below via fromGeminiResult, exactly
+          // like a non-streaming response.
+          allParts.push(part);
+        }
       }
-    }
 
-    yield { type: "done", response: fromGeminiResult({ candidates: [{ content: { parts: allParts } }], usageMetadata }) };
+      yield { type: "done", response: fromGeminiResult({ candidates: [{ content: { parts: allParts } }], usageMetadata }) };
+    } catch (err) {
+      wrapNonProviderError(err);
+    }
   }
 }

@@ -1,6 +1,7 @@
 import type { ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, StreamEvent } from "../types.js";
 import { ProviderChatError } from "../types.js";
 import { buildChatBody, fromOpenAIChatMessage, streamOpenAIShapeResponse } from "./openaiCompatible.js";
+import { wrapNonProviderError } from "./providerErrors.js";
 
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -41,59 +42,71 @@ export class OpenAIProvider implements ModelProvider {
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const body = buildChatBody({ ...request, model: request.model || this.model });
-    // buildChatBody's max_tokens is right for arbitrary self-hosted
-    // OpenAI-COMPATIBLE servers (OpenAICompatibleProvider's own use of it),
-    // but the real, hosted OpenAI API rejects max_tokens outright on its
-    // current model line with a non-retryable 400 telling callers to use
-    // max_completion_tokens instead — only this class talks to the real
-    // API, so only here is the field renamed, leaving the shared
-    // buildChatBody (and every custom-server caller) untouched.
-    if ("max_tokens" in body) {
-      body.max_completion_tokens = body.max_tokens;
-      delete body.max_tokens;
+    try {
+      const body = buildChatBody({ ...request, model: request.model || this.model });
+      // buildChatBody's max_tokens is right for arbitrary self-hosted
+      // OpenAI-COMPATIBLE servers (OpenAICompatibleProvider's own use of it),
+      // but the real, hosted OpenAI API rejects max_tokens outright on its
+      // current model line with a non-retryable 400 telling callers to use
+      // max_completion_tokens instead — only this class talks to the real
+      // API, so only here is the field renamed, leaving the shared
+      // buildChatBody (and every custom-server caller) untouched.
+      if ("max_tokens" in body) {
+        body.max_completion_tokens = body.max_tokens;
+        delete body.max_tokens;
+      }
+
+      const res = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new ProviderChatError(`OpenAI error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
+      }
+
+      const data: any = await res.json();
+      const choice = data.choices?.[0];
+      return fromOpenAIChatMessage(choice?.message ?? {}, data);
+    } catch (err) {
+      // Correctness finding (code-review-and-quality pass): a failure in
+      // fetch() itself (network down, DNS, TLS), not just a non-OK HTTP
+      // response, used to propagate as a bare Error — invisible to
+      // agent.ts's retryable-fallback check. See providerErrors.ts.
+      wrapNonProviderError(err);
     }
-
-    const res = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new ProviderChatError(`OpenAI error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
-    }
-
-    const data: any = await res.json();
-    const choice = data.choices?.[0];
-    return fromOpenAIChatMessage(choice?.message ?? {}, data);
   }
 
   async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
-    const body = buildChatBody({ ...request, model: request.model || this.model });
-    if ("max_tokens" in body) {
-      body.max_completion_tokens = body.max_tokens;
-      delete body.max_tokens;
+    try {
+      const body = buildChatBody({ ...request, model: request.model || this.model });
+      if ("max_tokens" in body) {
+        body.max_completion_tokens = body.max_tokens;
+        delete body.max_tokens;
+      }
+      body.stream = true;
+      // Correctness audit finding (provider High #1): OpenAI's real API
+      // only includes a usage field on a streamed chunk when this is set —
+      // without it, chat() reports real cost but chatStream() silently
+      // never does, even though it's the exact same billed request.
+      body.stream_options = { include_usage: true };
+
+      const res = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new ProviderChatError(`OpenAI error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
+      }
+
+      yield* streamOpenAIShapeResponse(res);
+    } catch (err) {
+      wrapNonProviderError(err);
     }
-    body.stream = true;
-    // Correctness audit finding (provider High #1): OpenAI's real API
-    // only includes a usage field on a streamed chunk when this is set —
-    // without it, chat() reports real cost but chatStream() silently
-    // never does, even though it's the exact same billed request.
-    body.stream_options = { include_usage: true };
-
-    const res = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new ProviderChatError(`OpenAI error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
-    }
-
-    yield* streamOpenAIShapeResponse(res);
   }
 }
