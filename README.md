@@ -46,6 +46,7 @@ remaining gaps, instead of burying them.
   - [Running inside a sandboxed agent CLI](#running-inside-a-sandboxed-agent-cli)
 - [Privacy](#privacy)
 - [Testing](#testing)
+- [Architecture](#architecture)
 - [Project structure](#project-structure)
 - [What's not built yet](#whats-not-built-yet)
 - [License](#license)
@@ -565,6 +566,34 @@ Development happens directly on short-lived branches merged into `main`
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and how CI is
 wired up. Found a security issue? See [SECURITY.md](SECURITY.md) instead
 of opening a public issue.
+
+## Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-diagram-dark.png" />
+  <img src="docs/assets/architecture-diagram-light.png" alt="localagent runtime architecture: renderer through preload and the Electron main process into the agent loop, gated by the permission engine before reaching the tool registry, filesystem/shell, GitHub, the five model providers, and session storage with optional Google Drive sync" width="100%" />
+</picture>
+
+Every request follows the same path regardless of which model or tool is
+in play: the renderer has no Node access of its own (`contextIsolation`,
+no `nodeIntegration`) and reaches the main process only through the
+narrow preload bridge; the agent loop never touches a file, shell, or
+network call directly — it hands every tool call to the permission
+engine first, and only an `ALLOW` decision reaches the tool registry,
+whether the call targets the local filesystem, a shell command, or the
+GitHub API. Exactly one model provider is resolved per session (Claude,
+OpenAI, Gemini, the embedded GGUF runtime, or the bundled free-tier
+router), and every session is a local JSON file first, with Google Drive
+sync layered on top as an optional, per-account mirror — never the
+source of truth, and a session's provider configuration is never trusted
+back in from a synced copy.
+
+This is a real, [source-traced](https://github.com/tt-a1i/archify)
+diagram, not an illustration: every node links back to the exact file and
+line it was drawn from. [Open the interactive version](docs/assets/architecture.html)
+to click through components, trace a path, or switch themes — download
+the file and open it locally, since GitHub doesn't execute the HTML
+inline.
 
 ## Project structure
 
