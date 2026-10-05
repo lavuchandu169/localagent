@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.84 — 2026-10-05
+
+- Fix Gemini's in-band stream errors skipping rate-limit classification
+
 ## v0.1.0-beta.83 — 2026-10-05
 
 - Wrap non-HTTP provider failures in ProviderChatError everywhere
