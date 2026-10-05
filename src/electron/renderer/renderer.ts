@@ -883,7 +883,9 @@ aboutToggle.addEventListener("click", () => {
   else closeOverlayPanel(aboutPanel);
   aboutToggle.setAttribute("aria-expanded", String(opening));
   if (opening) {
-    void buildReportIssueUrl().then((url) => (reportIssueLink.href = url));
+    void buildReportIssueUrl()
+      .then((url) => (reportIssueLink.href = url))
+      .catch((err) => console.error("[about] buildReportIssueUrl failed:", err));
     aboutClose.focus(); // moves focus into the panel, so a keyboard/screen-reader user actually lands on its content
   }
 });
@@ -1077,48 +1079,90 @@ geminiApiKeyInput.addEventListener("input", () => {
   geminiApiKeyTouched = true;
 });
 
+/** Shared by every catch block this function adds below — kept local to
+ * where it's actually new usage rather than also touching the 9
+ * pre-existing inline `err instanceof Error ? err.message : String(err)`
+ * occurrences elsewhere in this file (a separate readability cleanup, not
+ * bundled into this correctness fix). */
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 async function openSettingsPanel(): Promise<void> {
+  // Code-review finding (code-review-and-quality pass): this used to be 6
+  // sequential bare `await`s with no try/catch anywhere in the function.
+  // Any one rejecting (a single provider's IPC call failing) aborted the
+  // whole function - the panel silently never finished opening, nothing
+  // past the failure point ever populated, and the rejection itself was
+  // unhandled. Each section already resets and (on save) reports its OWN
+  // error state independently, so loading independently - one section's
+  // failure never blocking the other 5 - matches how the rest of this
+  // panel already behaves, not a new UI pattern.
   settingsError.textContent = "";
   settingsSaved.hidden = true;
   settingsSecretTouched = false;
-  const current = await window.agent.getGoogleSettings();
-  settingsClientIdInput.value = current.clientId;
-  settingsClientSecretInput.value = "";
-  settingsClientSecretInput.placeholder = current.hasSecret ? "•••• saved" : "";
-  settingsEnvOverrideNotice.hidden = !current.envOverride;
+  try {
+    const current = await window.agent.getGoogleSettings();
+    settingsClientIdInput.value = current.clientId;
+    settingsClientSecretInput.value = "";
+    settingsClientSecretInput.placeholder = current.hasSecret ? "•••• saved" : "";
+    settingsEnvOverrideNotice.hidden = !current.envOverride;
+  } catch (err) {
+    settingsError.textContent = `Could not load Google settings: ${errorMessage(err)}`;
+  }
 
   anthropicSettingsError.textContent = "";
   anthropicSettingsSaved.hidden = true;
   anthropicApiKeyTouched = false;
-  const currentAnthropic = await window.agent.getAnthropicSettings();
-  anthropicApiKeyInput.value = "";
-  anthropicApiKeyInput.placeholder = currentAnthropic.hasKey ? "•••• saved" : "";
-  anthropicEnvOverrideNotice.hidden = !currentAnthropic.envOverride;
+  try {
+    const currentAnthropic = await window.agent.getAnthropicSettings();
+    anthropicApiKeyInput.value = "";
+    anthropicApiKeyInput.placeholder = currentAnthropic.hasKey ? "•••• saved" : "";
+    anthropicEnvOverrideNotice.hidden = !currentAnthropic.envOverride;
+  } catch (err) {
+    anthropicSettingsError.textContent = `Could not load Anthropic settings: ${errorMessage(err)}`;
+  }
 
   openaiSettingsError.textContent = "";
   openaiSettingsSaved.hidden = true;
   openaiApiKeyTouched = false;
-  const currentOpenAI = await window.agent.getOpenAISettings();
-  openaiApiKeyInput.value = "";
-  openaiApiKeyInput.placeholder = currentOpenAI.hasKey ? "•••• saved" : "";
-  openaiEnvOverrideNotice.hidden = !currentOpenAI.envOverride;
+  try {
+    const currentOpenAI = await window.agent.getOpenAISettings();
+    openaiApiKeyInput.value = "";
+    openaiApiKeyInput.placeholder = currentOpenAI.hasKey ? "•••• saved" : "";
+    openaiEnvOverrideNotice.hidden = !currentOpenAI.envOverride;
+  } catch (err) {
+    openaiSettingsError.textContent = `Could not load OpenAI settings: ${errorMessage(err)}`;
+  }
 
   geminiSettingsError.textContent = "";
   geminiSettingsSaved.hidden = true;
   geminiApiKeyTouched = false;
-  const currentGemini = await window.agent.getGeminiSettings();
-  geminiApiKeyInput.value = "";
-  geminiApiKeyInput.placeholder = currentGemini.hasKey ? "•••• saved" : "";
-  geminiEnvOverrideNotice.hidden = !currentGemini.envOverride;
+  try {
+    const currentGemini = await window.agent.getGeminiSettings();
+    geminiApiKeyInput.value = "";
+    geminiApiKeyInput.placeholder = currentGemini.hasKey ? "•••• saved" : "";
+    geminiEnvOverrideNotice.hidden = !currentGemini.envOverride;
+  } catch (err) {
+    geminiSettingsError.textContent = `Could not load Gemini settings: ${errorMessage(err)}`;
+  }
 
   // Correctness audit finding (GitHub Medium #3): every other credential
   // section above re-reads its real stored state on every open — GitHub's
   // was only ever fetched once at launch, so a revocation detected mid-
   // session (see onGithubUnauthorized in main.ts) or a connect/disconnect
   // from another window never showed up here until the next app restart.
-  await refreshGithubStatus();
+  try {
+    await refreshGithubStatus();
+  } catch (err) {
+    console.error("[settings] refreshGithubStatus failed:", err);
+  }
 
-  await refreshDownloadedModelsList();
+  try {
+    await refreshDownloadedModelsList();
+  } catch (err) {
+    console.error("[settings] refreshDownloadedModelsList failed:", err);
+  }
 }
 
 /** Same contract as closeAboutPanel — hide, update aria-expanded, return focus to the toggle. */
@@ -1244,10 +1288,13 @@ function openCommandPalette(): void {
   commandPaletteToggle.setAttribute("aria-expanded", "true");
   renderCommandPaletteResults(); // static commands show immediately; the line below fills in sessions once they've loaded
   commandPaletteInput.focus();
-  void window.agent.listSessions().then((entries) => {
-    paletteSessions = entries;
-    if (!commandPaletteOverlay.hidden) renderCommandPaletteResults();
-  });
+  void window.agent
+    .listSessions()
+    .then((entries) => {
+      paletteSessions = entries;
+      if (!commandPaletteOverlay.hidden) renderCommandPaletteResults();
+    })
+    .catch((err) => console.error("[command-palette] listSessions failed:", err));
 }
 
 commandPaletteToggle.addEventListener("click", () => {
