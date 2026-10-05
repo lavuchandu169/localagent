@@ -1,32 +1,26 @@
-import fs from "node:fs/promises";
 import type { StorageCrypto } from "./googleAuth.js";
 import { EMBEDDED_GOOGLE_CLIENT_ID, EMBEDDED_GOOGLE_CLIENT_SECRET } from "./embeddedCredentials.js";
+import { loadEncryptedJson, saveEncryptedJson } from "./encryptedJsonFile.js";
 
 export interface GoogleSettings {
   clientId: string | null;
   clientSecret: string | null;
 }
 
+function parseGoogleSettings(parsed: unknown): GoogleSettings {
+  const s = (parsed ?? {}) as Partial<GoogleSettings>;
+  return {
+    clientId: typeof s.clientId === "string" ? s.clientId : null,
+    clientSecret: typeof s.clientSecret === "string" ? s.clientSecret : null,
+  };
+}
+
 export async function loadGoogleSettings(settingsFilePath: string, storageCrypto?: StorageCrypto): Promise<GoogleSettings> {
-  try {
-    const raw = await fs.readFile(settingsFilePath, "utf-8");
-    const json = storageCrypto ? storageCrypto.decrypt(raw) : raw;
-    const parsed = JSON.parse(json) as unknown;
-    if (!parsed || typeof parsed !== "object") return { clientId: null, clientSecret: null };
-    const s = parsed as Partial<GoogleSettings>;
-    return {
-      clientId: typeof s.clientId === "string" ? s.clientId : null,
-      clientSecret: typeof s.clientSecret === "string" ? s.clientSecret : null,
-    };
-  } catch {
-    return { clientId: null, clientSecret: null };
-  }
+  return loadEncryptedJson(settingsFilePath, storageCrypto, parseGoogleSettings, { clientId: null, clientSecret: null });
 }
 
 export async function saveGoogleSettings(settingsFilePath: string, settings: GoogleSettings, storageCrypto?: StorageCrypto): Promise<void> {
-  const json = JSON.stringify(settings, null, 2);
-  const toWrite = storageCrypto ? storageCrypto.encrypt(json) : json;
-  await fs.writeFile(settingsFilePath, toWrite, { encoding: "utf-8", mode: 0o600 });
+  await saveEncryptedJson(settingsFilePath, settings, storageCrypto);
 }
 
 /**

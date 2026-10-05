@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import type { StorageCrypto } from "./googleAuth.js";
+import { loadEncryptedJson, saveEncryptedJson } from "./encryptedJsonFile.js";
 
 export interface OpenAISettings {
   apiKey: string | null;
@@ -7,20 +7,16 @@ export interface OpenAISettings {
   addedAt: number | null;
 }
 
+function parseOpenAISettings(parsed: unknown): OpenAISettings {
+  const s = (parsed ?? {}) as Partial<OpenAISettings>;
+  return {
+    apiKey: typeof s.apiKey === "string" ? s.apiKey : null,
+    addedAt: typeof s.addedAt === "number" ? s.addedAt : null,
+  };
+}
+
 export async function loadOpenAISettings(settingsFilePath: string, storageCrypto?: StorageCrypto): Promise<OpenAISettings> {
-  try {
-    const raw = await fs.readFile(settingsFilePath, "utf-8");
-    const json = storageCrypto ? storageCrypto.decrypt(raw) : raw;
-    const parsed = JSON.parse(json) as unknown;
-    if (!parsed || typeof parsed !== "object") return { apiKey: null, addedAt: null };
-    const s = parsed as Partial<OpenAISettings>;
-    return {
-      apiKey: typeof s.apiKey === "string" ? s.apiKey : null,
-      addedAt: typeof s.addedAt === "number" ? s.addedAt : null,
-    };
-  } catch {
-    return { apiKey: null, addedAt: null };
-  }
+  return loadEncryptedJson(settingsFilePath, storageCrypto, parseOpenAISettings, { apiKey: null, addedAt: null });
 }
 
 export async function saveOpenAISettings(
@@ -31,9 +27,7 @@ export async function saveOpenAISettings(
   const existing = await loadOpenAISettings(settingsFilePath, storageCrypto);
   const addedAt = existing.addedAt ?? (settings.apiKey ? Date.now() : null);
   const toSave: OpenAISettings = { apiKey: settings.apiKey, addedAt };
-  const json = JSON.stringify(toSave, null, 2);
-  const toWrite = storageCrypto ? storageCrypto.encrypt(json) : json;
-  await fs.writeFile(settingsFilePath, toWrite, { encoding: "utf-8", mode: 0o600 });
+  await saveEncryptedJson(settingsFilePath, toSave, storageCrypto);
 }
 
 /** Same env-var-wins-then-saved-settings-then-undefined chain as resolveAnthropicApiKey — see that function's doc comment for the full reasoning (in particular, why this deliberately never resolves to an embedded key). */
