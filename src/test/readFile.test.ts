@@ -153,6 +153,25 @@ async function main() {
     );
   }
 
+  console.log("\nreadFileTool: a file over the size cap is refused outright, never loaded into memory (performance finding — code-review-and-quality pass):");
+  {
+    const bigPath = path.join(root, "huge.txt");
+    // Sparse file: ftruncate-style allocation reports the real size via
+    // stat() without this test itself having to write 10MB+ of real data.
+    const handle = await fs.open(bigPath, "w");
+    await handle.truncate(11 * 1024 * 1024);
+    await handle.close();
+
+    const result = await readFileTool.execute({ path: "huge.txt" }, ctx);
+    check("a file over MAX_READABLE_BYTES is refused, not read", result.ok === false);
+    check("the error names the size problem, not a generic failure", !result.ok && /too large/i.test(result.error ?? ""));
+
+    const rangedResult = await readFileTool.execute({ path: "huge.txt", offset: 1, limit: 10 }, ctx);
+    check("the size guard applies to a ranged (offset/limit) read too, not just a full read", rangedResult.ok === false);
+
+    await fs.rm(bigPath, { force: true });
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

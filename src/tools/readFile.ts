@@ -26,6 +26,20 @@ const MAX_CONTENT_CHARS = 20000;
 const DEFAULT_LINE_LIMIT = 500;
 const MAX_LINE_LIMIT = 2000;
 
+// Performance finding (code-review-and-quality pass): every read loaded the
+// WHOLE file into memory via fs.readFile before any of the truncation
+// logic below ever ran, and offset/limit paging didn't change that — a
+// huge file (a multi-GB log, a large data dump accidentally targeted) got
+// read in full even though at most MAX_CONTENT_CHARS chars or
+// MAX_LINE_LIMIT lines of it could ever be returned. Checked via a cheap
+// stat() before the real read; an ordinary source file is always far
+// under this, and redactSecrets' own need to see the full content to
+// correctly redact a match straddling a truncation boundary (see below)
+// means there's no safe way to read only a prefix instead — the only
+// remaining lever is refusing outright above a sane size, same posture
+// attachments.ts already takes with MAX_IMAGE_BYTES/MAX_TEXT_BYTES.
+const MAX_READABLE_BYTES = 10 * 1024 * 1024; // 10MB
+
 export const readFileTool: Tool<Input, Output> = {
   name: "read_file",
   description:
@@ -65,6 +79,14 @@ export const readFileTool: Tool<Input, Output> = {
       }
     }
     try {
+      const stat = await fs.stat(abs);
+      if (stat.size > MAX_READABLE_BYTES) {
+        return {
+          ok: false,
+          output: null,
+          error: `File is too large to read in full (${stat.size} bytes, max ${MAX_READABLE_BYTES}) — use grep to search it instead of reading it whole.`,
+        };
+      }
       const content = await fs.readFile(abs, "utf8");
       // split("\n") on content ending with a trailing newline (the normal
       // case for almost every real text file) produces one extra empty
