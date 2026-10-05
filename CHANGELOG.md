@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.83 — 2026-10-05
+
+- Wrap non-HTTP provider failures in ProviderChatError everywhere
+
 ## v0.1.0-beta.82 — 2026-10-05
 
 - Refuse to read a file over 10MB instead of loading it whole
