@@ -102,6 +102,36 @@ console.log("listChangedFiles / getChanges:");
 }
 
 {
+  // Performance finding (code-review-and-quality pass): getChanges used to
+  // read every changed file's diff one at a time (N sequential `git show`
+  // spawns plus N sequential fs.readFile calls). Now reads them
+  // concurrently via mapWithConcurrency — this is a regression guard for
+  // that helper's own positional-ordering guarantee: with several files
+  // read out of start order, each result must still land at the same
+  // index as its corresponding entry in the input file list, not
+  // whichever order its own read happened to finish in.
+  const repo = await makeRepo();
+  const names = Array.from({ length: 10 }, (_, i) => `file-${i}.txt`);
+  for (const name of names) await fs.writeFile(path.join(repo, name), `original ${name}\n`, "utf-8");
+  await git(repo, ["add", "-A"]);
+  await git(repo, ["commit", "-q", "-m", "initial"]);
+
+  const checkpoint = await createCheckpoint(repo);
+  if (!checkpoint) throw new Error("setup failed: no checkpoint created");
+
+  for (const name of names) await fs.writeFile(path.join(repo, name), `changed ${name}\n`, "utf-8");
+
+  const changes = await getChanges(repo, checkpoint);
+  check(`all ${names.length} changed files are present`, changes.length === names.length);
+  check(
+    "each result's path/diff still line up correctly despite concurrent reads — no cross-file mixups",
+    names.every((name, i) => changes[i]?.path === name && changes[i]!.diff.some((c) => c.added && c.value.includes(`changed ${name}`)))
+  );
+
+  await fs.rm(repo, { recursive: true, force: true });
+}
+
+{
   // No changes at all since the checkpoint — an empty list, not an error.
   const repo = await makeRepo();
   await fs.writeFile(path.join(repo, "untouched.txt"), "same as ever\n", "utf-8");
