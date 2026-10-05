@@ -52,7 +52,16 @@ export async function connectMcpServer(
   // No special capabilities declared — this client only ever calls tools.
   const client = new Client(CLIENT_INFO);
   client.onclose = () => onStatusChange({ state: "failed", error: `${config.name} disconnected unexpectedly.` });
-  client.onerror = (err) => onStatusChange({ state: "failed", error: err.message });
+  // Correctness finding (code-review-and-quality pass): the SDK's onerror
+  // fires for both a fatal transport break AND recoverable, non-fatal
+  // conditions (a malformed message, a notification handler that threw),
+  // with no SDK-level way to tell them apart from the callback alone.
+  // onclose above is the one unambiguous "this connection is dead" signal —
+  // it fires exactly when the transport tears down — so only it transitions
+  // status to failed. Routing every onerror through the same transition
+  // used to drop ALL of a server's tools for the rest of the session even
+  // when the connection was still functionally alive.
+  client.onerror = (err) => console.error(`[mcp:${config.name}] non-fatal client error:`, err);
 
   try {
     await client.connect(transport, { timeout });
@@ -89,7 +98,13 @@ export async function connectMcpServer(
   } catch (err) {
     // connect() may have already spawned the child process and completed
     // the handshake before a later step (e.g. listTools()) failed — close
-    // here so that partially-established connection doesn't leak.
+    // here so that partially-established connection doesn't leak. Detach
+    // the handlers first (matching disconnectMcpServer's own pattern):
+    // close() fires onclose synchronously, which would otherwise broadcast
+    // its own generic "disconnected unexpectedly" failed status right
+    // before the real error below overwrites it.
+    client.onclose = undefined;
+    client.onerror = undefined;
     await client.close().catch(() => {});
     const status: McpServerStatus = { state: "failed", error: err instanceof Error ? err.message : String(err) };
     onStatusChange(status);

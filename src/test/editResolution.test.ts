@@ -62,6 +62,34 @@ console.log("\napplyOldStringReplace: a multi-line old_string (a real block, not
   );
 }
 
+console.log(
+  "\napplyOldStringReplace: a single match whose new_string contains $-replacement-pattern sequences inserts them literally, not expanded (security audit — code-review-and-quality pass):"
+);
+{
+  // String.prototype.replace() interprets special replacement patterns in
+  // its SECOND argument even when the first argument is a plain string,
+  // not a RegExp ($$  -> literal $, $& -> the matched text, $` / $' ->
+  // text before/after the match, $1.. -> capture groups). A model-issued
+  // edit inserting shell ($$, a PID in sh/bash/Perl/PHP), jQuery ($'),
+  // or any other code containing these sequences would have its new_string
+  // silently mangled instead of inserted as the exact bytes requested.
+  const content = "const old = 1;\n";
+  const result = applyOldStringReplace(content, "const old = 1;", "const price = \"$$5\";", false);
+  check("a literal $$ in new_string is not collapsed to a single $", result.ok === true && result.newContent === 'const price = "$$5";\n');
+}
+{
+  const content = "placeholder\n";
+  const result = applyOldStringReplace(content, "placeholder", "echo $& done", false);
+  check("a literal $& in new_string is not expanded to the matched text", result.ok === true && result.newContent === "echo $& done\n");
+}
+{
+  // The replaceAll path (split/join) was already unaffected by this bug —
+  // pin it here so the fix can't accidentally be applied asymmetrically.
+  const content = "x\nx\n";
+  const result = applyOldStringReplace(content, "x", "$$", true);
+  check("replace_all with a literal $$ in new_string is also not collapsed (regression guard, was already correct)", result.ok === true && result.newContent === "$$\n$$\n");
+}
+
 console.log("\napplyOldStringReplace: old_string containing regex-special characters is matched literally, not as a regex:");
 {
   const content = "const re = /a.b+c*/;\nconst other = 1;\n";
