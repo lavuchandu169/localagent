@@ -285,32 +285,66 @@ export async function loadSessionRecord(sessionsDir: string, id: string): Promis
   }
 }
 
-export async function saveSession(sessionsDir: string, record: SessionRecord): Promise<void> {
+/** Writes just the record file — no index work at all. Exported for
+ * callers that need to persist MANY records in one logical batch (cloudSync's
+ * reconcileSessions) and apply a single combined index update afterward via
+ * applyIndexMutations, instead of paying for N separate index read-modify-
+ * writes (see applyIndexMutations' doc comment, performance finding below). */
+export async function writeSessionRecordFile(sessionsDir: string, record: SessionRecord): Promise<void> {
   await fs.mkdir(sessionsDir, { recursive: true });
   await writeFileAtomic(recordPath(sessionsDir, record.id), JSON.stringify(record, null, 2));
+}
 
+/** Removes just the record file — no index work. See writeSessionRecordFile. */
+export async function removeSessionRecordFile(sessionsDir: string, id: string): Promise<void> {
+  await fs.rm(recordPath(sessionsDir, id), { force: true });
+}
+
+/**
+ * Performance finding (code-review-and-quality pass): cloudSync's
+ * reconcileSessions used to call saveSession/deleteSession once per
+ * reconciled session, each paying its own full index.json read + sort +
+ * write under withIndexLock — correct (the lock prevents the two-concurrent-
+ * writers corruption from finding C2), but O(N) work serialized N times is
+ * O(N²) for one reconcile pass across N sessions. Collecting every
+ * session's index change into one upsert/remove batch and applying them
+ * here in a SINGLE read-modify-write turns that into O(N) for the whole
+ * pass: one read, one sort, one write, regardless of how many sessions
+ * were reconciled. A no-op (no lock acquired, no write) when both lists
+ * are empty, so a reconcile pass with nothing to change touches the index
+ * file at all.
+ */
+export async function applyIndexMutations(
+  sessionsDir: string,
+  mutation: { upsert: SessionIndexEntry[]; remove: string[] }
+): Promise<void> {
+  if (mutation.upsert.length === 0 && mutation.remove.length === 0) return;
+  await withIndexLock(sessionsDir, async () => {
+    const entries = await readIndexRaw(sessionsDir);
+    const removeIds = new Set(mutation.remove);
+    const upsertIds = new Set(mutation.upsert.map((e) => e.id));
+    const kept = entries.filter((e) => !removeIds.has(e.id) && !upsertIds.has(e.id));
+    const next = [...kept, ...mutation.upsert];
+    next.sort((a, b) => b.updatedAt - a.updatedAt);
+    await writeIndexRaw(sessionsDir, next);
+  });
+}
+
+export async function saveSession(sessionsDir: string, record: SessionRecord): Promise<void> {
+  await writeSessionRecordFile(sessionsDir, record);
   // The index's own read-modify-write is the one part of this function
   // that genuinely races against other concurrent callers (see
   // withIndexLock's doc comment, final-review finding C2) — the record
   // file write above does not, so it stays outside the lock.
-  await withIndexLock(sessionsDir, async () => {
-    const entries = await readIndexRaw(sessionsDir);
-    const withoutThis = entries.filter((e) => e.id !== record.id);
-    withoutThis.push({ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail });
-    withoutThis.sort((a, b) => b.updatedAt - a.updatedAt);
-    await writeIndexRaw(sessionsDir, withoutThis);
+  await applyIndexMutations(sessionsDir, {
+    upsert: [{ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail }],
+    remove: [],
   });
 }
 
 export async function deleteSession(sessionsDir: string, id: string): Promise<void> {
-  await fs.rm(recordPath(sessionsDir, id), { force: true });
-  await withIndexLock(sessionsDir, async () => {
-    const entries = await readIndexRaw(sessionsDir);
-    await writeIndexRaw(
-      sessionsDir,
-      entries.filter((e) => e.id !== id)
-    );
-  });
+  await removeSessionRecordFile(sessionsDir, id);
+  await applyIndexMutations(sessionsDir, { upsert: [], remove: [id] });
 }
 
 /**
