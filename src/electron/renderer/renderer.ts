@@ -255,21 +255,16 @@ const anthropicFields = byId<HTMLDivElement>("anthropic-fields");
 const freellmapiFields = byId<HTMLDivElement>("freellmapi-fields");
 const openFreellmapiDashboardBtn = byId<HTMLButtonElement>("open-freellmapi-dashboard");
 openFreellmapiDashboardBtn.addEventListener("click", () => {
-  // Same mutual-exclusion convention as the about/settings/MCP-servers
-  // panel toggles above (each closes the other panels before opening
-  // itself) - two modals stacked at once reads as broken, not "extra".
-  if (!aboutPanel.hidden) closeAboutPanel();
-  if (!mcpServersPanel.hidden) closeMcpServersPanel();
-  if (!settingsPanel.hidden) closeSettingsPanel();
-  if (!closeFreellmapiFallbackPanel()) return;
+  // Readability/correctness finding (code-review-and-quality pass): this
+  // used to skip closeCommandPalette() — the one call site these two
+  // buttons had drifted from the other four, see closeAllFullScreenModals'
+  // own doc comment below for the full story.
+  if (!closeAllFullScreenModals()) return;
   void openFreellmapiPanel();
 });
 const openFreellmapiFallbackBtn = byId<HTMLButtonElement>("open-freellmapi-fallback-panel");
 openFreellmapiFallbackBtn.addEventListener("click", () => {
-  if (!aboutPanel.hidden) closeAboutPanel();
-  if (!mcpServersPanel.hidden) closeMcpServersPanel();
-  if (!settingsPanel.hidden) closeSettingsPanel();
-  closeFreellmapiPanel();
+  if (!closeAllFullScreenModals()) return;
   void openFreellmapiFallbackPanel();
 });
 const baseUrlInput = byId<HTMLInputElement>("base-url");
@@ -868,17 +863,37 @@ function closeAboutPanel(): void {
   aboutToggle.focus();
 }
 
+/**
+ * Readability/correctness finding (code-review-and-quality pass): these
+ * full-window modals (see .modal-card in styles.css) are mutually
+ * exclusive — only one should ever be open at once, two stacked at once
+ * reads as broken, not "extra" — so every one of the six places that
+ * opens one of them closed all the others first. Six independent
+ * hand-written copies of the same list had already drifted: the two
+ * FreeLLMAPI open buttons (below) never closed the command palette,
+ * so opening either while the palette was up left both visible at once.
+ * One shared function, called from all six places, so there's exactly
+ * one list to keep correct. Each individual close is still guarded by
+ * its own `.hidden` check (not just a micro-optimization: closeAboutPanel
+ * et al. also move focus to their toggle button, which must NOT happen
+ * for a panel that wasn't actually open). Returns false if
+ * closeFreellmapiFallbackPanel's own unsaved-changes confirm was
+ * declined — callers must abort their own open attempt in that case,
+ * same as every call site already did before this.
+ */
+function closeAllFullScreenModals(): boolean {
+  if (!aboutPanel.hidden) closeAboutPanel();
+  if (!mcpServersPanel.hidden) closeMcpServersPanel();
+  if (!settingsPanel.hidden) closeSettingsPanel();
+  if (!commandPaletteOverlay.hidden) closeCommandPalette();
+  closeFreellmapiPanel();
+  return closeFreellmapiFallbackPanel();
+}
+
 aboutToggle.addEventListener("click", () => {
   const opening = aboutPanel.hidden;
   if (opening) {
-    // These are full-window modals now (see .modal-card in styles.css) — only
-    // one should ever be open at once, so opening this one closes whichever
-    // of the others is currently up first.
-    if (!settingsPanel.hidden) closeSettingsPanel();
-    if (!mcpServersPanel.hidden) closeMcpServersPanel();
-    if (!commandPaletteOverlay.hidden) closeCommandPalette();
-    closeFreellmapiPanel();
-    if (!closeFreellmapiFallbackPanel()) return;
+    if (!closeAllFullScreenModals()) return;
   }
   if (opening) openOverlayPanel(aboutPanel);
   else closeOverlayPanel(aboutPanel);
@@ -977,11 +992,7 @@ async function refreshMcpServersList() {
 mcpServersToggle.addEventListener("click", () => {
   const opening = mcpServersPanel.hidden;
   if (opening) {
-    if (!aboutPanel.hidden) closeAboutPanel();
-    if (!settingsPanel.hidden) closeSettingsPanel();
-    if (!commandPaletteOverlay.hidden) closeCommandPalette();
-    closeFreellmapiPanel();
-    if (!closeFreellmapiFallbackPanel()) return;
+    if (!closeAllFullScreenModals()) return;
   }
   if (opening) openOverlayPanel(mcpServersPanel);
   else closeOverlayPanel(mcpServersPanel);
@@ -1176,11 +1187,7 @@ function closeSettingsPanel(): void {
 settingsToggle.addEventListener("click", async () => {
   const opening = settingsPanel.hidden;
   if (opening) {
-    if (!aboutPanel.hidden) closeAboutPanel();
-    if (!mcpServersPanel.hidden) closeMcpServersPanel();
-    if (!commandPaletteOverlay.hidden) closeCommandPalette();
-    closeFreellmapiPanel();
-    if (!closeFreellmapiFallbackPanel()) return;
+    if (!closeAllFullScreenModals()) return;
     await openSettingsPanel();
   }
   if (opening) openOverlayPanel(settingsPanel);
@@ -1278,11 +1285,7 @@ function closeCommandPalette(): void {
 }
 
 function openCommandPalette(): void {
-  if (!aboutPanel.hidden) closeAboutPanel();
-  if (!mcpServersPanel.hidden) closeMcpServersPanel();
-  if (!settingsPanel.hidden) closeSettingsPanel();
-  closeFreellmapiPanel();
-  if (!closeFreellmapiFallbackPanel()) return;
+  if (!closeAllFullScreenModals()) return;
   commandPaletteInput.value = "";
   paletteSelectedIndex = 0;
   openOverlayPanel(commandPaletteOverlay);
