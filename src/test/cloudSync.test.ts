@@ -116,6 +116,33 @@ console.log("\nuploadSession — update path (existing file):");
   check("returns Drive's real modifiedTime for the updated file", result.modifiedTime === "2024-02-03T00:00:00.000Z");
 }
 
+console.log("\nuploadSession — a known file id skips the lookup entirely (performance finding — code-review-and-quality pass):");
+{
+  const calls: { url: string; method?: string }[] = [];
+  const fakeFetch: typeof fetch = async (url, init) => {
+    calls.push({ url: url.toString(), method: init?.method });
+    return new Response(JSON.stringify({ modifiedTime: "2024-02-04T00:00:00.000Z" }), { status: 200 });
+  };
+  await uploadSession("tok", makeRecord("s1", 100), fakeFetch, "already-known-file-id");
+  check("no GET lookup call is made when the caller already knows the file id", !calls.some((c) => !c.method));
+  check(
+    "goes straight to a media PATCH against the known id",
+    calls.length === 1 && calls[0]!.method === "PATCH" && calls[0]!.url.includes("already-known-file-id")
+  );
+}
+
+console.log("\nuploadSession — knownFileId: null skips the lookup and goes straight to create (performance finding — code-review-and-quality pass):");
+{
+  const calls: { url: string; method?: string }[] = [];
+  const fakeFetch: typeof fetch = async (url, init) => {
+    calls.push({ url: url.toString(), method: init?.method });
+    return new Response(JSON.stringify({ modifiedTime: "2024-02-05T00:00:00.000Z" }), { status: 200 });
+  };
+  await uploadSession("tok", makeRecord("s1", 100), fakeFetch, null);
+  check("no GET lookup call is made when the caller already knows no file exists yet", !calls.some((c) => !c.method));
+  check("goes straight to a multipart create", calls.length === 1 && calls[0]!.method === "POST" && calls[0]!.url.includes("uploadType=multipart"));
+}
+
 console.log("\nuploadSession — redacts secrets before upload (security audit M3 — a session's own history can carry file contents the agent read, e.g. a .env value, which previously went to the user's Drive verbatim):");
 {
   const secretKey = "sk-" + "h".repeat(36);
@@ -338,20 +365,27 @@ console.log("\nreconcileSessions:");
   await saveSession(sessionsDir, makeRecord("local-only", 100));
 
   const uploaded: SessionRecord[] = [];
+  const knownFileIds: (string | null | undefined)[] = [];
   const result = await reconcileSessions(sessionsDir, "tok", {
     ops: {
       listRemoteSessions: async () => [],
       downloadSession: async () => {
         throw new Error("should not be called");
       },
-      uploadSession: async (_token, record) => {
+      uploadSession: async (_token, record, knownFileId) => {
         uploaded.push(record);
+        knownFileIds.push(knownFileId);
         return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
     },
   });
   check("pushes a local-only session to remote", uploaded.length === 1 && uploaded[0]?.id === "local-only");
   check("reports one pushed, zero pulled", result.pushed === 1 && result.pulled === 0);
+  // Performance finding (code-review-and-quality pass): this session was
+  // filtered out of remoteIds, so reconcileSessions already knows for
+  // certain no remote file exists — passing null here must skip
+  // uploadSession's own redundant lookup of the exact same fact.
+  check("passes knownFileId: null — no remote file exists, already known, don't look it up again", knownFileIds[0] === null);
 }
 
 {
@@ -454,13 +488,15 @@ console.log("\nreconcileSessions:");
   await saveSession(sessionsDir, makeRecord("both", 300));
   const olderRemote = makeRecord("both", 100);
   const uploaded: SessionRecord[] = [];
+  const knownFileIds: (string | null | undefined)[] = [];
 
   await reconcileSessions(sessionsDir, "tok", {
     ops: {
       listRemoteSessions: async () => [{ sessionId: "both", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
       downloadSession: async () => olderRemote,
-      uploadSession: async (_token, record) => {
+      uploadSession: async (_token, record, knownFileId) => {
         uploaded.push(record);
+        knownFileIds.push(knownFileId);
         return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
     },
@@ -468,6 +504,10 @@ console.log("\nreconcileSessions:");
   check("local-newer pushes the local copy to remote", uploaded.length === 1 && uploaded[0]?.updatedAt === 300);
   const local = await loadSessionRecord(sessionsDir, "both");
   check("local file is left untouched when local was already newer", local?.updatedAt === 300);
+  // Performance finding (code-review-and-quality pass): this session's
+  // remote.driveFileId ("f1") was already known from listRemoteSessions —
+  // passing it through must skip uploadSession's own redundant lookup.
+  check("passes the already-known driveFileId instead of re-looking it up", knownFileIds[0] === "f1");
 }
 
 {
@@ -506,6 +546,7 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
   await saveSession(sessionsDir, makeRecord("robust-push", 999, checkpoint));
   const uploaded: SessionRecord[] = [];
   let downloadCalls = 0;
+  const knownFileIds: (string | null | undefined)[] = [];
 
   const result = await reconcileSessions(sessionsDir, "tok", {
     ops: {
@@ -514,8 +555,9 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
         downloadCalls++;
         return makeRecord("robust-push", 100, checkpoint); // remote's own on-disk updatedAt is stale/irrelevant here
       },
-      uploadSession: async (_token, record) => {
+      uploadSession: async (_token, record, knownFileId) => {
         uploaded.push(record);
+        knownFileIds.push(knownFileId);
         return { modifiedTime: "2024-01-02T00:00:00.000Z" };
       },
     },
@@ -529,6 +571,7 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
   // remote.modifiedTime alone) that remote hasn't changed, so nothing but
   // the local record is ever read to decide and perform the push.
   check("remote content is never downloaded for a pure push (already known unneeded)", downloadCalls === 0);
+  check("passes the already-known driveFileId instead of re-looking it up", knownFileIds[0] === "f1");
 }
 {
   // Checkpoint present, local's updatedAt still matches it exactly (this
@@ -760,6 +803,81 @@ console.log("\nreconcileSessions: sessions are reconciled concurrently, not one 
   check(
     `${SESSION_COUNT} sessions with a ${DELAY_MS}ms delay each reconcile concurrently (${elapsedMs}ms, not ~${SESSION_COUNT * DELAY_MS}ms)`,
     elapsedMs < DELAY_MS * 3
+  );
+}
+
+console.log("\nreconcileSessions: concurrency is capped, not unbounded (performance finding — code-review-and-quality pass):");
+{
+  // A corpus well past the concurrency cap (RECONCILE_CONCURRENCY = 8 in
+  // cloudSync.ts) — tracks how many downloads are in flight at once, which
+  // an uncapped Promise.all would let climb to SESSION_COUNT.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const DELAY_MS = 80;
+  const SESSION_COUNT = 24;
+  const remoteEntries = Array.from({ length: SESSION_COUNT }, (_, i) => ({
+    sessionId: `cap-${i}`,
+    driveFileId: `f-${i}`,
+    modifiedTime: "2024-01-01T00:00:00.000Z",
+  }));
+
+  let inFlight = 0;
+  let maxInFlight = 0;
+  await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => remoteEntries,
+      downloadSession: async (_token, driveFileId) => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
+        inFlight--;
+        const i = driveFileId.split("-")[1];
+        return makeRecord(`cap-${i}`, 100);
+      },
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+
+  check(`peak concurrent downloads (${maxInFlight}) never exceeds the cap`, maxInFlight <= 8);
+  check(`the cap is actually used, not accidentally serialized (${maxInFlight} in flight at once)`, maxInFlight > 1);
+}
+
+console.log("\nreconcileSessions: one batched index update for the whole pass, not one per session (performance finding — code-review-and-quality pass):");
+{
+  // Before this fix, each of these sessions paid for its own full
+  // index.json read-modify-write under the shared lock (O(N) work,
+  // serialized N times). This doesn't measure write count directly, but
+  // proves the batched rewrite is still fully correct: every session's
+  // entry lands in the index exactly once, with the right data, even
+  // though they're never written to the index individually.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const SESSION_COUNT = 30;
+  const remoteEntries = Array.from({ length: SESSION_COUNT }, (_, i) => ({
+    sessionId: `batch-${i}`,
+    driveFileId: `f-${i}`,
+    modifiedTime: "2024-01-01T00:00:00.000Z",
+  }));
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => remoteEntries,
+      downloadSession: async (_token, driveFileId) => {
+        const i = driveFileId.split("-")[1];
+        return makeRecord(`batch-${i}`, 100 + Number(i));
+      },
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+
+  check(`all ${SESSION_COUNT} sessions reported as pulled`, result.pulled === SESSION_COUNT);
+  const indexed = await listSessions(sessionsDir);
+  check(`the index holds exactly ${SESSION_COUNT} entries, no duplicates and none dropped`, indexed.length === SESSION_COUNT);
+  check(
+    "every session's real data made it into the index (not just a placeholder from an earlier partial write)",
+    remoteEntries.every((e, i) => indexed.some((entry) => entry.id === e.sessionId && entry.updatedAt === 100 + i))
   );
 }
 
