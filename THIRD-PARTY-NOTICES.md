@@ -37907,7 +37907,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 For more information, please refer to <http://unlicense.org>
 ```
 
-## fast-uri@3.1.6
+## fast-uri@3.1.8
 
 **License:** BSD-3-Clause  ·  **Repository:** https://github.com/fastify/fast-uri
 
@@ -38405,7 +38405,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## hono@4.13.5
+## hono@4.13.13
 
 **License:** MIT  ·  **Repository:** https://github.com/honojs/hono
 
@@ -38579,7 +38579,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-## ip-address@10.7.0
+## ip-address@10.7.3
 
 **License:** MIT  ·  **Repository:** https://github.com/beaugunderson/ip-address
 
