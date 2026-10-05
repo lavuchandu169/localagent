@@ -3,6 +3,14 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.86 — 2026-10-05
+
+- Extract onboarding/what's-new into their own module (renderer.ts split, part 1)
+
+## v0.1.0-beta.85 — 2026-10-05
+
+- Use the shared errorMessage() helper everywhere in renderer.ts
+
 ## v0.1.0-beta.84 — 2026-10-05
 
 - Fix Gemini's in-band stream errors skipping rate-limit classification
