@@ -423,8 +423,34 @@ export async function reconcileSessions(
           indexUpserts.push(toIndexEntry(pulled));
           return "pulled";
         }
-        const remoteData = await ops.downloadSession(accessToken, remote.driveFileId);
         const checkpoint = localRecord.lastSyncCheckpoint;
+
+        // Performance finding (code-review-and-quality pass): with a
+        // checkpoint already established, whether remote changed is fully
+        // decidable from remote.modifiedTime (already in hand from the
+        // listRemoteSessions call above) with no network round trip at
+        // all. The old code downloaded the full remote body unconditionally
+        // here, before this comparison ever ran — on the common steady-
+        // state pass (most sessions touch neither side between syncs),
+        // that's one wasted full-session download per session, every time.
+        // Checked BEFORE downloading so the no-op and push-only paths below
+        // never pay for content they don't use; pull/conflict (remote
+        // actually changed) still need the real body and fall through to
+        // the download after this block, same as before.
+        if (checkpoint !== null) {
+          const remoteUnchangedPreDownload = checkpoint.remoteModifiedTime === remote.modifiedTime;
+          const localUnchangedPreDownload = checkpoint.localUpdatedAt === localRecord.updatedAt;
+          if (remoteUnchangedPreDownload && localUnchangedPreDownload) return "skipped";
+          if (remoteUnchangedPreDownload && !localUnchangedPreDownload) {
+            const { modifiedTime } = await ops.uploadSession(accessToken, localRecord, remote.driveFileId);
+            const pushed = withCheckpoint(localRecord, modifiedTime, localRecord.updatedAt);
+            await writeSessionRecordFile(sessionsDir, pushed);
+            indexUpserts.push(toIndexEntry(pushed));
+            return "pushed";
+          }
+        }
+
+        const remoteData = await ops.downloadSession(accessToken, remote.driveFileId);
         if (isTombstone(remoteData)) {
           // Deleted on another device since this local copy was last
           // synced — delete it here too instead of treating "present
@@ -480,20 +506,14 @@ export async function reconcileSessions(
           return "skipped";
         }
 
-        const remoteUnchanged = checkpoint.remoteModifiedTime === remote.modifiedTime;
+        // Reaching here with checkpoint !== null means the pre-download
+        // check above already ruled out "remote unchanged" (both
+        // remote-unchanged outcomes returned before any download) — so
+        // remote is known to have changed, and only local's own state
+        // still needs checking to pick pull vs. conflict.
         const localUnchanged = checkpoint.localUpdatedAt === localRecord.updatedAt;
 
-        if (remoteUnchanged && localUnchanged) return "skipped";
-
-        if (remoteUnchanged && !localUnchanged) {
-          const { modifiedTime } = await ops.uploadSession(accessToken, localRecord, remote.driveFileId);
-          const pushed = withCheckpoint(localRecord, modifiedTime, localRecord.updatedAt);
-          await writeSessionRecordFile(sessionsDir, pushed);
-          indexUpserts.push(toIndexEntry(pushed));
-          return "pushed";
-        }
-
-        if (!remoteUnchanged && localUnchanged) {
+        if (localUnchanged) {
           const pulled = withCheckpoint(remoteRecord, remote.modifiedTime, remoteRecord.updatedAt);
           await writeSessionRecordFile(sessionsDir, pulled);
           indexUpserts.push(toIndexEntry(pulled));

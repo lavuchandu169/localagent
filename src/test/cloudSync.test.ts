@@ -545,12 +545,16 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
   const checkpoint = { remoteModifiedTime: "2024-01-01T00:00:00.000Z", localUpdatedAt: 100 };
   await saveSession(sessionsDir, makeRecord("robust-push", 999, checkpoint));
   const uploaded: SessionRecord[] = [];
+  let downloadCalls = 0;
   const knownFileIds: (string | null | undefined)[] = [];
 
   const result = await reconcileSessions(sessionsDir, "tok", {
     ops: {
       listRemoteSessions: async () => [{ sessionId: "robust-push", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
-      downloadSession: async () => makeRecord("robust-push", 100, checkpoint), // remote's own on-disk updatedAt is stale/irrelevant here
+      downloadSession: async () => {
+        downloadCalls++;
+        return makeRecord("robust-push", 100, checkpoint); // remote's own on-disk updatedAt is stale/irrelevant here
+      },
       uploadSession: async (_token, record, knownFileId) => {
         uploaded.push(record);
         knownFileIds.push(knownFileId);
@@ -562,6 +566,11 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
   const local = await loadSessionRecord(sessionsDir, "robust-push");
   check("the checkpoint is refreshed with the new remoteModifiedTime from the push response", local?.lastSyncCheckpoint?.remoteModifiedTime === "2024-01-02T00:00:00.000Z");
   check("the checkpoint's localUpdatedAt is refreshed too", local?.lastSyncCheckpoint?.localUpdatedAt === 999);
+  // Performance finding (code-review-and-quality pass): the remote body is
+  // never needed on this path — we already know (from the checkpoint vs
+  // remote.modifiedTime alone) that remote hasn't changed, so nothing but
+  // the local record is ever read to decide and perform the push.
+  check("remote content is never downloaded for a pure push (already known unneeded)", downloadCalls === 0);
   check("passes the already-known driveFileId instead of re-looking it up", knownFileIds[0] === "f1");
 }
 {
@@ -591,17 +600,26 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
   const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
   const checkpoint = { remoteModifiedTime: "2024-01-01T00:00:00.000Z", localUpdatedAt: 100 };
   await saveSession(sessionsDir, makeRecord("robust-skip", 100, checkpoint));
+  let downloadCalls = 0;
 
   const result = await reconcileSessions(sessionsDir, "tok", {
     ops: {
       listRemoteSessions: async () => [{ sessionId: "robust-skip", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
-      downloadSession: async () => makeRecord("robust-skip", 100, checkpoint),
+      downloadSession: async () => {
+        downloadCalls++;
+        return makeRecord("robust-skip", 100, checkpoint);
+      },
       uploadSession: async () => {
         throw new Error("should not be called");
       },
     },
   });
   check("nothing changed on either side since the last sync -> skipped, no push or pull", result.pulled === 0 && result.pushed === 0);
+  // Performance finding (code-review-and-quality pass): reconcile used to
+  // download every remote session's full body even when the checkpoint
+  // alone already proved there was nothing to do — real cost at scale
+  // (N sessions = N wasted downloads on the common no-op pass).
+  check("the no-op case is decided from the checkpoint alone, never by downloading", downloadCalls === 0);
 }
 {
   // Both sides changed since the last checkpoint -> genuine concurrent
@@ -643,6 +661,15 @@ console.log("\nreconcileSessions: a remote tombstone (correctness audit: session
   //
   // Local genuinely hasn't changed since the last sync (its checkpoint's
   // localUpdatedAt matches) — a plain delete is safe, nothing to preserve.
+  //
+  // The remote's listed modifiedTime here is deliberately LATER than the
+  // checkpoint's remoteModifiedTime, not reused from it: deleteRemoteSession
+  // performs a real Drive content PATCH (cloudSync.ts's own deleteRemoteSession),
+  // and Drive always bumps a file's modifiedTime on a content write — so a
+  // real tombstone is never observable at the old, pre-delete modifiedTime.
+  // Using the old time here would (after the pre-download checkpoint-only
+  // optimization below) incorrectly look like "nothing changed remotely"
+  // and skip the download that's the only way to ever see the tombstone.
   const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
   const checkpoint = { remoteModifiedTime: "2024-01-01T00:00:00.000Z", localUpdatedAt: 100 };
   await saveSession(sessionsDir, makeRecord("deleted-elsewhere", 100, checkpoint));
@@ -650,7 +677,7 @@ console.log("\nreconcileSessions: a remote tombstone (correctness audit: session
   const uploaded: SessionRecord[] = [];
   const result = await reconcileSessions(sessionsDir, "tok", {
     ops: {
-      listRemoteSessions: async () => [{ sessionId: "deleted-elsewhere", driveFileId: "f1", modifiedTime: "2024-01-01T00:00:00.000Z" }],
+      listRemoteSessions: async () => [{ sessionId: "deleted-elsewhere", driveFileId: "f1", modifiedTime: "2024-02-01T00:00:00.000Z" }],
       downloadSession: async () => ({ tombstone: true as const, sessionId: "deleted-elsewhere", deletedAt: new Date().toISOString() }),
       uploadSession: async (_token, record) => {
         uploaded.push(record);
