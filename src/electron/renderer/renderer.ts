@@ -962,7 +962,7 @@ function renderMcpServerRow(server: McpServerView): HTMLDivElement {
       try {
         await window.agent.removeMcpServer(server.id);
       } catch (err) {
-        mcpServersListError.textContent = `Couldn't remove "${server.name}": ${err instanceof Error ? err.message : String(err)}`;
+        mcpServersListError.textContent = `Couldn't remove "${server.name}": ${errorMessage(err)}`;
       }
       await refreshMcpServersList();
     })();
@@ -985,7 +985,7 @@ async function refreshMcpServersList() {
     mcpServersEmpty.hidden = servers.length > 0;
     for (const server of servers) mcpServersList.appendChild(renderMcpServerRow(server));
   } catch (err) {
-    mcpServersListError.textContent = `Couldn't load MCP servers: ${err instanceof Error ? err.message : String(err)}`;
+    mcpServersListError.textContent = `Couldn't load MCP servers: ${errorMessage(err)}`;
   }
 }
 
@@ -1055,7 +1055,7 @@ mcpServerFormSave.addEventListener("click", () => {
         mcpServerFormError.textContent = result.error;
       }
     } catch (err) {
-      mcpServerFormError.textContent = err instanceof Error ? err.message : String(err);
+      mcpServerFormError.textContent = errorMessage(err);
     }
   });
 });
@@ -1091,11 +1091,12 @@ geminiApiKeyInput.addEventListener("input", () => {
   geminiApiKeyTouched = true;
 });
 
-/** Shared by every catch block this function adds below — kept local to
- * where it's actually new usage rather than also touching the 9
- * pre-existing inline `err instanceof Error ? err.message : String(err)`
- * occurrences elsewhere in this file (a separate readability cleanup, not
- * bundled into this correctness fix). */
+/** Readability finding (code-review-and-quality pass): this used to be
+ * used only by the catch blocks openSettingsPanel's own correctness fix
+ * added, leaving 9 other pre-existing inline
+ * `err instanceof Error ? err.message : String(err)` occurrences
+ * scattered through this file — now the single shared spelling used
+ * everywhere that pattern is needed. */
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -1568,7 +1569,7 @@ settingsSaveBtn.addEventListener("click", () => {
       }
       showSavedToast(settingsSaved);
     } catch (err) {
-      settingsError.textContent = err instanceof Error ? err.message : String(err);
+      settingsError.textContent = errorMessage(err);
     }
   });
 });
@@ -1587,7 +1588,7 @@ anthropicSettingsSaveBtn.addEventListener("click", () => {
       }
       showSavedToast(anthropicSettingsSaved);
     } catch (err) {
-      anthropicSettingsError.textContent = err instanceof Error ? err.message : String(err);
+      anthropicSettingsError.textContent = errorMessage(err);
     }
   });
 });
@@ -1606,7 +1607,7 @@ openaiSettingsSaveBtn.addEventListener("click", () => {
       }
       showSavedToast(openaiSettingsSaved);
     } catch (err) {
-      openaiSettingsError.textContent = err instanceof Error ? err.message : String(err);
+      openaiSettingsError.textContent = errorMessage(err);
     }
   });
 });
@@ -1625,7 +1626,7 @@ geminiSettingsSaveBtn.addEventListener("click", () => {
       }
       showSavedToast(geminiSettingsSaved);
     } catch (err) {
-      geminiSettingsError.textContent = err instanceof Error ? err.message : String(err);
+      geminiSettingsError.textContent = errorMessage(err);
     }
   });
 });
@@ -3034,7 +3035,7 @@ runTaskBtn.addEventListener("click", async () => {
     tab.running = false;
     if (isActiveTab(tab)) {
       runTaskBtn.disabled = false;
-      logLine(`✗ ${err instanceof Error ? err.message : String(err)}`, "log-error");
+      logLine(`✗ ${errorMessage(err)}`, "log-error");
     }
   }
 });
@@ -3099,7 +3100,7 @@ signOutBtn.addEventListener("click", () => {
       // unrelated list refresh.
       await refreshSessionList(sessionSearchInput.value.trim());
     } catch (err) {
-      authError.textContent = err instanceof Error ? err.message : String(err);
+      authError.textContent = errorMessage(err);
     }
   });
 });
