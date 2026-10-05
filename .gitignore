@@ -11,3 +11,6 @@ src/electron/embeddedCredentials.ts
 src/whatsNew.ts
 
 .worktrees/
+
+# Regeneratable graphify knowledge-graph output (see README's Architecture section)
+graphify-out/
