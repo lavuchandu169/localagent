@@ -1075,21 +1075,6 @@ settingsClientSecretInput.addEventListener("input", () => {
   settingsSecretTouched = true;
 });
 
-// Same touched-tracking contract as settingsSecretTouched above, for the
-// separate Anthropic API key field/form.
-let anthropicApiKeyTouched = false;
-anthropicApiKeyInput.addEventListener("input", () => {
-  anthropicApiKeyTouched = true;
-});
-let openaiApiKeyTouched = false;
-openaiApiKeyInput.addEventListener("input", () => {
-  openaiApiKeyTouched = true;
-});
-let geminiApiKeyTouched = false;
-geminiApiKeyInput.addEventListener("input", () => {
-  geminiApiKeyTouched = true;
-});
-
 /** Readability finding (code-review-and-quality pass): this used to be
  * used only by the catch blocks openSettingsPanel's own correctness fix
  * added, leaving 9 other pre-existing inline
@@ -1099,6 +1084,103 @@ geminiApiKeyInput.addEventListener("input", () => {
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+/**
+ * Readability finding (code-review-and-quality pass): Anthropic, OpenAI,
+ * and Gemini's API-key settings sections were three hand-written copies
+ * of the exact same shape — a "touched" flag plus a near-identical load
+ * block in openSettingsPanel and a near-identical save-button handler
+ * below, differing only in which provider's get/save IPC call and which
+ * four DOM elements they touched. All three providers share the same
+ * `{ hasKey, envOverride }` get shape and `{ apiKey? }` save shape (see
+ * the AgentBridge interface above), so one parametrized factory replaces
+ * all three copies — wires the input's touched-tracking and the save
+ * button's click handler itself, and returns just the one thing
+ * openSettingsPanel still needs to drive: load().
+ */
+function createApiKeySection(opts: {
+  label: string;
+  input: HTMLInputElement;
+  errorEl: HTMLElement;
+  savedEl: HTMLElement;
+  envOverrideNotice: HTMLElement;
+  saveBtn: HTMLButtonElement;
+  get: () => Promise<{ hasKey: boolean; envOverride: boolean }>;
+  save: (apiKey: string | undefined) => Promise<void>;
+}): { load: () => Promise<void> } {
+  let touched = false;
+  opts.input.addEventListener("input", () => {
+    touched = true;
+  });
+
+  async function load(): Promise<void> {
+    opts.errorEl.textContent = "";
+    opts.savedEl.hidden = true;
+    touched = false;
+    try {
+      const current = await opts.get();
+      opts.input.value = "";
+      opts.input.placeholder = current.hasKey ? "•••• saved" : "";
+      opts.envOverrideNotice.hidden = !current.envOverride;
+    } catch (err) {
+      opts.errorEl.textContent = `Could not load ${opts.label} settings: ${errorMessage(err)}`;
+    }
+  }
+
+  opts.saveBtn.addEventListener("click", () => {
+    opts.errorEl.textContent = "";
+    opts.savedEl.hidden = true;
+    void withBusyLabel(opts.saveBtn, "Saving…", async () => {
+      try {
+        const keyValueSent = touched ? opts.input.value.trim() : undefined;
+        await opts.save(keyValueSent);
+        touched = false;
+        if (keyValueSent !== undefined) {
+          opts.input.value = "";
+          opts.input.placeholder = keyValueSent ? "•••• saved" : "";
+        }
+        showSavedToast(opts.savedEl);
+      } catch (err) {
+        opts.errorEl.textContent = errorMessage(err);
+      }
+    });
+  });
+
+  return { load };
+}
+
+const anthropicKeySection = createApiKeySection({
+  label: "Anthropic",
+  input: anthropicApiKeyInput,
+  errorEl: anthropicSettingsError,
+  savedEl: anthropicSettingsSaved,
+  envOverrideNotice: anthropicEnvOverrideNotice,
+  saveBtn: anthropicSettingsSaveBtn,
+  get: () => window.agent.getAnthropicSettings(),
+  save: (apiKey) => window.agent.saveAnthropicSettings({ apiKey }),
+});
+
+const openaiKeySection = createApiKeySection({
+  label: "OpenAI",
+  input: openaiApiKeyInput,
+  errorEl: openaiSettingsError,
+  savedEl: openaiSettingsSaved,
+  envOverrideNotice: openaiEnvOverrideNotice,
+  saveBtn: openaiSettingsSaveBtn,
+  get: () => window.agent.getOpenAISettings(),
+  save: (apiKey) => window.agent.saveOpenAISettings({ apiKey }),
+});
+
+const geminiKeySection = createApiKeySection({
+  label: "Gemini",
+  input: geminiApiKeyInput,
+  errorEl: geminiSettingsError,
+  savedEl: geminiSettingsSaved,
+  envOverrideNotice: geminiEnvOverrideNotice,
+  saveBtn: geminiSettingsSaveBtn,
+  get: () => window.agent.getGeminiSettings(),
+  save: (apiKey) => window.agent.saveGeminiSettings({ apiKey }),
+});
 
 async function openSettingsPanel(): Promise<void> {
   // Code-review finding (code-review-and-quality pass): this used to be 6
@@ -1123,41 +1205,9 @@ async function openSettingsPanel(): Promise<void> {
     settingsError.textContent = `Could not load Google settings: ${errorMessage(err)}`;
   }
 
-  anthropicSettingsError.textContent = "";
-  anthropicSettingsSaved.hidden = true;
-  anthropicApiKeyTouched = false;
-  try {
-    const currentAnthropic = await window.agent.getAnthropicSettings();
-    anthropicApiKeyInput.value = "";
-    anthropicApiKeyInput.placeholder = currentAnthropic.hasKey ? "•••• saved" : "";
-    anthropicEnvOverrideNotice.hidden = !currentAnthropic.envOverride;
-  } catch (err) {
-    anthropicSettingsError.textContent = `Could not load Anthropic settings: ${errorMessage(err)}`;
-  }
-
-  openaiSettingsError.textContent = "";
-  openaiSettingsSaved.hidden = true;
-  openaiApiKeyTouched = false;
-  try {
-    const currentOpenAI = await window.agent.getOpenAISettings();
-    openaiApiKeyInput.value = "";
-    openaiApiKeyInput.placeholder = currentOpenAI.hasKey ? "•••• saved" : "";
-    openaiEnvOverrideNotice.hidden = !currentOpenAI.envOverride;
-  } catch (err) {
-    openaiSettingsError.textContent = `Could not load OpenAI settings: ${errorMessage(err)}`;
-  }
-
-  geminiSettingsError.textContent = "";
-  geminiSettingsSaved.hidden = true;
-  geminiApiKeyTouched = false;
-  try {
-    const currentGemini = await window.agent.getGeminiSettings();
-    geminiApiKeyInput.value = "";
-    geminiApiKeyInput.placeholder = currentGemini.hasKey ? "•••• saved" : "";
-    geminiEnvOverrideNotice.hidden = !currentGemini.envOverride;
-  } catch (err) {
-    geminiSettingsError.textContent = `Could not load Gemini settings: ${errorMessage(err)}`;
-  }
+  await anthropicKeySection.load();
+  await openaiKeySection.load();
+  await geminiKeySection.load();
 
   // Correctness audit finding (GitHub Medium #3): every other credential
   // section above re-reads its real stored state on every open — GitHub's
@@ -1428,63 +1478,6 @@ settingsSaveBtn.addEventListener("click", () => {
       showSavedToast(settingsSaved);
     } catch (err) {
       settingsError.textContent = errorMessage(err);
-    }
-  });
-});
-
-anthropicSettingsSaveBtn.addEventListener("click", () => {
-  anthropicSettingsError.textContent = "";
-  anthropicSettingsSaved.hidden = true;
-  void withBusyLabel(anthropicSettingsSaveBtn, "Saving…", async () => {
-    try {
-      const keyValueSent = anthropicApiKeyTouched ? anthropicApiKeyInput.value.trim() : undefined;
-      await window.agent.saveAnthropicSettings({ apiKey: keyValueSent });
-      anthropicApiKeyTouched = false;
-      if (keyValueSent !== undefined) {
-        anthropicApiKeyInput.value = "";
-        anthropicApiKeyInput.placeholder = keyValueSent ? "•••• saved" : "";
-      }
-      showSavedToast(anthropicSettingsSaved);
-    } catch (err) {
-      anthropicSettingsError.textContent = errorMessage(err);
-    }
-  });
-});
-
-openaiSettingsSaveBtn.addEventListener("click", () => {
-  openaiSettingsError.textContent = "";
-  openaiSettingsSaved.hidden = true;
-  void withBusyLabel(openaiSettingsSaveBtn, "Saving…", async () => {
-    try {
-      const keyValueSent = openaiApiKeyTouched ? openaiApiKeyInput.value.trim() : undefined;
-      await window.agent.saveOpenAISettings({ apiKey: keyValueSent });
-      openaiApiKeyTouched = false;
-      if (keyValueSent !== undefined) {
-        openaiApiKeyInput.value = "";
-        openaiApiKeyInput.placeholder = keyValueSent ? "•••• saved" : "";
-      }
-      showSavedToast(openaiSettingsSaved);
-    } catch (err) {
-      openaiSettingsError.textContent = errorMessage(err);
-    }
-  });
-});
-
-geminiSettingsSaveBtn.addEventListener("click", () => {
-  geminiSettingsError.textContent = "";
-  geminiSettingsSaved.hidden = true;
-  void withBusyLabel(geminiSettingsSaveBtn, "Saving…", async () => {
-    try {
-      const keyValueSent = geminiApiKeyTouched ? geminiApiKeyInput.value.trim() : undefined;
-      await window.agent.saveGeminiSettings({ apiKey: keyValueSent });
-      geminiApiKeyTouched = false;
-      if (keyValueSent !== undefined) {
-        geminiApiKeyInput.value = "";
-        geminiApiKeyInput.placeholder = keyValueSent ? "•••• saved" : "";
-      }
-      showSavedToast(geminiSettingsSaved);
-    } catch (err) {
-      geminiSettingsError.textContent = errorMessage(err);
     }
   });
 });
