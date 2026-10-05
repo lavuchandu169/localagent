@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.78 — 2026-10-05
+
+- Fix tabDotState contradicting its own empty-events invariant
+
 ## v0.1.0-beta.77 — 2026-10-05
 
 - Stop treating every MCP client onerror as a fatal disconnect
