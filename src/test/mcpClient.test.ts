@@ -122,6 +122,15 @@ await (async () => {
     check("a listTools() failure after a successful handshake still resolves failed, never throws", connection.status.state === "failed");
     check("client is undefined when listTools fails post-handshake", connection.client === undefined);
     check("the transport was closed so the connected client/child process doesn't leak", transportClosed);
+    // The cleanup close() in the catch block fires the SDK's onclose
+    // synchronously (InMemoryTransport.close() calls it inline) — if the
+    // crash handlers are still attached at that point, onclose broadcasts
+    // its own generic "disconnected unexpectedly" failed status BEFORE the
+    // real listTools error is reported, and both end up in the status
+    // history. Detaching the handlers first (matching disconnectMcpServer's
+    // existing pattern) means the real error is the only failed status
+    // broadcast for this connection attempt.
+    check("onStatusChange only ever reports the real error, not a spurious onclose-generated one", statuses.length === 2 && statuses[1]!.state === "failed" && (statuses[1] as { error: string }).error.includes("tools/list failed"));
   }
 
   {
@@ -172,6 +181,27 @@ await (async () => {
 
     check("the SAME connection object's tools array now includes the newly-registered tool, with no reconnect", connection.tools.length === 2 && connection.tools.some((t) => t.name === "pong"));
     check("onStatusChange fired again reporting the updated tool count", statuses[statuses.length - 1]!.state === "connected" && (statuses[statuses.length - 1] as { toolCount: number }).toolCount === 2);
+    await disconnectMcpServer(connection);
+  }
+
+  {
+    // Correctness finding (code-review-and-quality pass): the SDK's
+    // client.onerror fires for both a fatal transport break AND recoverable,
+    // non-fatal conditions (a malformed message, a notification handler that
+    // threw) with no way to distinguish them from the callback alone. Before
+    // this fix, every onerror was treated as fatal, which dropped ALL of a
+    // server's tools for the rest of the session even though the connection
+    // was still functionally alive. onclose is the one unambiguous "this
+    // connection is dead" signal (the tests above confirm it fires exactly
+    // when the transport tears down), so only it should transition status
+    // to failed.
+    const statuses: McpServerStatus[] = [];
+    const clientTransport = await startTestServer();
+    const connection = await connectMcpServer(makeConfig(), (s) => statuses.push(s), { createTransport: () => clientTransport });
+    const statusesBeforeError = statuses.length;
+    connection.client!.onerror?.(new Error("simulated non-fatal protocol error"));
+    check("a non-fatal onerror does not broadcast a failed status", statuses.length === statusesBeforeError);
+    check("the connection stays connected after a non-fatal error", connection.status.state === "connected");
     await disconnectMcpServer(connection);
   }
 })();
