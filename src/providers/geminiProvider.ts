@@ -7,6 +7,25 @@ import { wrapNonProviderError } from "./providerErrors.js";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
+/**
+ * Correctness finding (code-review-and-quality pass): chat()/chatStream()'s
+ * own `if (!res.ok)` branches both already knew a Gemini rate-limit can
+ * arrive two ways — a real HTTP 429, or a 200-adjacent error body whose
+ * own `error.status` field is the string "RESOURCE_EXHAUSTED" (seen on
+ * some quota-exhausted responses) — and checked both. chatStream()'s
+ * in-band SSE error branch below (an error chunk arriving mid-stream,
+ * after a 200 response) hardcoded `retryable: false` instead, never
+ * inspecting the chunk's own error.status at all: the exact same
+ * RESOURCE_EXHAUSTED condition that correctly triggered agent.ts's
+ * fallback-to-another-provider path via the non-streaming branch
+ * incorrectly hard-failed the task when it happened to arrive in-stream.
+ * One shared check for all three sites instead of two different inline
+ * ones that happened to drift apart.
+ */
+function isGeminiRetryable(httpStatus: number | undefined, errorStatus: unknown): boolean {
+  return httpStatus === 429 || errorStatus === "RESOURCE_EXHAUSTED";
+}
+
 interface GeminiPart {
   text?: string;
   functionCall?: { name: string; args: Record<string, unknown> };
@@ -184,7 +203,7 @@ export class GeminiProvider implements ModelProvider {
         const geminiStatus = data?.error?.status;
         throw new ProviderChatError(data?.error?.message ?? `Gemini error ${res.status}`, {
           status: res.status,
-          retryable: res.status === 429 || geminiStatus === "RESOURCE_EXHAUSTED",
+          retryable: isGeminiRetryable(res.status, geminiStatus),
         });
       }
 
@@ -220,7 +239,7 @@ export class GeminiProvider implements ModelProvider {
         const geminiStatus = data?.error?.status;
         throw new ProviderChatError(data?.error?.message ?? `Gemini error ${res.status}`, {
           status: res.status,
-          retryable: res.status === 429 || geminiStatus === "RESOURCE_EXHAUSTED",
+          retryable: isGeminiRetryable(res.status, geminiStatus),
         });
       }
 
@@ -243,7 +262,13 @@ export class GeminiProvider implements ModelProvider {
         // as a successful "done" would report a task as complete with
         // silently truncated content.
         if (chunk.error) {
-          throw new ProviderChatError(chunk.error?.message ?? "Gemini returned an in-band stream error.", { retryable: false });
+          // Same error body shape as the non-streaming `!res.ok` branches
+          // above ({error: {code, message, status}}) — code is Gemini's
+          // own would-be-HTTP-status field for an in-band error, distinct
+          // from this response's real (200) HTTP status.
+          throw new ProviderChatError(chunk.error?.message ?? "Gemini returned an in-band stream error.", {
+            retryable: isGeminiRetryable(chunk.error?.code, chunk.error?.status),
+          });
         }
 
         if (chunk.usageMetadata) usageMetadata = chunk.usageMetadata;
