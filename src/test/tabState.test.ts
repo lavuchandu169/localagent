@@ -244,6 +244,15 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
       })
     ) === "running"
   );
+  check(
+    // Correctness finding (code-review-and-quality pass): lastEventStillRunning
+    // (above in this file) documents that an empty events array for a started
+    // session means "started but never run a task" and is NOT in flight —
+    // tabDotState must agree with that invariant instead of guessing "running"
+    // just because there's no last event to inspect.
+    "a configured session with no events yet (started, task never sent) -> idle, not running",
+    tabDotState(makeTab({ sessionId: "s", events: [] })) === "idle"
+  );
 }
 
 console.log("\nresetTabToUnconfigured:");
