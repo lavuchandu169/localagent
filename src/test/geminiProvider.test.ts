@@ -162,6 +162,33 @@ console.log("\nGemini provider:");
   check("id is 'gemini'", provider.id === "gemini");
 }
 
+console.log("\nGemini provider sends the API key via a header, never in the URL (security finding — code-review-and-quality pass):");
+{
+  // A `?key=...` query parameter is exactly as effective an API key as a
+  // header, but a URL is far more likely to end up somewhere it
+  // shouldn't — access logs, proxy logs, request history, an error
+  // message/stack trace that prints the request URL.
+  const seenRequests: { url: string; headers: Headers }[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    seenRequests.push({ url, headers: new Headers(init?.headers) });
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const provider = new GeminiProvider({ apiKey: "super-secret-key" });
+    await provider.healthCheck();
+    await provider.chat({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "hi" }] });
+    check(`all ${seenRequests.length} requests (healthCheck + chat) were captured`, seenRequests.length === 2);
+    check("the API key never appears in any request URL", seenRequests.every((r) => !r.url.includes("super-secret-key")));
+    check(
+      "the API key is sent via the x-goog-api-key header on every request",
+      seenRequests.every((r) => r.headers.get("x-goog-api-key") === "super-secret-key")
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log("\nGemini provider classifies RESOURCE_EXHAUSTED as retryable:");
 {
   const realFetch = globalThis.fetch;
