@@ -736,5 +736,80 @@ console.log("\nreconcileSessions: sessions are reconciled concurrently, not one 
   );
 }
 
+console.log("\nreconcileSessions: concurrency is capped, not unbounded (performance finding — code-review-and-quality pass):");
+{
+  // A corpus well past the concurrency cap (RECONCILE_CONCURRENCY = 8 in
+  // cloudSync.ts) — tracks how many downloads are in flight at once, which
+  // an uncapped Promise.all would let climb to SESSION_COUNT.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const DELAY_MS = 80;
+  const SESSION_COUNT = 24;
+  const remoteEntries = Array.from({ length: SESSION_COUNT }, (_, i) => ({
+    sessionId: `cap-${i}`,
+    driveFileId: `f-${i}`,
+    modifiedTime: "2024-01-01T00:00:00.000Z",
+  }));
+
+  let inFlight = 0;
+  let maxInFlight = 0;
+  await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => remoteEntries,
+      downloadSession: async (_token, driveFileId) => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
+        inFlight--;
+        const i = driveFileId.split("-")[1];
+        return makeRecord(`cap-${i}`, 100);
+      },
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+
+  check(`peak concurrent downloads (${maxInFlight}) never exceeds the cap`, maxInFlight <= 8);
+  check(`the cap is actually used, not accidentally serialized (${maxInFlight} in flight at once)`, maxInFlight > 1);
+}
+
+console.log("\nreconcileSessions: one batched index update for the whole pass, not one per session (performance finding — code-review-and-quality pass):");
+{
+  // Before this fix, each of these sessions paid for its own full
+  // index.json read-modify-write under the shared lock (O(N) work,
+  // serialized N times). This doesn't measure write count directly, but
+  // proves the batched rewrite is still fully correct: every session's
+  // entry lands in the index exactly once, with the right data, even
+  // though they're never written to the index individually.
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-reconcile-test-"));
+  const SESSION_COUNT = 30;
+  const remoteEntries = Array.from({ length: SESSION_COUNT }, (_, i) => ({
+    sessionId: `batch-${i}`,
+    driveFileId: `f-${i}`,
+    modifiedTime: "2024-01-01T00:00:00.000Z",
+  }));
+
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => remoteEntries,
+      downloadSession: async (_token, driveFileId) => {
+        const i = driveFileId.split("-")[1];
+        return makeRecord(`batch-${i}`, 100 + Number(i));
+      },
+      uploadSession: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+
+  check(`all ${SESSION_COUNT} sessions reported as pulled`, result.pulled === SESSION_COUNT);
+  const indexed = await listSessions(sessionsDir);
+  check(`the index holds exactly ${SESSION_COUNT} entries, no duplicates and none dropped`, indexed.length === SESSION_COUNT);
+  check(
+    "every session's real data made it into the index (not just a placeholder from an earlier partial write)",
+    remoteEntries.every((e, i) => indexed.some((entry) => entry.id === e.sessionId && entry.updatedAt === 100 + i))
+  );
+}
+
 console.log(failures === 0 ? "\nAll cloudSync tests passed." : `\n${failures} cloudSync test(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

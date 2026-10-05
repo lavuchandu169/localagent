@@ -1,5 +1,13 @@
 import crypto from "node:crypto";
-import { listSessions, loadSessionRecord, saveSession, deleteSession, type SessionRecord } from "./sessionStore.js";
+import {
+  listSessions,
+  loadSessionRecord,
+  writeSessionRecordFile,
+  removeSessionRecordFile,
+  applyIndexMutations,
+  type SessionRecord,
+  type SessionIndexEntry,
+} from "./sessionStore.js";
 import { redactSecrets } from "./protected.js";
 
 export interface RemoteSessionMeta {
@@ -309,6 +317,39 @@ function withCheckpoint(record: SessionRecord, remoteModifiedTime: string, local
  */
 type ReconcileOutcome = "pulled" | "pushed" | "skipped" | "deletedLocal" | "conflict";
 
+// Performance finding (code-review-and-quality pass): reconciling every
+// session fully concurrently (plain Promise.all) means an account with
+// hundreds of sessions fires hundreds of simultaneous Drive API round
+// trips the moment sign-in completes — exactly the kind of burst Drive's
+// own rate limiting is designed to reject. Capping how many run at once
+// keeps the "roughly one round-trip, not N back to back" win the
+// unbounded version was built for (see the comment below) while staying
+// well under any reasonable per-second quota. Chosen well above the
+// existing "sessions reconcile concurrently" test's fixture size (5) so
+// that test keeps proving true concurrency, not accidentally degrading to
+// one batch of exactly its own size.
+const RECONCILE_CONCURRENCY = 8;
+
+/** Runs `fn` over `items` with at most `limit` in flight at once, preserving
+ * each item's own result position in the returned array. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = nextIndex++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+function toIndexEntry(record: SessionRecord): SessionIndexEntry {
+  return { id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail };
+}
+
 export async function reconcileSessions(
   sessionsDir: string,
   accessToken: string,
@@ -319,14 +360,27 @@ export async function reconcileSessions(
   const [localEntries, remoteEntries] = await Promise.all([listSessions(sessionsDir), ops.listRemoteSessions(accessToken)]);
   const remoteIds = new Set(remoteEntries.map((e) => e.sessionId));
 
-  // Every session is reconciled independently and concurrently (Promise.all,
-  // not a sequential loop) — with N sessions this costs roughly the slowest
-  // single round-trip instead of N round-trips back to back, which is what
-  // made sign-in feel unresponsive with more than a couple of sessions.
-  // Each session's own failure is still caught individually (returning
+  // Performance finding (code-review-and-quality pass): every session used
+  // to persist its own index change via saveSession/deleteSession, each
+  // paying for a full index.json read + sort + write under the shared
+  // index lock — correct, but O(N) work serialized N times is O(N²) for
+  // one reconcile pass across N sessions. Writing record files directly
+  // (writeSessionRecordFile/removeSessionRecordFile, no index side
+  // effects) and collecting every session's index change into these two
+  // lists turns that into a single O(N) batch via applyIndexMutations
+  // once the whole pass is done, below.
+  const indexUpserts: SessionIndexEntry[] = [];
+  const indexRemoves: string[] = [];
+
+  // Every session is reconciled independently and concurrently, up to
+  // RECONCILE_CONCURRENCY at once (mapWithConcurrency, not a sequential
+  // loop or an unbounded Promise.all) — with N sessions this costs roughly
+  // N/RECONCILE_CONCURRENCY round-trips instead of N back to back, which
+  // is what made sign-in feel unresponsive with more than a couple of
+  // sessions, without firing them all at Drive simultaneously. Each
+  // session's own failure is still caught individually (returning
   // "skipped" rather than throwing) so one bad file can't block the rest.
-  const remoteOutcomes = await Promise.all(
-    remoteEntries.map(async (remote): Promise<ReconcileOutcome> => {
+  const remoteOutcomes = await mapWithConcurrency(remoteEntries, RECONCILE_CONCURRENCY, async (remote): Promise<ReconcileOutcome> => {
       try {
         // Always read the record file straight off disk here, rather than
         // trusting the `localEntries` snapshot captured at the top of this
@@ -342,7 +396,9 @@ export async function reconcileSessions(
           // A tombstone with no local copy anywhere means nothing here ever
           // knew about this session in the first place — nothing to delete.
           if (isTombstone(record)) return "skipped";
-          await saveSession(sessionsDir, withCheckpoint(stripUntrustedRemoteProvider(record), remote.modifiedTime, record.updatedAt));
+          const pulled = withCheckpoint(stripUntrustedRemoteProvider(record), remote.modifiedTime, record.updatedAt);
+          await writeSessionRecordFile(sessionsDir, pulled);
+          indexUpserts.push(toIndexEntry(pulled));
           return "pulled";
         }
         const remoteData = await ops.downloadSession(accessToken, remote.driveFileId);
@@ -364,9 +420,12 @@ export async function reconcileSessions(
           const localChangedSinceSync = checkpoint === null || checkpoint.localUpdatedAt !== localRecord.updatedAt;
           if (localChangedSinceSync) {
             const conflictId = `${localRecord.id}-conflict-${Date.now()}`;
-            await saveSession(sessionsDir, { ...localRecord, id: conflictId, title: `${localRecord.title} (conflict copy)`, lastSyncCheckpoint: null });
+            const conflictCopy = { ...localRecord, id: conflictId, title: `${localRecord.title} (conflict copy)`, lastSyncCheckpoint: null };
+            await writeSessionRecordFile(sessionsDir, conflictCopy);
+            indexUpserts.push(toIndexEntry(conflictCopy));
           }
-          await deleteSession(sessionsDir, remote.sessionId);
+          await removeSessionRecordFile(sessionsDir, remote.sessionId);
+          indexRemoves.push(remote.sessionId);
           return localChangedSinceSync ? "conflict" : "deletedLocal";
         }
         const remoteRecord = stripUntrustedRemoteProvider(remoteData);
@@ -376,15 +435,21 @@ export async function reconcileSessions(
           // exactly this one pass, then seed the checkpoint either way so
           // every subsequent pass uses the robust comparison instead.
           if (remoteRecord.updatedAt > localRecord.updatedAt) {
-            await saveSession(sessionsDir, withCheckpoint(remoteRecord, remote.modifiedTime, remoteRecord.updatedAt));
+            const pulled = withCheckpoint(remoteRecord, remote.modifiedTime, remoteRecord.updatedAt);
+            await writeSessionRecordFile(sessionsDir, pulled);
+            indexUpserts.push(toIndexEntry(pulled));
             return "pulled";
           }
           if (localRecord.updatedAt > remoteRecord.updatedAt) {
             const { modifiedTime } = await ops.uploadSession(accessToken, localRecord);
-            await saveSession(sessionsDir, withCheckpoint(localRecord, modifiedTime, localRecord.updatedAt));
+            const pushed = withCheckpoint(localRecord, modifiedTime, localRecord.updatedAt);
+            await writeSessionRecordFile(sessionsDir, pushed);
+            indexUpserts.push(toIndexEntry(pushed));
             return "pushed";
           }
-          await saveSession(sessionsDir, withCheckpoint(localRecord, remote.modifiedTime, localRecord.updatedAt));
+          const seeded = withCheckpoint(localRecord, remote.modifiedTime, localRecord.updatedAt);
+          await writeSessionRecordFile(sessionsDir, seeded);
+          indexUpserts.push(toIndexEntry(seeded));
           return "skipped";
         }
 
@@ -395,12 +460,16 @@ export async function reconcileSessions(
 
         if (remoteUnchanged && !localUnchanged) {
           const { modifiedTime } = await ops.uploadSession(accessToken, localRecord);
-          await saveSession(sessionsDir, withCheckpoint(localRecord, modifiedTime, localRecord.updatedAt));
+          const pushed = withCheckpoint(localRecord, modifiedTime, localRecord.updatedAt);
+          await writeSessionRecordFile(sessionsDir, pushed);
+          indexUpserts.push(toIndexEntry(pushed));
           return "pushed";
         }
 
         if (!remoteUnchanged && localUnchanged) {
-          await saveSession(sessionsDir, withCheckpoint(remoteRecord, remote.modifiedTime, remoteRecord.updatedAt));
+          const pulled = withCheckpoint(remoteRecord, remote.modifiedTime, remoteRecord.updatedAt);
+          await writeSessionRecordFile(sessionsDir, pulled);
+          indexUpserts.push(toIndexEntry(pulled));
           return "pulled";
         }
 
@@ -413,8 +482,12 @@ export async function reconcileSessions(
         // so it's picked up and pushed like any other local-only session
         // on the NEXT reconcile pass.
         const conflictId = `${localRecord.id}-conflict-${Date.now()}`;
-        await saveSession(sessionsDir, { ...localRecord, id: conflictId, title: `${localRecord.title} (conflict copy)`, lastSyncCheckpoint: null });
-        await saveSession(sessionsDir, withCheckpoint(remoteRecord, remote.modifiedTime, remoteRecord.updatedAt));
+        const conflictCopy = { ...localRecord, id: conflictId, title: `${localRecord.title} (conflict copy)`, lastSyncCheckpoint: null };
+        await writeSessionRecordFile(sessionsDir, conflictCopy);
+        indexUpserts.push(toIndexEntry(conflictCopy));
+        const resolved = withCheckpoint(remoteRecord, remote.modifiedTime, remoteRecord.updatedAt);
+        await writeSessionRecordFile(sessionsDir, resolved);
+        indexUpserts.push(toIndexEntry(resolved));
         return "conflict";
       } catch (err) {
         // Logged, not rethrown — one session's sync failure must not block
@@ -422,25 +495,30 @@ export async function reconcileSessions(
         console.warn(`[cloudSync] reconcile failed for session ${remote.sessionId}:`, err);
         return "skipped";
       }
-    })
+  });
+
+  const localOnlyOutcomes = await mapWithConcurrency(
+    localEntries.filter((local) => !remoteIds.has(local.id)),
+    RECONCILE_CONCURRENCY,
+    async (local): Promise<ReconcileOutcome> => {
+      try {
+        const record = await loadSessionRecord(sessionsDir, local.id);
+        if (!record) return "skipped";
+        const { modifiedTime } = await ops.uploadSession(accessToken, record);
+        const pushed = withCheckpoint(record, modifiedTime, record.updatedAt);
+        await writeSessionRecordFile(sessionsDir, pushed);
+        indexUpserts.push(toIndexEntry(pushed));
+        return "pushed";
+      } catch (err) {
+        console.warn(`[cloudSync] reconcile push failed for session ${local.id}:`, err);
+        return "skipped";
+      }
+    }
   );
 
-  const localOnlyOutcomes = await Promise.all(
-    localEntries
-      .filter((local) => !remoteIds.has(local.id))
-      .map(async (local): Promise<ReconcileOutcome> => {
-        try {
-          const record = await loadSessionRecord(sessionsDir, local.id);
-          if (!record) return "skipped";
-          const { modifiedTime } = await ops.uploadSession(accessToken, record);
-          await saveSession(sessionsDir, withCheckpoint(record, modifiedTime, record.updatedAt));
-          return "pushed";
-        } catch (err) {
-          console.warn(`[cloudSync] reconcile push failed for session ${local.id}:`, err);
-          return "skipped";
-        }
-      })
-  );
+  // Single batched index update for the ENTIRE pass (see indexUpserts'
+  // doc comment above) instead of one per session.
+  await applyIndexMutations(sessionsDir, { upsert: indexUpserts, remove: indexRemoves });
 
   const outcomes = [...remoteOutcomes, ...localOnlyOutcomes];
   return {
