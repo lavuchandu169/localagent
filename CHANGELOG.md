@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.76 — 2026-10-05
+
+- docs: mention the graphify knowledge graph alongside the architecture diagram
+
 ## v0.1.0-beta.75 — 2026-10-05
 
 - docs: add an interactive, source-traced architecture diagram
