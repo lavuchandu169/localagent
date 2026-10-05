@@ -126,6 +126,31 @@ async function main() {
     await fs.rm(path.join(root, ".env"), { force: true });
   }
 
+  console.log("\ngrepTool: the JS fallback skips binary files instead of decoding them as mangled text (performance finding — code-review-and-quality pass):");
+  {
+    // A NUL byte never throws from fs.readFile(..., "utf8") — it silently
+    // decodes to U+0000 and keeps going, so the OLD code's
+    // `catch { /* binary, skip */ }` never actually caught this case: the
+    // plain-ASCII match on a later line of the same "binary" file was
+    // still found and returned. The fix's looksBinary() check (peeking for
+    // a NUL in the first 512 bytes) is what actually makes this skip.
+    const binPath = path.join(root, "data.bin");
+    await fs.writeFile(binPath, Buffer.concat([Buffer.from([0, 1, 2, 0]), Buffer.from("\naaaBINARYFILEMATCH\n")]));
+    const result = await grepTool.execute({ pattern: "(?<=aaa)BINARYFILEMATCH" }, ctx);
+    check("a match inside a file with a NUL byte is not returned — the whole file is skipped as binary", result.ok && !result.output?.matches.includes("BINARYFILEMATCH"));
+    await fs.rm(binPath, { force: true });
+  }
+
+  console.log("\ngrepTool: the JS fallback skips files over its size cap instead of loading them whole into memory (performance finding — code-review-and-quality pass):");
+  {
+    const bigPath = path.join(root, "big.txt");
+    const filler = "x".repeat(1024 * 1024); // 1MB of filler per chunk
+    await fs.writeFile(bigPath, filler + filler + filler + "\naaaBIGFILEMATCH\n"); // > 2MB total
+    const result = await grepTool.execute({ pattern: "(?<=aaa)BIGFILEMATCH" }, ctx);
+    check("a match inside a file over MAX_SEARCHABLE_FILE_BYTES is not returned — the file is skipped outright", result.ok && !result.output?.matches.includes("BIGFILEMATCH"));
+    await fs.rm(bigPath, { force: true });
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
