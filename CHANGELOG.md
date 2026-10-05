@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.88 — 2026-10-05
+
+- Deduplicate the encrypted-JSON load/save boilerplate across settings files
+
 ## v0.1.0-beta.87 — 2026-10-05
 
 - Deduplicate the Anthropic/OpenAI/Gemini API-key settings sections
