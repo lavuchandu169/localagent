@@ -330,5 +330,47 @@ console.log("\nGeminiProvider.chatStream reports real usage from the final chunk
   }
 }
 
+console.log("\nGeminiProvider.chat wraps a non-HTTP failure (fetch itself throwing) in a ProviderChatError (correctness finding — code-review-and-quality pass):");
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+  try {
+    const provider = new GeminiProvider({ apiKey: "test-key" });
+    try {
+      await provider.chat({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "hi" }] });
+      check("a network failure throws", false);
+    } catch (err) {
+      check("a network failure is wrapped in a ProviderChatError, not left as a bare Error", err instanceof ProviderChatError);
+      check("it's classified non-retryable (it's not a real 429)", err instanceof ProviderChatError && err.retryable === false);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+console.log("\nGeminiProvider.chatStream wraps a non-HTTP failure the same way (correctness finding — code-review-and-quality pass):");
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+  try {
+    const provider = new GeminiProvider({ apiKey: "test-key" });
+    try {
+      for await (const _e of provider.chatStream!({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "hi" }] })) {
+        /* draining */
+      }
+      check("a network failure throws", false);
+    } catch (err) {
+      check("a network failure is wrapped in a ProviderChatError, not left as a bare Error", err instanceof ProviderChatError);
+      check("it's classified non-retryable (it's not a real 429)", err instanceof ProviderChatError && err.retryable === false);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

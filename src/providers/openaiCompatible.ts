@@ -2,6 +2,7 @@ import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelIn
 import { ProviderChatError } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
 import { parseSseLines } from "./sseLines.js";
+import { wrapNonProviderError } from "./providerErrors.js";
 
 /** Correctness audit finding (FreeLLMAPI Medium #4): an OpenAI-shape error
  * body is almost always JSON with a real, human-readable message buried
@@ -128,49 +129,62 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const body = buildChatBody(request);
+    try {
+      const body = buildChatBody(request);
 
-    const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
-    });
+      const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(body),
+      });
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      // A typed ProviderChatError (not a bare Error) so callers like the
-      // freellmapi free-tier router — which delegates all its real HTTP
-      // work to this class, see providers/freellmapiProxy.ts — can trigger
-      // agent.ts's fallback-to-cloud-provider path when the whole router
-      // comes back rate-limit-exhausted. Matches the same retryable-iff-429
-      // convention used by every other provider (openaiProvider.ts,
-      // anthropicProvider.ts, geminiProvider.ts). A local server
-      // (openai-compatible kind) never has fallbackProviders configured, so
-      // this is a no-op behavior change for that existing caller.
-      throw new ProviderChatError(formatErrorMessage(res.status, text), { status: res.status, retryable: res.status === 429 });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        // A typed ProviderChatError (not a bare Error) so callers like the
+        // freellmapi free-tier router — which delegates all its real HTTP
+        // work to this class, see providers/freellmapiProxy.ts — can trigger
+        // agent.ts's fallback-to-cloud-provider path when the whole router
+        // comes back rate-limit-exhausted. Matches the same retryable-iff-429
+        // convention used by every other provider (openaiProvider.ts,
+        // anthropicProvider.ts, geminiProvider.ts). A local server
+        // (openai-compatible kind) never has fallbackProviders configured, so
+        // this is a no-op behavior change for that existing caller.
+        throw new ProviderChatError(formatErrorMessage(res.status, text), { status: res.status, retryable: res.status === 429 });
+      }
+
+      const data: any = await res.json();
+      const choice = data.choices?.[0];
+      return fromOpenAIChatMessage(choice?.message ?? {}, data);
+    } catch (err) {
+      // Performance/correctness finding (code-review-and-quality pass): the
+      // `!res.ok` branch above is the only HTTP-shaped failure — a failure
+      // in fetch() itself (network down, DNS, TLS) or in res.json() never
+      // reached it and used to propagate as a bare Error, invisible to
+      // agent.ts's retryable-fallback check. See providerErrors.ts.
+      wrapNonProviderError(err);
     }
-
-    const data: any = await res.json();
-    const choice = data.choices?.[0];
-    return fromOpenAIChatMessage(choice?.message ?? {}, data);
   }
 
   async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
-    const body = buildChatBody(request);
-    body.stream = true;
+    try {
+      const body = buildChatBody(request);
+      body.stream = true;
 
-    const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
-    });
+      const res = await fetch(`${this.opts.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(body),
+      });
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new ProviderChatError(formatErrorMessage(res.status, text), { status: res.status, retryable: res.status === 429 });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new ProviderChatError(formatErrorMessage(res.status, text), { status: res.status, retryable: res.status === 429 });
+      }
+
+      yield* streamOpenAIShapeResponse(res);
+    } catch (err) {
+      wrapNonProviderError(err);
     }
-
-    yield* streamOpenAIShapeResponse(res);
   }
 }
 

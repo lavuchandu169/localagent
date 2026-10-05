@@ -257,5 +257,55 @@ console.log("\nfromOpenAIChatMessage reports real usage from the response, not j
   check("no usage field in the response means no usage on the ChatResponse either, not a crash or a fabricated 0", response.usage === undefined);
 }
 
+console.log("\nOpenAICompatibleProvider.chat wraps a non-HTTP failure (fetch itself throwing) in a ProviderChatError (correctness finding — code-review-and-quality pass):");
+{
+  // Only AnthropicProvider used to wrap its ENTIRE call in a try/catch —
+  // every other provider only ever threw a ProviderChatError from its own
+  // `if (!res.ok)` branch, so a failure in fetch() ITSELF (network down,
+  // DNS, TLS — simulated here by making fetch reject outright) propagated
+  // as a bare Error, invisible to agent.ts's
+  // `err instanceof ProviderChatError && err.retryable` fallback check.
+  // This matters doubly for this class specifically: FreeLLMAPI's proxy
+  // (freellmapiProxy.ts) delegates all its real HTTP work to it.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAICompatibleProvider({ baseUrl: "http://127.0.0.1:8687/v1", local: false });
+    try {
+      await provider.chat({ model: "whatever", messages: [{ role: "user", content: "hi" }] });
+      check("a network failure throws", false);
+    } catch (err) {
+      check("a network failure is wrapped in a ProviderChatError, not left as a bare Error", err instanceof ProviderChatError);
+      check("it's classified non-retryable (it's not a real 429)", err instanceof ProviderChatError && err.retryable === false);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+console.log("\nOpenAICompatibleProvider.chatStream wraps a non-HTTP failure the same way (correctness finding — code-review-and-quality pass):");
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAICompatibleProvider({ baseUrl: "http://127.0.0.1:8687/v1", local: false });
+    try {
+      for await (const _e of provider.chatStream!({ model: "whatever", messages: [{ role: "user", content: "hi" }] })) {
+        /* draining */
+      }
+      check("a network failure throws", false);
+    } catch (err) {
+      check("a network failure is wrapped in a ProviderChatError, not left as a bare Error", err instanceof ProviderChatError);
+      check("it's classified non-retryable (it's not a real 429)", err instanceof ProviderChatError && err.retryable === false);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

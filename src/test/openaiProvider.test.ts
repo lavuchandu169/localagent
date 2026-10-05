@@ -249,5 +249,53 @@ console.log("\nOpenAIProvider.chatStream reports real usage, not just chat() (co
   }
 }
 
+console.log("\nOpenAIProvider.chat wraps a non-HTTP failure (fetch itself throwing) in a ProviderChatError (correctness finding — code-review-and-quality pass):");
+{
+  // Only AnthropicProvider used to wrap its ENTIRE call in a try/catch —
+  // every other provider only ever threw a ProviderChatError from its own
+  // `if (!res.ok)` branch, so a failure in fetch() ITSELF (network down,
+  // DNS, TLS — simulated here by making fetch reject outright) propagated
+  // as a bare Error, invisible to agent.ts's
+  // `err instanceof ProviderChatError && err.retryable` fallback check.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider({ apiKey: "test-key" });
+    try {
+      await provider.chat({ model: "gpt-5.5", messages: [{ role: "user", content: "hi" }] });
+      check("a network failure throws", false);
+    } catch (err) {
+      check("a network failure is wrapped in a ProviderChatError, not left as a bare Error", err instanceof ProviderChatError);
+      check("it's classified non-retryable (it's not a real 429)", err instanceof ProviderChatError && err.retryable === false);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+console.log("\nOpenAIProvider.chatStream wraps a non-HTTP failure the same way (correctness finding — code-review-and-quality pass):");
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider({ apiKey: "test-key" });
+    try {
+      for await (const _e of provider.chatStream!({ model: "gpt-5.5", messages: [{ role: "user", content: "hi" }] })) {
+        /* draining */
+      }
+      check("a network failure throws", false);
+    } catch (err) {
+      check("a network failure is wrapped in a ProviderChatError, not left as a bare Error", err instanceof ProviderChatError);
+      check("it's classified non-retryable (it's not a real 429)", err instanceof ProviderChatError && err.retryable === false);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
