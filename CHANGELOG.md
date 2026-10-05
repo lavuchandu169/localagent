@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.74 — 2026-10-05
+
+- chore: fix known vulnerabilities in transitive MCP SDK dependencies
+
 ## v0.1.0-beta.73 — 2026-10-04
 
 - fix: kill the whole process tree, not just the direct shell child
