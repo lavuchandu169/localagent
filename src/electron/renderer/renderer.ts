@@ -467,6 +467,7 @@ function setWorkspaceText(text: string): void {
 // function that reads it is itself hoisted.
 const DOT_GLYPH: Record<ReturnType<typeof tabDotState>, string> = {
   unconfigured: "○",
+  idle: "○",
   running: "●",
   "waiting-approval": "◐",
   done: "✓",

@@ -5,7 +5,7 @@ import type { ProviderConfig } from "../sessionRegistry.js";
 
 export const MAX_OPEN_TABS = 6;
 
-export type TabDotState = "unconfigured" | "running" | "waiting-approval" | "done" | "error";
+export type TabDotState = "unconfigured" | "idle" | "running" | "waiting-approval" | "done" | "error";
 
 export interface TabState {
   tabId: string;
@@ -170,7 +170,10 @@ export function routeEvent(registry: TabRegistry, sessionId: string, event: Agen
 export function tabDotState(tab: TabState): TabDotState {
   if (!tab.sessionId) return "unconfigured";
   const last = tab.events[tab.events.length - 1];
-  if (!last) return "running";
+  // A started session with no events yet has never run a task — the same
+  // "not in flight" case lastEventStillRunning documents above for an empty
+  // events array. It's configured, just idle, not "running".
+  if (!last) return "idle";
   if (last.type === "done") return last.success ? "done" : "error";
   if (last.type === "error") return "error";
   if (last.type === "permission.request" && last.decision === "ASK") return "waiting-approval";
