@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.80 — 2026-10-05
+
+- perf: skip downloading a remote session when the checkpoint already proves nothing changed
+
 ## v0.1.0-beta.79 — 2026-10-05
 
 - Cap reconcile concurrency and batch its index rewrites
