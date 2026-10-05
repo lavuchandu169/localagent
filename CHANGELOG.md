@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.90 — 2026-10-05
+
+- Stop list_directory from walking past its own 500-entry cap
+
 ## v0.1.0-beta.89 — 2026-10-05
 
 - Deduplicate OpenAICompatibleProvider/OpenAIProvider's chat/chatStream
