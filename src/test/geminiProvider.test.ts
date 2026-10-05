@@ -264,6 +264,37 @@ console.log("\nGeminiProvider.chatStream surfaces an in-band error chunk (final 
     }
     check("an in-band error chunk throws instead of yielding a truncated 'done' as success", threw instanceof ProviderChatError);
     check("the already-streamed partial text was still visible to the consumer before the throw", seen.some((e) => e.type === "text" && e.text === "Half an ans"));
+    check("a non-rate-limit in-band error (INTERNAL) is classified non-retryable", threw instanceof ProviderChatError && threw.retryable === false);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+console.log("\nGeminiProvider.chatStream classifies an in-band RESOURCE_EXHAUSTED error as retryable, same as the non-streaming path (correctness finding — code-review-and-quality pass):");
+{
+  // Before this fix, chatStream's in-band error branch hardcoded
+  // retryable: false unconditionally — the exact same RESOURCE_EXHAUSTED
+  // condition that chat()'s `!res.ok` branch already correctly classifies
+  // as retryable (see "Gemini provider classifies RESOURCE_EXHAUSTED as
+  // retryable" above) incorrectly hard-failed the task when it happened
+  // to arrive as an in-stream chunk instead of a non-200 response.
+  const sseBody =
+    'data: {"candidates":[{"content":{"parts":[{"text":"Half an ans"}]}}]}\n\n' +
+    'data: {"error":{"code":429,"message":"quota exceeded","status":"RESOURCE_EXHAUSTED"}}\n\n';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(sseBody, { status: 200 })) as typeof fetch;
+  try {
+    const provider = new GeminiProvider({ apiKey: "test-key" });
+    let threw: any = null;
+    try {
+      for await (const _e of provider.chatStream!({ model: "gemini-3.8-flash", messages: [{ role: "user", content: "hi" }] })) {
+        /* draining */
+      }
+    } catch (err) {
+      threw = err;
+    }
+    check("an in-band RESOURCE_EXHAUSTED error throws a ProviderChatError", threw instanceof ProviderChatError);
+    check("it's classified retryable, same as the non-streaming path", threw instanceof ProviderChatError && threw.retryable === true);
   } finally {
     globalThis.fetch = realFetch;
   }
