@@ -1,6 +1,6 @@
 import type { ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, StreamEvent } from "../types.js";
 import { ProviderChatError } from "../types.js";
-import { buildChatBody, fromOpenAIChatMessage, streamOpenAIShapeResponse } from "./openaiCompatible.js";
+import { buildChatBody, fromOpenAIChatMessage, streamOpenAIShapeResponse, formatErrorMessage } from "./openaiCompatible.js";
 import { wrapNonProviderError } from "./providerErrors.js";
 
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -64,7 +64,13 @@ export class OpenAIProvider implements ModelProvider {
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new ProviderChatError(`OpenAI error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
+        // Readability finding (code-review-and-quality pass): this used to
+        // dump the raw response body verbatim instead of reusing
+        // openaiCompatible.ts's own formatErrorMessage (already used there
+        // for the exact same error shape) — an OpenAI-shape error body is
+        // almost always JSON with a real, human-readable message buried
+        // inside, which that helper already extracts.
+        throw new ProviderChatError(formatErrorMessage(res.status, text), { status: res.status, retryable: res.status === 429 });
       }
 
       const data: any = await res.json();
@@ -101,7 +107,7 @@ export class OpenAIProvider implements ModelProvider {
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new ProviderChatError(`OpenAI error ${res.status}: ${text}`, { status: res.status, retryable: res.status === 429 });
+        throw new ProviderChatError(formatErrorMessage(res.status, text), { status: res.status, retryable: res.status === 429 });
       }
 
       yield* streamOpenAIShapeResponse(res);

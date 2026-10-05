@@ -13,7 +13,7 @@ import { wrapNonProviderError } from "./providerErrors.js";
  * JSON, or JSON with no message field, so a malformed/unexpected error
  * shape is never a crash — the whole call is already behind .catch(() =>
  * "") at its one call site. */
-function formatErrorMessage(status: number, text: string): string {
+export function formatErrorMessage(status: number, text: string): string {
   try {
     const parsed = JSON.parse(text);
     const message = parsed?.error?.message ?? parsed?.message;

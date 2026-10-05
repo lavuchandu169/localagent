@@ -38,10 +38,22 @@ import type {
 } from "../freellmapiKeysApi.js";
 import type { RoutingSettings, UpdateRoutingParams, UpdateRoutingResult, FallbackModelRow, UpdateModelListEntry, SortPreset } from "../freellmapiFallbackApi.js";
 import { estimateCostUsd } from "../../anthropicPricing.js";
-import { WHATS_NEW } from "../../whatsNew.js";
 import { initFreellmapiPanel, openFreellmapiPanel, closeFreellmapiPanel } from "./freellmapiPanel.js";
 import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 import { initFreellmapiFallbackPanel, openFreellmapiFallbackPanel, closeFreellmapiFallbackPanel } from "./freellmapiFallbackPanel.js";
+import { byId } from "./domHelpers.js";
+import {
+  initOnboarding,
+  markFirstTaskSent,
+  updateExamplePromptsVisibility,
+  dismissOnboarding,
+  dismissWhatsNew,
+  isOnboardingOpen,
+  isWhatsNewOpen,
+  focusOnboardingDismiss,
+  focusWhatsNewDismiss,
+  ONBOARDING_SEEN_KEY,
+} from "./onboarding.js";
 import { MODE_LABELS } from "../modeLabels.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 import type { HfSearchResult } from "../modelSearch.js";
@@ -204,12 +216,6 @@ declare global {
   }
 }
 
-function byId<T extends HTMLElement>(id: string): T {
-  const el = document.getElementById(id);
-  if (!el) throw new Error(`Missing #${id}`);
-  return el as T;
-}
-
 /**
  * Disables `button` and swaps its label to `busyText` while `fn` runs,
  * always restoring the original label and re-enabling it afterward —
@@ -255,21 +261,16 @@ const anthropicFields = byId<HTMLDivElement>("anthropic-fields");
 const freellmapiFields = byId<HTMLDivElement>("freellmapi-fields");
 const openFreellmapiDashboardBtn = byId<HTMLButtonElement>("open-freellmapi-dashboard");
 openFreellmapiDashboardBtn.addEventListener("click", () => {
-  // Same mutual-exclusion convention as the about/settings/MCP-servers
-  // panel toggles above (each closes the other panels before opening
-  // itself) - two modals stacked at once reads as broken, not "extra".
-  if (!aboutPanel.hidden) closeAboutPanel();
-  if (!mcpServersPanel.hidden) closeMcpServersPanel();
-  if (!settingsPanel.hidden) closeSettingsPanel();
-  if (!closeFreellmapiFallbackPanel()) return;
+  // Readability/correctness finding (code-review-and-quality pass): this
+  // used to skip closeCommandPalette() — the one call site these two
+  // buttons had drifted from the other four, see closeAllFullScreenModals'
+  // own doc comment below for the full story.
+  if (!closeAllFullScreenModals()) return;
   void openFreellmapiPanel();
 });
 const openFreellmapiFallbackBtn = byId<HTMLButtonElement>("open-freellmapi-fallback-panel");
 openFreellmapiFallbackBtn.addEventListener("click", () => {
-  if (!aboutPanel.hidden) closeAboutPanel();
-  if (!mcpServersPanel.hidden) closeMcpServersPanel();
-  if (!settingsPanel.hidden) closeSettingsPanel();
-  closeFreellmapiPanel();
+  if (!closeAllFullScreenModals()) return;
   void openFreellmapiFallbackPanel();
 });
 const baseUrlInput = byId<HTMLInputElement>("base-url");
@@ -317,7 +318,6 @@ const attachFileBtn = byId<HTMLButtonElement>("attach-file");
 const attachmentChipsRow = byId<HTMLDivElement>("attachment-chips");
 const eventLog = byId<HTMLDivElement>("event-log");
 const emptyState = byId<HTMLDivElement>("empty-state");
-const examplePrompts = byId<HTMLDivElement>("example-prompts");
 const updateBanner = byId<HTMLDivElement>("update-banner");
 const updateBannerText = byId<HTMLSpanElement>("update-banner-text");
 const updateBannerLink = byId<HTMLAnchorElement>("update-banner-link");
@@ -355,12 +355,6 @@ const mcpServersClose = byId<HTMLButtonElement>("mcp-servers-close");
 const mcpServersCloseX = byId<HTMLButtonElement>("mcp-servers-close-x");
 const reportIssueLink = byId<HTMLAnchorElement>("report-issue-link");
 const openErrorLogBtn = byId<HTMLButtonElement>("open-error-log");
-const onboardingOverlay = byId<HTMLDivElement>("onboarding-overlay");
-const onboardingDismiss = byId<HTMLButtonElement>("onboarding-dismiss");
-const whatsNewOverlay = byId<HTMLDivElement>("whats-new-overlay");
-const whatsNewTitle = byId<HTMLHeadingElement>("whats-new-title");
-const whatsNewList = byId<HTMLUListElement>("whats-new-list");
-const whatsNewDismiss = byId<HTMLButtonElement>("whats-new-dismiss");
 const aboutWorkspace = byId<HTMLSpanElement>("about-workspace");
 const aboutHardware = byId<HTMLSpanElement>("about-hardware");
 const settingsToggle = byId<HTMLButtonElement>("settings-toggle");
@@ -868,17 +862,37 @@ function closeAboutPanel(): void {
   aboutToggle.focus();
 }
 
+/**
+ * Readability/correctness finding (code-review-and-quality pass): these
+ * full-window modals (see .modal-card in styles.css) are mutually
+ * exclusive — only one should ever be open at once, two stacked at once
+ * reads as broken, not "extra" — so every one of the six places that
+ * opens one of them closed all the others first. Six independent
+ * hand-written copies of the same list had already drifted: the two
+ * FreeLLMAPI open buttons (below) never closed the command palette,
+ * so opening either while the palette was up left both visible at once.
+ * One shared function, called from all six places, so there's exactly
+ * one list to keep correct. Each individual close is still guarded by
+ * its own `.hidden` check (not just a micro-optimization: closeAboutPanel
+ * et al. also move focus to their toggle button, which must NOT happen
+ * for a panel that wasn't actually open). Returns false if
+ * closeFreellmapiFallbackPanel's own unsaved-changes confirm was
+ * declined — callers must abort their own open attempt in that case,
+ * same as every call site already did before this.
+ */
+function closeAllFullScreenModals(): boolean {
+  if (!aboutPanel.hidden) closeAboutPanel();
+  if (!mcpServersPanel.hidden) closeMcpServersPanel();
+  if (!settingsPanel.hidden) closeSettingsPanel();
+  if (!commandPaletteOverlay.hidden) closeCommandPalette();
+  closeFreellmapiPanel();
+  return closeFreellmapiFallbackPanel();
+}
+
 aboutToggle.addEventListener("click", () => {
   const opening = aboutPanel.hidden;
   if (opening) {
-    // These are full-window modals now (see .modal-card in styles.css) — only
-    // one should ever be open at once, so opening this one closes whichever
-    // of the others is currently up first.
-    if (!settingsPanel.hidden) closeSettingsPanel();
-    if (!mcpServersPanel.hidden) closeMcpServersPanel();
-    if (!commandPaletteOverlay.hidden) closeCommandPalette();
-    closeFreellmapiPanel();
-    if (!closeFreellmapiFallbackPanel()) return;
+    if (!closeAllFullScreenModals()) return;
   }
   if (opening) openOverlayPanel(aboutPanel);
   else closeOverlayPanel(aboutPanel);
@@ -947,7 +961,7 @@ function renderMcpServerRow(server: McpServerView): HTMLDivElement {
       try {
         await window.agent.removeMcpServer(server.id);
       } catch (err) {
-        mcpServersListError.textContent = `Couldn't remove "${server.name}": ${err instanceof Error ? err.message : String(err)}`;
+        mcpServersListError.textContent = `Couldn't remove "${server.name}": ${errorMessage(err)}`;
       }
       await refreshMcpServersList();
     })();
@@ -970,18 +984,14 @@ async function refreshMcpServersList() {
     mcpServersEmpty.hidden = servers.length > 0;
     for (const server of servers) mcpServersList.appendChild(renderMcpServerRow(server));
   } catch (err) {
-    mcpServersListError.textContent = `Couldn't load MCP servers: ${err instanceof Error ? err.message : String(err)}`;
+    mcpServersListError.textContent = `Couldn't load MCP servers: ${errorMessage(err)}`;
   }
 }
 
 mcpServersToggle.addEventListener("click", () => {
   const opening = mcpServersPanel.hidden;
   if (opening) {
-    if (!aboutPanel.hidden) closeAboutPanel();
-    if (!settingsPanel.hidden) closeSettingsPanel();
-    if (!commandPaletteOverlay.hidden) closeCommandPalette();
-    closeFreellmapiPanel();
-    if (!closeFreellmapiFallbackPanel()) return;
+    if (!closeAllFullScreenModals()) return;
   }
   if (opening) openOverlayPanel(mcpServersPanel);
   else closeOverlayPanel(mcpServersPanel);
@@ -1044,7 +1054,7 @@ mcpServerFormSave.addEventListener("click", () => {
         mcpServerFormError.textContent = result.error;
       }
     } catch (err) {
-      mcpServerFormError.textContent = err instanceof Error ? err.message : String(err);
+      mcpServerFormError.textContent = errorMessage(err);
     }
   });
 });
@@ -1065,11 +1075,12 @@ settingsClientSecretInput.addEventListener("input", () => {
   settingsSecretTouched = true;
 });
 
-/** Shared by every catch block this function adds below — kept local to
- * where it's actually new usage rather than also touching the 9
- * pre-existing inline `err instanceof Error ? err.message : String(err)`
- * occurrences elsewhere in this file (a separate readability cleanup, not
- * bundled into this correctness fix). */
+/** Readability finding (code-review-and-quality pass): this used to be
+ * used only by the catch blocks openSettingsPanel's own correctness fix
+ * added, leaving 9 other pre-existing inline
+ * `err instanceof Error ? err.message : String(err)` occurrences
+ * scattered through this file — now the single shared spelling used
+ * everywhere that pattern is needed. */
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -1226,11 +1237,7 @@ function closeSettingsPanel(): void {
 settingsToggle.addEventListener("click", async () => {
   const opening = settingsPanel.hidden;
   if (opening) {
-    if (!aboutPanel.hidden) closeAboutPanel();
-    if (!mcpServersPanel.hidden) closeMcpServersPanel();
-    if (!commandPaletteOverlay.hidden) closeCommandPalette();
-    closeFreellmapiPanel();
-    if (!closeFreellmapiFallbackPanel()) return;
+    if (!closeAllFullScreenModals()) return;
     await openSettingsPanel();
   }
   if (opening) openOverlayPanel(settingsPanel);
@@ -1328,11 +1335,7 @@ function closeCommandPalette(): void {
 }
 
 function openCommandPalette(): void {
-  if (!aboutPanel.hidden) closeAboutPanel();
-  if (!mcpServersPanel.hidden) closeMcpServersPanel();
-  if (!settingsPanel.hidden) closeSettingsPanel();
-  closeFreellmapiPanel();
-  if (!closeFreellmapiFallbackPanel()) return;
+  if (!closeAllFullScreenModals()) return;
   commandPaletteInput.value = "";
   paletteSelectedIndex = 0;
   openOverlayPanel(commandPaletteOverlay);
@@ -1395,8 +1398,8 @@ document.addEventListener("keydown", (e) => {
 // interactive until whichever modal is up gets dismissed).
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (!onboardingOverlay.hidden) dismissOnboarding();
-  else if (!whatsNewOverlay.hidden) dismissWhatsNew();
+  if (isOnboardingOpen()) dismissOnboarding();
+  else if (isWhatsNewOpen()) dismissWhatsNew();
   else if (!aboutPanel.hidden) closeAboutPanel();
   else if (!mcpServersPanel.hidden) closeMcpServersPanel();
   else if (!settingsPanel.hidden) closeSettingsPanel();
@@ -1413,84 +1416,14 @@ document.addEventListener("keydown", (e) => {
 // on it."
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Tab") return;
-  if (!onboardingOverlay.hidden) {
+  if (isOnboardingOpen()) {
     e.preventDefault();
-    onboardingDismiss.focus();
-  } else if (!whatsNewOverlay.hidden) {
+    focusOnboardingDismiss();
+  } else if (isWhatsNewOpen()) {
     e.preventDefault();
-    whatsNewDismiss.focus();
+    focusWhatsNewDismiss();
   }
 });
-
-const ONBOARDING_SEEN_KEY = "localagent:onboarding-seen";
-
-/** Per-viewer UI preference only (not security/cross-device data) — localStorage is the right tool here, unlike everything else in this app which persists through the main process. */
-function showOnboardingIfFirstRun(): void {
-  let seen = false;
-  try {
-    seen = localStorage.getItem(ONBOARDING_SEEN_KEY) === "1";
-  } catch {
-    seen = true; // an inaccessible localStorage shouldn't block the app — treat as already seen
-  }
-  if (seen) return;
-  onboardingOverlay.hidden = false;
-  onboardingDismiss.focus();
-}
-
-function dismissOnboarding(): void {
-  onboardingOverlay.hidden = true;
-  try {
-    localStorage.setItem(ONBOARDING_SEEN_KEY, "1");
-  } catch {
-    // Best-effort — if this fails, onboarding just shows again next launch; not worth surfacing an error for.
-  }
-  modelSelect.focus();
-}
-
-onboardingDismiss.addEventListener("click", dismissOnboarding);
-showOnboardingIfFirstRun();
-
-// Example-task chips — shown above the composer only for the very first
-// session this machine has ever sent a task in, never again after that.
-// Deliberately NOT tied to #empty-state's own visibility: beginSession
-// always logs a "Session started" status line the instant a session
-// starts, which hides #empty-state immediately — before the user would
-// ever get a chance to see anything nested inside it. Distinct from
-// ONBOARDING_SEEN_KEY too: a user can dismiss the onboarding modal (just
-// reading it) well before actually starting a session and sending a task,
-// so this needs its own flag set at the actual moment that matters —
-// runTaskBtn's handler, below.
-const FIRST_TASK_SENT_KEY = "localagent:first-task-sent";
-
-function firstTaskAlreadySent(): boolean {
-  try {
-    return localStorage.getItem(FIRST_TASK_SENT_KEY) === "1";
-  } catch {
-    return true; // an inaccessible localStorage shouldn't show this every time — treat as already past it
-  }
-}
-
-function markFirstTaskSent(): void {
-  try {
-    localStorage.setItem(FIRST_TASK_SENT_KEY, "1");
-  } catch {
-    // Best-effort — if this fails, the chips just show again next time; not worth surfacing an error for.
-  }
-}
-
-/** Called from clearAndReplayEventLog, which already knows whether the active tab has a live session — the chips only make sense once a task can actually be sent (taskInput isn't disabled). */
-function updateExamplePromptsVisibility(hasSession: boolean): void {
-  examplePrompts.hidden = !hasSession || firstTaskAlreadySent();
-}
-
-for (const chip of document.querySelectorAll<HTMLButtonElement>(".example-prompt-chip")) {
-  chip.addEventListener("click", () => {
-    taskInput.value = chip.textContent ?? "";
-    taskInput.focus();
-  });
-}
-
-const WHATS_NEW_SEEN_KEY = "localagent:whats-new-seen-version";
 
 /** Correctness audit finding (updateManager Low/Medium): on an unsigned Mac
  * build, Squirrel.Mac's in-place apply step fails every time (the download
@@ -1503,82 +1436,11 @@ const WHATS_NEW_SEEN_KEY = "localagent:whats-new-seen-version";
  * Per-viewer UI preference only, same reasoning as WHATS_NEW_SEEN_KEY. */
 const UPDATE_FALLBACK_DISMISSED_VERSION_KEY = "localagent:update-fallback-dismissed-version";
 
-/** Turns a changelog bullet's `` `code span` `` markdown into a real <code> element, leaving everything else as plain text — built via DOM nodes rather than innerHTML since this text ultimately comes from a file in the repo, not a trusted-but-still-worth-being-careful-with input. */
-function renderWhatsNewBullet(text: string): DocumentFragment {
-  const fragment = document.createDocumentFragment();
-  const parts = text.split("`");
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]!;
-    if (i % 2 === 1) {
-      const code = document.createElement("code");
-      code.textContent = part;
-      fragment.appendChild(code);
-    } else if (part) {
-      fragment.appendChild(document.createTextNode(part));
-    }
-  }
-  return fragment;
-}
-
-/**
- * Shows this build's changelog entry once per version, but only for
- * someone who's already past onboarding — a brand-new install gets the
- * onboarding modal's own "here's what this app does" and doesn't need a
- * second, redundant welcome. That also means the very first time this
- * feature ships, every existing user (onboarding already seen, no
- * what's-new-seen entry yet at all) correctly sees this version's notes
- * once, which is exactly the case the feature exists for.
- */
-function showWhatsNewIfNeeded(): void {
-  let onboardingSeen = false;
-  let lastSeenVersion: string | null = null;
-  try {
-    onboardingSeen = localStorage.getItem(ONBOARDING_SEEN_KEY) === "1";
-    lastSeenVersion = localStorage.getItem(WHATS_NEW_SEEN_KEY);
-  } catch {
-    return; // no localStorage available — nothing to show or track this run
-  }
-
-  if (!onboardingSeen) {
-    // First-ever run: seed silently so this only ever fires for a real
-    // upgrade from here on, never as a second welcome on top of onboarding.
-    try {
-      localStorage.setItem(WHATS_NEW_SEEN_KEY, WHATS_NEW.version);
-    } catch {
-      // Best-effort — worst case this shows once more than intended later; not worth surfacing an error for.
-    }
-    return;
-  }
-
-  if (lastSeenVersion === WHATS_NEW.version) return;
-
-  whatsNewTitle.textContent = `What's new in v${WHATS_NEW.version}`;
-  whatsNewList.innerHTML = "";
-  for (const bullet of WHATS_NEW.bullets) {
-    const li = document.createElement("li");
-    li.appendChild(renderWhatsNewBullet(bullet));
-    whatsNewList.appendChild(li);
-  }
-  whatsNewOverlay.hidden = false;
-  whatsNewDismiss.focus();
-}
-
-function dismissWhatsNew(): void {
-  whatsNewOverlay.hidden = true;
-  try {
-    localStorage.setItem(WHATS_NEW_SEEN_KEY, WHATS_NEW.version);
-  } catch {
-    // Best-effort — if this fails, the modal just shows again next launch; not worth surfacing an error for.
-  }
-  // Unlike onboarding (which always lands on a fresh setup form and so
-  // always has a sensible next field to focus), this modal can appear
-  // either before or after a session has started — the composer isn't
-  // always the right next stop. Only claim focus when it's actually usable.
-  if (!taskInput.disabled) taskInput.focus();
-}
-
-whatsNewDismiss.addEventListener("click", dismissWhatsNew);
-showWhatsNewIfNeeded();
+// Onboarding modal, what's-new modal, and first-task example-prompt chips —
+// see onboarding.ts for all of it. initOnboarding() runs here, at the exact
+// point this code used to run inline, so load-order relative to the rest
+// of this file's top-level setup is unchanged.
+initOnboarding();
 
 const savedToastTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 /** Shows a "Saved." toast (fading in via .saved-toast's own animation) and auto-hides it after a few seconds — clears any timer from a previous save on the same element first, so rapid re-saves don't hide it early. */
@@ -1615,7 +1477,7 @@ settingsSaveBtn.addEventListener("click", () => {
       }
       showSavedToast(settingsSaved);
     } catch (err) {
-      settingsError.textContent = err instanceof Error ? err.message : String(err);
+      settingsError.textContent = errorMessage(err);
     }
   });
 });
@@ -3024,7 +2886,7 @@ runTaskBtn.addEventListener("click", async () => {
     tab.running = false;
     if (isActiveTab(tab)) {
       runTaskBtn.disabled = false;
-      logLine(`✗ ${err instanceof Error ? err.message : String(err)}`, "log-error");
+      logLine(`✗ ${errorMessage(err)}`, "log-error");
     }
   }
 });
@@ -3089,7 +2951,7 @@ signOutBtn.addEventListener("click", () => {
       // unrelated list refresh.
       await refreshSessionList(sessionSearchInput.value.trim());
     } catch (err) {
-      authError.textContent = err instanceof Error ? err.message : String(err);
+      authError.textContent = errorMessage(err);
     }
   });
 });
