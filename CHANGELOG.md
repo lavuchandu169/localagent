@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.93 — 2026-10-07
+
+- Add a request timeout to the Hugging Face model search
+
 ## v0.1.0-beta.92 — 2026-10-05
 
 - Add tolerance to recommendModel's exact-GiB RAM thresholds
