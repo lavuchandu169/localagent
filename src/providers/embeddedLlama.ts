@@ -363,6 +363,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
       // own contextSize cap (see loadChat's createContext call) — raising
       // this alone can't exceed whatever room is actually left in context.
       maxTokens: request.maxTokens ?? 4096,
+      signal: request.signal,
     });
     return fromLlamaResult(result);
   }
@@ -379,6 +380,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
         functions,
         documentFunctionParams: true,
         maxTokens: request.maxTokens ?? 4096,
+        signal: request.signal,
         onTextChunk: (text: string) => {
           queue.push({ type: "text", text });
         },

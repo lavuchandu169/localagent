@@ -21,12 +21,13 @@ import {
   getSessionIdsWithPendingApproval,
   withPendingApprovalEntries,
   getSessionOwnerEmail,
+  stopTask,
 } from "../../electron/sessionRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
 import { loadSessionRecord, listSessions, searchSessions } from "../../sessionStore.js";
 import { DriveScopeError } from "../../cloudSync.js";
 import { groupDiffIntoSegments } from "../../diffUtil.js";
-import type { AgentEvent, ChatResponse } from "../../types.js";
+import type { AgentEvent, ChatRequest, ChatResponse, HealthCheckResult, ModelProvider } from "../../types.js";
 import { ProviderChatError } from "../../types.js";
 import { saveOpenAISettings } from "../../electron/openaiSettings.js";
 import { saveAnthropicSettings } from "../../electron/anthropicSettings.js";
@@ -688,6 +689,79 @@ await (async () => {
     );
     check("starting a new session under the same just-cancelled id succeeds", restarted.sessionId === sessionId);
     check("the registry now holds exactly the new entry, not a stale one", registry.sessions.has(sessionId));
+  }
+
+  console.log("stopTask (session-level): stops only the running task, leaves the session usable for a next one:");
+
+  {
+    // No task running at all — must be a safe no-op, not a throw, and must
+    // not touch the entry (unlike cancelSession, which always tears down).
+    const registry = createSessionRegistry(sessionsDir);
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      { providerFactory: () => new MockProvider([]) }
+    );
+    stopTask(registry, sessionId);
+    check("stopTask on a session with nothing running is a safe no-op", registry.sessions.has(sessionId));
+  }
+
+  {
+    // Hangs on its first chat() call until aborted (simulating a real
+    // in-flight provider call), then answers normally — lets this test
+    // verify stopTask aborts a call ACTUALLY in flight, not just a
+    // pre-cancelled one, and that the session survives to run a second task.
+    class HangingThenRespondingProvider implements ModelProvider {
+      id = "test-hanging";
+      calls = 0;
+      chatCalled = false;
+      async listModels() {
+        return [];
+      }
+      async healthCheck(): Promise<HealthCheckResult> {
+        return { ok: true };
+      }
+      async chat(request: ChatRequest): Promise<ChatResponse> {
+        this.calls++;
+        this.chatCalled = true;
+        if (this.calls === 1) {
+          return new Promise((_resolve, reject) => {
+            request.signal?.addEventListener("abort", () => reject(Object.assign(new Error("The operation was aborted."), { name: "AbortError" })));
+          });
+        }
+        return { turn: { type: "final", content: "second task done" } };
+      }
+    }
+
+    const registry = createSessionRegistry(sessionsDir);
+    const provider = new HangingThenRespondingProvider();
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+      { providerFactory: () => provider }
+    );
+
+    const events: AgentEvent[] = [];
+    const runPromise = runTask(registry, sessionId, "do something slow", (e) => events.push(e));
+    await waitFor(() => provider.chatCalled);
+
+    stopTask(registry, sessionId);
+    await runPromise;
+
+    const done = events.find((e) => e.type === "done");
+    check(
+      "stopTask ends the in-flight run with 'Cancelled by user', not a provider-error",
+      done?.type === "done" && done.success === false && done.summary === "Cancelled by user."
+    );
+    check("stopTask does NOT remove the entry from the registry (unlike cancelSession)", registry.sessions.has(sessionId));
+
+    const secondEvents: AgentEvent[] = [];
+    await runTask(registry, sessionId, "a second task after the stop", (e) => secondEvents.push(e));
+    const secondDone = secondEvents.find((e) => e.type === "done");
+    check(
+      "the session accepts and completes a new task right after stopTask, with no 'already in progress' error",
+      secondDone?.type === "done" && secondDone.success === true
+    );
   }
 
   {

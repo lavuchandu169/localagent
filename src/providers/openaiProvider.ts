@@ -58,7 +58,7 @@ export class OpenAIProvider implements ModelProvider {
     try {
       const body = buildChatBody({ ...request, model: request.model || this.model });
       this.renameMaxTokens(body);
-      const res = await postChatCompletions(OPENAI_BASE_URL, this.headers(), body);
+      const res = await postChatCompletions(OPENAI_BASE_URL, this.headers(), body, request.signal);
       const data: any = await res.json();
       const choice = data.choices?.[0];
       return fromOpenAIChatMessage(choice?.message ?? {}, data);
@@ -81,7 +81,7 @@ export class OpenAIProvider implements ModelProvider {
       // without it, chat() reports real cost but chatStream() silently
       // never does, even though it's the exact same billed request.
       body.stream_options = { include_usage: true };
-      const res = await postChatCompletions(OPENAI_BASE_URL, this.headers(), body);
+      const res = await postChatCompletions(OPENAI_BASE_URL, this.headers(), body, request.signal);
       yield* streamOpenAIShapeResponse(res);
     } catch (err) {
       wrapNonProviderError(err);

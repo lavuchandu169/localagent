@@ -1770,6 +1770,19 @@ label .hint-text {
   align-self: flex-end;
 }
 
+#stop-task {
+  border-radius: 16px;
+  padding: 7px 16px;
+  align-self: flex-end;
+  background: var(--danger);
+  color: #fff;
+  border: none;
+}
+
+#stop-task:hover {
+  filter: brightness(1.1);
+}
+
 #run textarea::placeholder {
   color: var(--text-dim);
 }
