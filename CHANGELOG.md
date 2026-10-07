@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.95 — 2026-10-07
+
+- docs: replace the full-demo video with a narrated walkthrough
+
 ## v0.1.0-beta.94 — 2026-10-07
 
 - Stop using innerHTML with unescaped external/computed data
