@@ -7,11 +7,19 @@ export interface HfModelSummary {
 export type HfSearchResult = { ok: true; results: HfModelSummary[] } | { ok: false; error: string };
 
 /** Just enough of the real `fetch` response shape to search — injectable so tests never touch the network. */
-export type FetchLike = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+export type FetchLike = (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
-async function defaultFetch(url: string) {
-  return fetch(url);
+async function defaultFetch(url: string, init?: { signal?: AbortSignal }) {
+  return fetch(url, init);
 }
+
+// Performance/correctness finding (code-review-and-quality pass): unlike
+// every other network call in this app (cloudSync.ts, mcpClient.ts), this
+// request had no timeout at all — a slow or unreachable Hugging Face API
+// left the search box's "Searching…" state stuck indefinitely, with no
+// way to recover short of the user typing a new query (which starts a
+// new request but never cancels the stuck one).
+const DEFAULT_TIMEOUT_MSEC = 10_000;
 
 /**
  * Searches Hugging Face's public model listing for GGUF repos matching a
@@ -19,14 +27,18 @@ async function defaultFetch(url: string) {
  * throws: any network failure or unexpected response shape comes back as
  * `{ ok: false, error }` so the UI can show it inline instead of crashing.
  */
-export async function searchHuggingFaceGgufModels(query: string, fetchImpl: FetchLike = defaultFetch): Promise<HfSearchResult> {
+export async function searchHuggingFaceGgufModels(
+  query: string,
+  fetchImpl: FetchLike = defaultFetch,
+  timeoutMs: number = DEFAULT_TIMEOUT_MSEC
+): Promise<HfSearchResult> {
   const trimmed = query.trim();
   if (!trimmed) return { ok: true, results: [] };
 
   let res: { ok: boolean; status: number; json(): Promise<unknown> };
   try {
     const url = `https://huggingface.co/api/models?search=${encodeURIComponent(trimmed)}&filter=gguf&limit=20`;
-    res = await fetchImpl(url);
+    res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

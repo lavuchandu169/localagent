@@ -59,6 +59,37 @@ async function run() {
     const result = await searchHuggingFaceGgufModels("qwen", throwingFetch);
     check("a network failure comes back as ok:false, not a throw", result.ok === false && result.error === "network down");
   }
+
+  {
+    // Performance/correctness finding (code-review-and-quality pass): this
+    // used to have no timeout at all — a hanging server left the search
+    // box's "Searching…" state stuck forever. hangingFetch never resolves
+    // or rejects on its own; it only settles when the signal passed to it
+    // actually aborts, proving the timeout plumbing (not just the SDK's
+    // own eventual default) is what causes this to resolve.
+    //
+    // AbortSignal.timeout()'s own internal timer is unref'd — in the real
+    // app there's always some other live handle (the Electron main
+    // process, IPC) keeping Node's event loop alive long enough for it to
+    // fire; in this bare test script there isn't, so a manual keep-alive
+    // is needed or the process can exit before the 50ms timeout ever
+    // actually runs, silently abandoning the pending await.
+    const keepAlive = setInterval(() => {}, 1000);
+    const hangingFetch: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("The operation was aborted.")));
+      });
+    const startedAt = Date.now();
+    let result: Awaited<ReturnType<typeof searchHuggingFaceGgufModels>>;
+    try {
+      result = await searchHuggingFaceGgufModels("qwen", hangingFetch, 50);
+    } finally {
+      clearInterval(keepAlive);
+    }
+    const elapsedMs = Date.now() - startedAt;
+    check("a hanging request resolves as ok:false rather than hanging forever", result.ok === false);
+    check("resolves close to the short override timeout, not indefinitely", elapsedMs < 5000);
+  }
 }
 await run();
 
