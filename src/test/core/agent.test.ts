@@ -11,7 +11,7 @@ import { defaultToolRegistry, ToolRegistry } from "../../toolRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
 import type { MockScriptEntry } from "../../providers/mockProvider.js";
 import { toLlamaHistory, toLlamaFunctions, fromLlamaResult } from "../../providers/embeddedLlama.js";
-import type { AgentEvent, ChatResponse, PermissionResponse, Tool, ToolCall } from "../../types.js";
+import type { AgentEvent, ChatRequest, ChatResponse, HealthCheckResult, ModelProvider, PermissionResponse, Tool, ToolCall } from "../../types.js";
 import { ProviderChatError } from "../../types.js";
 import { groupDiffIntoSegments } from "../../diffUtil.js";
 import { computeFileDiff } from "../../diffCompute.js";
@@ -484,6 +484,88 @@ await (async () => {
   check(
     "the second turn's reused call_1 gets a synthetic 'cancelled before execution' reply, not silently dropped",
     (call1Replies[1]?.content ?? "").includes("Cancelled before execution")
+  );
+})();
+
+console.log("\nstopCurrentTask() aborts an in-flight provider call and ends only the current task:");
+await (async () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const workspaceRoot = path.resolve(__dirname, "..", "..", "..", "fixture-repo");
+
+  /** Hangs on its first chat() call until the request's AbortSignal fires (simulating a real in-flight HTTP/SDK call being aborted), then answers normally on every later call — lets this test verify BOTH that stopCurrentTask() actually aborts the live call, and that the session is still usable for a next task afterward. */
+  class HangingThenRespondingProvider implements ModelProvider {
+    id = "test-hanging";
+    calls = 0;
+    lastSignal: AbortSignal | undefined;
+    private resolveReady!: () => void;
+    readonly readyForAbort = new Promise<void>((resolve) => {
+      this.resolveReady = resolve;
+    });
+    async listModels() {
+      return [];
+    }
+    async healthCheck(): Promise<HealthCheckResult> {
+      return { ok: true };
+    }
+    async chat(request: ChatRequest): Promise<ChatResponse> {
+      this.calls++;
+      this.lastSignal = request.signal;
+      if (this.calls === 1) {
+        return new Promise((_resolve, reject) => {
+          request.signal?.addEventListener("abort", () => reject(Object.assign(new Error("The operation was aborted."), { name: "AbortError" })));
+          this.resolveReady();
+        });
+      }
+      return { turn: { type: "final", content: "second task done" } };
+    }
+  }
+
+  const provider = new HangingThenRespondingProvider();
+  const session = new AgentSession({
+    workspaceRoot,
+    model: "mock",
+    provider,
+    tools: defaultToolRegistry(),
+    permissionMode: "DEFAULT",
+  });
+
+  const events: AgentEvent[] = [];
+  const gen = session.run("do something slow");
+  // Drain events up to (not past) the "Turn 1: thinking..." status, which
+  // fires right before the loop's await chat() call — stopping right after
+  // it is the first safe moment to abort a REAL in-flight call rather than
+  // one that hasn't started yet.
+  let result = await gen.next();
+  while (!result.done && !(result.value.type === "status" && result.value.message.startsWith("Turn 1"))) {
+    events.push(result.value);
+    result = await gen.next();
+  }
+  if (!result.done) events.push(result.value);
+
+  const pendingNext = gen.next();
+  await provider.readyForAbort;
+  session.stopCurrentTask();
+  result = await pendingNext;
+  while (!result.done) {
+    events.push(result.value);
+    result = await gen.next();
+  }
+
+  const doneEvent = events.find((e) => e.type === "done");
+  check(
+    "the task ends with a 'Cancelled by user' done event, not a provider-error one",
+    doneEvent?.type === "done" && doneEvent.success === false && doneEvent.summary === "Cancelled by user."
+  );
+  check("the provider's in-flight call actually received an aborted signal", provider.lastSignal?.aborted === true);
+  check("no 'error' event was emitted — this is a deliberate stop, not a failure", !events.some((e) => e.type === "error"));
+
+  const secondTaskEvents: AgentEvent[] = [];
+  for await (const event of session.run("a second task after the stop")) secondTaskEvents.push(event);
+  const secondDone = secondTaskEvents.find((e) => e.type === "done");
+  check(
+    "the session is still usable for a later task after stopCurrentTask() — not left permanently broken",
+    secondDone?.type === "done" && secondDone.success === true
   );
 })();
 

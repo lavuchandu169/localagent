@@ -742,6 +742,25 @@ async function finalizeEntry(registry: SessionRegistry, entry: SessionEntry): Pr
  * fresh copy of the model — real resource contention, not a deadlock, but
  * severe enough to look like one.
  */
+/**
+ * Stops only the task currently running in this session — a much lighter
+ * touch than cancelSession: no pending approvals are rejected, the
+ * provider isn't disposed, and the entry stays in the registry. The
+ * in-flight runTask() call unwinds on its own (AgentSession.stopCurrentTask
+ * aborts the provider call and winds the turn loop down to its normal
+ * "done" event), and runTask's own `finally` clears entry.running exactly
+ * as it would for a task that finished normally — so a new runTask() call
+ * on this session works immediately afterward, no different from the
+ * session having just finished a task on its own. No-op if nothing is
+ * running (a stale click after the task already finished, or a session
+ * that was never asked to run anything).
+ */
+export function stopTask(registry: SessionRegistry, sessionId: string): void {
+  const entry = registry.sessions.get(sessionId);
+  if (!entry?.running) return;
+  entry.session.stopCurrentTask();
+}
+
 export async function cancelSession(registry: SessionRegistry, sessionId: string): Promise<void> {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return;

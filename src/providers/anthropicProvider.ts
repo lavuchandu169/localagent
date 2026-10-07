@@ -159,13 +159,16 @@ export class AnthropicProvider implements ModelProvider {
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const { system, messages } = toAnthropicMessages(request.messages);
     try {
-      const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: request.maxTokens ?? 8192,
-        system,
-        messages,
-        tools: toAnthropicTools(request.tools),
-      });
+      const response = await this.client.messages.create(
+        {
+          model: this.model,
+          max_tokens: request.maxTokens ?? 8192,
+          system,
+          messages,
+          tools: toAnthropicTools(request.tools),
+        },
+        { signal: request.signal }
+      );
       return fromAnthropicResponse(response);
     } catch (err: any) {
       if (err instanceof ProviderChatError) throw err;
@@ -180,13 +183,16 @@ export class AnthropicProvider implements ModelProvider {
   async *chatStream(request: ChatRequest): AsyncGenerator<StreamEvent> {
     const { system, messages } = toAnthropicMessages(request.messages);
     try {
-      const stream = this.client.messages.stream({
-        model: this.model,
-        max_tokens: request.maxTokens ?? 8192,
-        system,
-        messages,
-        tools: toAnthropicTools(request.tools),
-      });
+      const stream = this.client.messages.stream(
+        {
+          model: this.model,
+          max_tokens: request.maxTokens ?? 8192,
+          system,
+          messages,
+          tools: toAnthropicTools(request.tools),
+        },
+        { signal: request.signal }
+      );
 
       // Anthropic's own content_block index counts every block (text AND
       // tool_use alike) — StreamEvent.index must count only tool_use

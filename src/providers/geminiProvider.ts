@@ -208,6 +208,7 @@ export class GeminiProvider implements ModelProvider {
         method: "POST",
         headers: this.headers(),
         body: JSON.stringify(body),
+        signal: request.signal,
       });
 
       if (!res.ok) {
@@ -244,6 +245,7 @@ export class GeminiProvider implements ModelProvider {
         method: "POST",
         headers: this.headers(),
         body: JSON.stringify(body),
+        signal: request.signal,
       });
 
       if (!res.ok) {

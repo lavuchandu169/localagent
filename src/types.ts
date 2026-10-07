@@ -68,6 +68,8 @@ export interface ChatRequest {
   messages: ChatMessage[];
   tools?: { name: string; description: string; inputSchema: Record<string, unknown> }[];
   maxTokens?: number;
+  /** Aborts this one in-flight call when the user stops the running task (see AgentSession.stopCurrentTask) — optional since MockProvider and any other test double have no real request to abort. A provider that ignores this still works, it just can't be interrupted mid-call. */
+  signal?: AbortSignal;
 }
 
 export type AssistantTurn =

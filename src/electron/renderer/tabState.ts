@@ -26,6 +26,8 @@ export interface TabState {
   editingSession: boolean;
   /** True from the moment a task is sent for this tab until its terminal `done` event arrives. Distinct from "has a sessionId": a backgrounded tab mid-task still has a session, and the Run button must stay disabled for it (a second concurrent runTask against the same live session), which is exactly what re-deriving the button's state from `sessionId` alone got wrong. Not derived from `events` because a just-sent task has no events yet — there's a real window between "sent" and "first status event" where the last stored event is still the PREVIOUS task's `done`. */
   running: boolean;
+  /** Text typed and queued while a task was already running — the composer's Run button becomes "Queue" instead of being disabled outright while `running` is true (see renderer.ts's runTaskBtn click handler), so there's always somewhere for a follow-up thought to go instead of being silently refused. Sent automatically as the next task once the current one's terminal `done` event arrives, if this tab is still the active one at that moment; otherwise folded into `draftTask` so it's just sitting in the composer, unsent, the next time this tab is switched to. null when nothing is queued. */
+  queuedFollowup: string | null;
 }
 
 /** Whether attaching an image actually does anything for this provider. The embedded local GGUF models are all plain text Instruct models — no vision adapter is ever loaded alongside them (see embeddedLlama.ts's buildUserText, which replaces an attached image with a "this local model can't see images" text note instead of forwarding real image data) — so attaching one just gets a confused non-answer. Every other provider kind forwards images into a real image content block/part in its API request. */
@@ -91,6 +93,7 @@ export function openNewTab(registry: TabRegistry): TabState | null {
     activeProvider: null,
     editingSession: false,
     running: false,
+    queuedFollowup: null,
   };
   registry.tabs.set(tab.tabId, tab);
   registry.order.push(tab.tabId);
@@ -121,6 +124,7 @@ export function resetTabToUnconfigured(tab: TabState): void {
   tab.planFirst = defaults.planFirst;
   tab.editingSession = false;
   tab.running = false;
+  tab.queuedFollowup = null;
 }
 
 /** A no-op if tabId isn't open. Falls back to focusing the previous tab in display order (or the next one, if the closed tab was first); leaves activeTabId null if no tabs remain. */

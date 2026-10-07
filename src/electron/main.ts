@@ -13,7 +13,7 @@ import os from "node:os";
 import fsPromises from "node:fs/promises";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries, getSessionOwnerEmail } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, stopTask, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries, getSessionOwnerEmail } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import type { AttachedImage, AttachedText, PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
@@ -501,6 +501,11 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent:cancel-session", async (_event, sessionId: string) => {
     if (!(await isSessionOwnedByCurrentAccount(sessionId))) return;
     await cancelSession(registry, sessionId);
+  });
+
+  ipcMain.handle("agent:stop-task", async (_event, sessionId: string) => {
+    if (!(await isSessionOwnedByCurrentAccount(sessionId))) return;
+    stopTask(registry, sessionId);
   });
 
   ipcMain.handle("agent:get-checkpoint", async (_event, sessionId: string) => ((await isSessionOwnedByCurrentAccount(sessionId)) ? getCheckpointHash(registry, sessionId) : null));

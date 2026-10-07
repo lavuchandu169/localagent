@@ -155,6 +155,7 @@ interface AgentBridge {
   respondPermission(sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]): Promise<void>;
   respondPlan(sessionId: string, approved: boolean): Promise<void>;
   cancelSession(sessionId: string): Promise<void>;
+  stopTask(sessionId: string): Promise<void>;
   getCheckpoint(sessionId: string): Promise<string | null>;
   revertCheckpoint(sessionId: string): Promise<{ ok: boolean; error?: string }>;
   getChanges(sessionId: string): Promise<{ ok: true; changes: FileChangeWithDiff[] } | { ok: false; error: string }>;
@@ -303,6 +304,8 @@ const startSessionBtn = byId<HTMLButtonElement>("start-session");
 const startError = byId<HTMLDivElement>("start-error");
 const taskInput = byId<HTMLTextAreaElement>("task-input");
 const runTaskBtn = byId<HTMLButtonElement>("run-task");
+const stopTaskBtn = byId<HTMLButtonElement>("stop-task");
+const queuedFollowupHint = byId<HTMLDivElement>("queued-followup-hint");
 const attachFileBtn = byId<HTMLButtonElement>("attach-file");
 const attachmentChipsRow = byId<HTMLDivElement>("attachment-chips");
 const eventLog = byId<HTMLDivElement>("event-log");
@@ -539,6 +542,24 @@ function setSetupControlsDisabled(disabled: boolean): void {
   customEmbeddedUriInput.disabled = disabled;
   customEmbeddedSearchInput.disabled = disabled;
   planFirstCheckbox.disabled = disabled;
+}
+
+/**
+ * The composer's running-vs-idle chrome: while a task is running, runTaskBtn
+ * stays enabled but relabels to "Queue" (its click handler branches on
+ * tab.running — see its own listener below) rather than being disabled
+ * outright, since there's otherwise no way to capture a follow-up thought
+ * typed mid-task; the Stop button and its hint appear alongside it. Reused
+ * by every site that already manages tab.running transitions for the
+ * active tab (the click handler itself, renderEvent's "done" case, the
+ * send-failure catch block, and tab-switch/replay's authoritative
+ * recomputation), so the three controls can never drift out of sync with
+ * each other the way three separately-maintained toggles eventually would.
+ */
+function setRunningComposerState(running: boolean): void {
+  runTaskBtn.textContent = running ? "Queue" : "Run";
+  stopTaskBtn.hidden = !running;
+  queuedFollowupHint.hidden = !running;
 }
 
 // One dropdown, one source of truth for "which model" — previously a
@@ -1389,6 +1410,7 @@ function renderEvent(event: AgentEvent): void {
     case "done":
       logLine(event.success ? `✔ done — ${event.summary}` : `✗ failed — ${event.summary}`, event.success ? "log-done" : "log-error");
       runTaskBtn.disabled = false;
+      setRunningComposerState(false);
       break;
   }
 }
@@ -1397,7 +1419,8 @@ window.agent.onEvent((incomingSessionId, event) => {
   routeEvent(tabRegistry, incomingSessionId, event);
   const tab = findTabForSession(tabRegistry, incomingSessionId);
   if (!tab) return; // a session with no open tab at all — same silent-discard as before this task
-  if (tab.tabId === tabRegistry.activeTabId) {
+  const isActive = tab.tabId === tabRegistry.activeTabId;
+  if (isActive) {
     renderEvent(event);
   }
   // Re-render the strip on every event regardless of which tab it belongs
@@ -1408,6 +1431,25 @@ window.agent.onEvent((incomingSessionId, event) => {
   // would be pure overhead on exactly the path this feature exists to
   // speed up.
   if (!isEphemeralStreamEvent(event)) renderTabStrip();
+
+  // A follow-up queued while this task was running (see queueFollowup) goes
+  // out now, automatically — but only while the user is still looking at
+  // this tab: sending it for a BACKGROUNDED tab would mean the next thing
+  // to appear in the shared event log belongs to a session the user isn't
+  // even viewing. Not active -> folded into draftTask instead, so it's just
+  // sitting in the composer, unsent, the next time this tab is switched to
+  // (syncFormFromTab already restores draftTask into taskInput on switch —
+  // nothing further needed there).
+  if (event.type === "done" && tab.queuedFollowup !== null) {
+    const queued = tab.queuedFollowup;
+    tab.queuedFollowup = null;
+    if (isActive) {
+      taskInput.value = queued;
+      runTaskBtn.click();
+    } else {
+      tab.draftTask = queued;
+    }
+  }
 });
 
 function formatBytes(bytes: number): string {
@@ -1636,6 +1678,7 @@ async function beginSession(tab: TabState, resume?: ResumePayload): Promise<void
       taskInput.disabled = false;
       attachFileBtn.disabled = false;
       runTaskBtn.disabled = false;
+      setRunningComposerState(false);
       logLine(
         resume ? `Resumed session (${provider.kind}, mode=${config.mode})` : `Session started (${provider.kind}, mode=${config.mode})`,
         "log-status"
@@ -1944,13 +1987,16 @@ function clearAndReplayEventLog(tab: TabState): void {
   startSessionBtn.textContent = tab.editingSession ? "Apply changes" : hasSession ? "Starting…" : "Start session";
   taskInput.disabled = !hasSession;
   attachFileBtn.disabled = !hasSession;
-  // Having a session is NOT the same as being free to send one: a backgrounded
-  // tab whose task is still in flight has a sessionId but must not offer Run,
-  // or switching back to it fires a second concurrent runTask at an already
-  // running session. The replayed `done` event above may well have re-enabled
-  // the button (renderEvent's done case does), which is exactly why this
-  // authoritative assignment comes after the replay.
-  runTaskBtn.disabled = !hasSession || tab.running;
+  // Only gated on having a session at all — a backgrounded tab whose task is
+  // still in flight does NOT need Run disabled the way it used to: clicking
+  // it while tab.running queues a follow-up (see queueFollowup) instead of
+  // firing a second concurrent runTask, so switching back to a running tab
+  // and clicking it is safe. The replayed `done` event above may well have
+  // left the button in either state (renderEvent's done case runs during
+  // replay too), which is exactly why this authoritative assignment comes
+  // after the replay.
+  runTaskBtn.disabled = !hasSession;
+  setRunningComposerState(tab.running);
 
   if (hasSession && tab.activeProvider) renderActiveModelBadge(tab.activeProvider);
   else activeModelBadge.hidden = true;
@@ -2066,6 +2112,7 @@ function resetToSetup(): void {
   taskInput.disabled = true;
   attachFileBtn.disabled = true;
   runTaskBtn.disabled = true;
+  setRunningComposerState(false);
   activeModelBadge.hidden = true;
   editSettingsBtn.hidden = true;
   editSettingsBtn.textContent = "Edit settings…";
@@ -2289,13 +2336,35 @@ sessionSearchInput.addEventListener("input", () => {
 
 void refreshSessionList("");
 
+/** Captures the composer's current text as a follow-up to send once the running task finishes (see the queuedFollowup field's own doc comment) — attachments aren't included; anything picked while a task is running just waits in tab.pendingAttachments for whatever is sent next, same as before this feature existed. A no-op on an empty composer — nothing to queue. */
+function queueFollowup(tab: TabState): void {
+  const text = taskInput.value.trim();
+  if (!text) return;
+  tab.queuedFollowup = tab.queuedFollowup ? `${tab.queuedFollowup}\n\n${text}` : text;
+  taskInput.value = "";
+  tab.draftTask = "";
+  logLine("Queued — will be sent automatically once the current task finishes.", "log-status");
+}
+
+stopTaskBtn.addEventListener("click", () => {
+  const tab = activeTab(tabRegistry);
+  if (!tab?.sessionId) return;
+  void window.agent.stopTask(tab.sessionId);
+});
+
 runTaskBtn.addEventListener("click", async () => {
   const tab = activeTab(tabRegistry);
-  if (!tab?.sessionId || (!taskInput.value.trim() && tab.pendingAttachments.length === 0)) return;
+  if (!tab?.sessionId) return;
+  if (tab.running) {
+    queueFollowup(tab);
+    return;
+  }
+  if (!taskInput.value.trim() && tab.pendingAttachments.length === 0) return;
   markFirstTaskSent();
   toolCards.clear();
   runTaskBtn.disabled = true;
   tab.running = true;
+  setRunningComposerState(true);
   const task = taskInput.value;
   const sentAttachments = tab.pendingAttachments;
 
@@ -2352,6 +2421,7 @@ runTaskBtn.addEventListener("click", async () => {
     tab.running = false;
     if (isActiveTab(tab)) {
       runTaskBtn.disabled = false;
+      setRunningComposerState(false);
       logLine(`✗ ${errorMessage(err)}`, "log-error");
     }
   }

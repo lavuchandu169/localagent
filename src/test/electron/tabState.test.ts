@@ -189,6 +189,7 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     activeProvider: null,
     editingSession: false,
     running: false,
+    queuedFollowup: null,
     ...overrides,
   };
 }

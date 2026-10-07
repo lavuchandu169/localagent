@@ -169,6 +169,10 @@ export class AgentSession {
   private turn = 0;
   private state: AgentState = "INITIALIZING";
   private cancelled = false;
+  /** Set by stopCurrentTask() — a lighter-weight sibling of `cancelled`: stops only the task in progress (aborting whatever model call is in flight) and winds the turn loop down to its normal terminal "done" event, but the session itself stays alive — a later run() call works normally. `cancelled` is reserved for cancel()'s permanent, whole-session teardown (see sessionRegistry.ts's cancelSession vs its stopTask). Reset at the start of every run() call, same lifetime as the other per-task flags above. */
+  private stopRequested = false;
+  /** Aborts the in-flight provider call the moment stopCurrentTask() is called — without this, `cancelled`/`stopRequested` are only checked at loop boundaries (top of the while loop, between tool calls), so a model response already streaming would otherwise keep running until it finished on its own. Freshly created at the start of every run() call; a controller from a previous task is never reused. */
+  private abortController: AbortController | null = null;
   /** Paths read_file has been attempted on this session, success or not — evidence the model actually looked before writing. */
   private readPaths = new Set<string>();
   /** The most recent task's checkpoint (see createCheckpoint) — one per task, not a deep undo stack. Overwritten the next time a task actually makes its first non-read tool call; a task that never writes anything leaves the previous task's checkpoint as the current "revert" target. A task that DOES attempt one but the attempt fails clears this to null instead of leaving the previous task's hash in place — otherwise "revert this task" would silently discard that earlier task's work too (final-review finding: agent core High #2). */
@@ -320,6 +324,13 @@ export class AgentSession {
 
   cancel() {
     this.cancelled = true;
+    this.abortController?.abort();
+  }
+
+  /** Stops only the CURRENTLY RUNNING task — see the stopRequested field's own doc comment for how this differs from cancel(). No-op if nothing is running (abortController is null between tasks); the caller (sessionRegistry.ts's stopTask) checks entry.running itself before ever reaching this, but a redundant call here is harmless either way. */
+  stopCurrentTask() {
+    this.stopRequested = true;
+    this.abortController?.abort();
   }
 
   /**
@@ -540,10 +551,12 @@ export class AgentSession {
     this.writeSucceededSinceLastVerify = false;
     this.correctiveNudgeAttemptsThisTask = 0;
     this.planProposedThisTask = false;
+    this.stopRequested = false;
+    this.abortController = new AbortController();
     yield* this.autoReadNamedFiles(task);
     const maxTurns = this.opts.maxTurns ?? 25;
 
-    while (!this.cancelled) {
+    while (!this.cancelled && !this.stopRequested) {
       if (this.turn >= maxTurns) {
         this.state = "FAILED";
         yield { type: "error", message: `Stopped: exceeded max turns (${maxTurns}).` };
@@ -562,6 +575,7 @@ export class AgentSession {
             model: this.opts.model,
             messages: this.messages,
             tools: this.opts.tools.toSchema(),
+            signal: this.abortController.signal,
           })) {
             if (streamEvent.type === "done") {
               gotDone = streamEvent.response;
@@ -585,9 +599,17 @@ export class AgentSession {
             model: this.opts.model,
             messages: this.messages,
             tools: this.opts.tools.toSchema(),
+            signal: this.abortController.signal,
           });
         }
       } catch (err: any) {
+        // The in-flight call was deliberately aborted by cancel()/
+        // stopCurrentTask(), not a real provider failure — fall through to
+        // the loop's own exit instead of reporting it as one. Checked
+        // before the retryable-fallback branch below: a provider that
+        // reports an abort as some generic retryable error must not
+        // trigger a fallback retry for a task the user just asked to stop.
+        if (this.cancelled || this.stopRequested) break;
         if (err instanceof ProviderChatError && err.retryable && this.opts.fallbackProviders?.length) {
           if (streamedAnything) yield { type: "stream.reset" };
           const next = this.opts.fallbackProviders.shift()!;
@@ -725,7 +747,7 @@ export class AgentSession {
       const turnRepliesStart = this.messages.length;
 
       for (const rawCall of response.turn.toolCalls) {
-        if (this.cancelled) break;
+        if (this.cancelled || this.stopRequested) break;
         // An edit_file call carrying old_string/new_string instead of content
         // is resolved to a full content HERE, before permission evaluation or
         // diff computation ever see it — both of those (and the tool's own

@@ -35,11 +35,12 @@ export function formatErrorMessage(status: number, text: string): string {
  * mechanics or error handling itself. One shared function, used by both
  * classes' chat() and chatStream(), instead of four copies.
  */
-export async function postChatCompletions(baseUrl: string, headers: Record<string, string>, body: unknown): Promise<Response> {
+export async function postChatCompletions(baseUrl: string, headers: Record<string, string>, body: unknown, signal?: AbortSignal): Promise<Response> {
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -162,7 +163,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   async chat(request: ChatRequest): Promise<ChatResponse> {
     try {
       const body = buildChatBody(request);
-      const res = await postChatCompletions(this.opts.baseUrl, this.headers(), body);
+      const res = await postChatCompletions(this.opts.baseUrl, this.headers(), body, request.signal);
       const data: any = await res.json();
       const choice = data.choices?.[0];
       return fromOpenAIChatMessage(choice?.message ?? {}, data);
@@ -179,7 +180,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     try {
       const body = buildChatBody(request);
       body.stream = true;
-      const res = await postChatCompletions(this.opts.baseUrl, this.headers(), body);
+      const res = await postChatCompletions(this.opts.baseUrl, this.headers(), body, request.signal);
       yield* streamOpenAIShapeResponse(res);
     } catch (err) {
       wrapNonProviderError(err);
