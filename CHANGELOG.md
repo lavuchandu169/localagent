@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.98 — 2026-10-07
+
+- Extract the command palette into its own module (renderer.ts split, part 5)
+
 ## v0.1.0-beta.97 — 2026-10-07
 
 - Extract the MCP servers panel into its own module (renderer.ts split, part 3)
