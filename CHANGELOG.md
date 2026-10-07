@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.104 — 2026-10-07
+
+- Upgrade @modelcontextprotocol/sdk to patched version, add npm audit to CI
+
 ## v0.1.0-beta.103 — 2026-10-07
 
 - Let the user stop a running task, and queue a follow-up while one runs
