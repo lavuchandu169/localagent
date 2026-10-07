@@ -4,6 +4,8 @@ release/
 *.log
 .env
 .claude/
+.agents/
+skills-lock.json
 .superpowers/
 .DS_Store
 docs/superpowers/
