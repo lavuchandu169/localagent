@@ -42,6 +42,7 @@ import { initFreellmapiPanel, openFreellmapiPanel, closeFreellmapiPanel } from "
 import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 import { initFreellmapiFallbackPanel, openFreellmapiFallbackPanel, closeFreellmapiFallbackPanel } from "./freellmapiFallbackPanel.js";
 import { byId } from "./domHelpers.js";
+import { isAllowedExternalUrl } from "../externalUrl.js";
 import {
   initOnboarding,
   markFirstTaskSent,
@@ -2239,7 +2240,15 @@ function renderChangesPanel(changes: FileChangeWithDiff[]): void {
     const removed = countDiffLines(file.diff, "removed");
     const counts = document.createElement("span");
     counts.className = "changed-file-counts";
-    counts.innerHTML = `<span class="diff-added-count">+${added}</span> <span class="diff-removed-count">-${removed}</span>`;
+    const addedCount = document.createElement("span");
+    addedCount.className = "diff-added-count";
+    addedCount.textContent = `+${added}`;
+    const removedCount = document.createElement("span");
+    removedCount.className = "diff-removed-count";
+    removedCount.textContent = `-${removed}`;
+    counts.appendChild(addedCount);
+    counts.appendChild(document.createTextNode(" "));
+    counts.appendChild(removedCount);
     header.appendChild(counts);
     section.appendChild(header);
 
@@ -2968,7 +2977,32 @@ githubConnectBtn.addEventListener("click", () => {
   githubDeviceCodeEl.hidden = true;
   const stopListening = window.agent.onGithubDeviceCode((code) => {
     githubDeviceCodeEl.hidden = false;
-    githubDeviceCodeEl.innerHTML = `Enter code <strong>${code.userCode}</strong> at <a href="${code.verificationUri}" target="_blank" rel="noopener">${code.verificationUri}</a>`;
+    // Security/readability finding (code-review-and-quality pass): this
+    // used to build the whole line as an HTML template literal — code's
+    // userCode and verificationUri come from GitHub's device-flow
+    // response (external data), the same "never parsed as HTML" rule
+    // this file states explicitly elsewhere (renderMcpServerRow,
+    // renderTabStrip's doc comments) for anything not typed by this
+    // process. A malformed/compromised verificationUri set directly as
+    // `.href` could also carry a javascript: scheme and execute on
+    // click, not just render wrong — isAllowedExternalUrl (already used
+    // for this app's other external-open paths) gates that.
+    githubDeviceCodeEl.innerHTML = "";
+    githubDeviceCodeEl.appendChild(document.createTextNode("Enter code "));
+    const codeEl = document.createElement("strong");
+    codeEl.textContent = code.userCode;
+    githubDeviceCodeEl.appendChild(codeEl);
+    githubDeviceCodeEl.appendChild(document.createTextNode(" at "));
+    if (isAllowedExternalUrl(code.verificationUri)) {
+      const link = document.createElement("a");
+      link.href = code.verificationUri;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = code.verificationUri;
+      githubDeviceCodeEl.appendChild(link);
+    } else {
+      githubDeviceCodeEl.appendChild(document.createTextNode(code.verificationUri));
+    }
   });
   void withBusyLabel(githubConnectBtn, "Waiting for authorization…", async () => {
     try {
