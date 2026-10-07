@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.100 — 2026-10-07
+
+- Extract the update banner into its own module (renderer.ts split, part 7)
+
 ## v0.1.0-beta.99 — 2026-10-07
 
 - Extract the account/auth panel into its own module (renderer.ts split, part 6)
