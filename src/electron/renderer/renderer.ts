@@ -41,9 +41,10 @@ import { estimateCostUsd } from "../../anthropicPricing.js";
 import { initFreellmapiPanel, openFreellmapiPanel, closeFreellmapiPanel } from "./freellmapiPanel.js";
 import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 import { initFreellmapiFallbackPanel, openFreellmapiFallbackPanel, closeFreellmapiFallbackPanel } from "./freellmapiFallbackPanel.js";
-import { byId } from "./domHelpers.js";
+import { byId, errorMessage, withBusyLabel } from "./domHelpers.js";
 import { isAllowedExternalUrl } from "../externalUrl.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
+import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import {
   initOnboarding,
   markFirstTaskSent,
@@ -135,8 +136,7 @@ interface LiveSessionSnapshot {
   workspaceRoot: string;
 }
 
-type McpServerStatus = { state: "connecting" } | { state: "connected"; toolCount: number } | { state: "failed"; error: string };
-type McpServerView = { id: string; name: string; command: string; args: string[]; status: McpServerStatus };
+export type McpServerStatus = { state: "connecting" } | { state: "connected"; toolCount: number } | { state: "failed"; error: string };
 
 interface AgentBridge {
   startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string; checkpointHash: string | null }>;
@@ -215,29 +215,6 @@ interface AgentBridge {
 declare global {
   interface Window {
     agent: AgentBridge;
-  }
-}
-
-/**
- * Disables `button` and swaps its label to `busyText` while `fn` runs,
- * always restoring the original label and re-enabling it afterward —
- * regardless of outcome. The button-level equivalent of a spinner, for
- * actions (sign-in, sign-out) that otherwise give no visible sign
- * anything is happening beyond a plain disabled state, which reads as
- * unresponsive rather than "working."  Not used for start-session, whose
- * disabled state deliberately does NOT reset on success (the setup
- * controls stay locked once a session is running) — that one keeps its
- * own inline handling instead of this always-restore helper.
- */
-async function withBusyLabel<T>(button: HTMLButtonElement, busyText: string, fn: () => Promise<T>): Promise<T> {
-  const originalText = button.textContent;
-  button.disabled = true;
-  button.textContent = busyText;
-  try {
-    return await fn();
-  } finally {
-    button.disabled = false;
-    button.textContent = originalText;
   }
 }
 
@@ -334,23 +311,6 @@ const commandPaletteResults = byId<HTMLUListElement>("command-palette-results");
 const commandPaletteEmpty = byId<HTMLDivElement>("command-palette-empty");
 const freellmapiPanelEl = byId<HTMLDivElement>("freellmapi-panel");
 const freellmapiFallbackPanelEl = byId<HTMLDivElement>("freellmapi-fallback-panel");
-const mcpServersToggle = byId<HTMLButtonElement>("mcp-servers-toggle");
-const mcpServersPanel = byId<HTMLDivElement>("mcp-servers-panel");
-const mcpServersListView = byId<HTMLDivElement>("mcp-servers-list-view");
-const mcpServersList = byId<HTMLDivElement>("mcp-servers-list");
-const mcpServersListError = byId<HTMLDivElement>("mcp-servers-list-error");
-const mcpServersEmpty = byId<HTMLDivElement>("mcp-servers-empty");
-const mcpServersAddToggle = byId<HTMLButtonElement>("mcp-servers-add-toggle");
-const mcpServersFormView = byId<HTMLDivElement>("mcp-servers-form-view");
-const mcpServersFormBack = byId<HTMLButtonElement>("mcp-servers-form-back");
-const mcpServerNameInput = byId<HTMLInputElement>("mcp-server-name");
-const mcpServerCommandInput = byId<HTMLInputElement>("mcp-server-command");
-const mcpServerArgsInput = byId<HTMLInputElement>("mcp-server-args");
-const mcpServerEnvInput = byId<HTMLTextAreaElement>("mcp-server-env");
-const mcpServerFormError = byId<HTMLDivElement>("mcp-server-form-error");
-const mcpServerFormSave = byId<HTMLButtonElement>("mcp-server-form-save");
-const mcpServersClose = byId<HTMLButtonElement>("mcp-servers-close");
-const mcpServersCloseX = byId<HTMLButtonElement>("mcp-servers-close-x");
 const settingsToggle = byId<HTMLButtonElement>("settings-toggle");
 const settingsPanel = byId<HTMLDivElement>("settings-panel");
 const settingsClose = byId<HTMLButtonElement>("settings-close");
@@ -869,7 +829,7 @@ async function buildReportIssueUrl(): Promise<string> {
  */
 function closeAllFullScreenModals(): boolean {
   if (isAboutPanelOpen()) closeAboutPanel();
-  if (!mcpServersPanel.hidden) closeMcpServersPanel();
+  if (isMcpServersPanelOpen()) closeMcpServersPanel();
   if (!settingsPanel.hidden) closeSettingsPanel();
   if (!commandPaletteOverlay.hidden) closeCommandPalette();
   closeFreellmapiPanel();
@@ -879,155 +839,8 @@ function closeAllFullScreenModals(): boolean {
 const aboutPanelDeps: AboutPanelDeps = { closeOtherFullScreenModals: closeAllFullScreenModals, buildReportIssueUrl };
 initAboutPanel(aboutPanelDeps);
 
-function closeMcpServersPanel() {
-  closeOverlayPanel(mcpServersPanel);
-  mcpServersToggle.setAttribute("aria-expanded", "false");
-  mcpServersToggle.focus();
-}
-
-function showMcpServersListView() {
-  mcpServersFormView.hidden = true;
-  mcpServersListView.hidden = false;
-  mcpServerFormError.textContent = "";
-}
-
-/** Builds one server row via createElement/.textContent, never innerHTML — server.name/command/args and a failed connection's status.error are all untrusted (user-typed, or emitted by a third-party MCP server process), so they must never be parsed as HTML. Same pattern as refreshDownloadedModelsList's list items elsewhere in this file. */
-function renderMcpServerRow(server: McpServerView): HTMLDivElement {
-  const row = document.createElement("div");
-  row.className = "mcp-server-row";
-  const dot = server.status.state === "connected" ? "🟢" : server.status.state === "connecting" ? "🟡" : "🔴";
-  const detail =
-    server.status.state === "connected"
-      ? `${server.status.toolCount} tool${server.status.toolCount === 1 ? "" : "s"} available`
-      : server.status.state === "connecting"
-        ? "Connecting…"
-        : server.status.error;
-
-  const dotSpan = document.createElement("span");
-  dotSpan.className = "mcp-server-status-dot";
-  dotSpan.textContent = dot;
-
-  const nameSpan = document.createElement("span");
-  nameSpan.className = "mcp-server-name";
-  nameSpan.textContent = server.name;
-
-  const commandSpan = document.createElement("span");
-  commandSpan.className = "mcp-server-detail";
-  commandSpan.textContent = [server.command, ...server.args].join(" ");
-
-  const detailSpan = document.createElement("span");
-  detailSpan.className = "mcp-server-detail";
-  detailSpan.textContent = detail;
-
-  const removeBtn = document.createElement("button");
-  removeBtn.type = "button";
-  removeBtn.textContent = "Remove";
-  removeBtn.addEventListener("click", () => {
-    void (async () => {
-      try {
-        await window.agent.removeMcpServer(server.id);
-      } catch (err) {
-        mcpServersListError.textContent = `Couldn't remove "${server.name}": ${errorMessage(err)}`;
-      }
-      await refreshMcpServersList();
-    })();
-  });
-
-  row.appendChild(dotSpan);
-  row.appendChild(nameSpan);
-  row.appendChild(commandSpan);
-  row.appendChild(detailSpan);
-  row.appendChild(removeBtn);
-  return row;
-}
-
-/** Never throws — a failure to list (or, via the callers above, to remove) a server leaves the panel showing stale data, but always with a visible reason rather than silently, per the existing #mcp-server-form-error pattern this mirrors for the list view. */
-async function refreshMcpServersList() {
-  try {
-    const servers = await window.agent.listMcpServers();
-    mcpServersListError.textContent = "";
-    mcpServersList.innerHTML = "";
-    mcpServersEmpty.hidden = servers.length > 0;
-    for (const server of servers) mcpServersList.appendChild(renderMcpServerRow(server));
-  } catch (err) {
-    mcpServersListError.textContent = `Couldn't load MCP servers: ${errorMessage(err)}`;
-  }
-}
-
-mcpServersToggle.addEventListener("click", () => {
-  const opening = mcpServersPanel.hidden;
-  if (opening) {
-    if (!closeAllFullScreenModals()) return;
-  }
-  if (opening) openOverlayPanel(mcpServersPanel);
-  else closeOverlayPanel(mcpServersPanel);
-  mcpServersToggle.setAttribute("aria-expanded", String(opening));
-  if (opening) {
-    showMcpServersListView();
-    void refreshMcpServersList();
-  }
-});
-
-mcpServersClose.addEventListener("click", closeMcpServersPanel);
-mcpServersCloseX.addEventListener("click", closeMcpServersPanel);
-mcpServersPanel.addEventListener("click", (e) => {
-  if (e.target === mcpServersPanel) closeMcpServersPanel();
-});
-
-mcpServersAddToggle.addEventListener("click", () => {
-  mcpServerNameInput.value = "";
-  mcpServerCommandInput.value = "";
-  mcpServerArgsInput.value = "";
-  mcpServerEnvInput.value = "";
-  mcpServerFormError.textContent = "";
-  mcpServersListView.hidden = true;
-  mcpServersFormView.hidden = false;
-  mcpServerNameInput.focus();
-});
-
-mcpServersFormBack.addEventListener("click", showMcpServersListView);
-
-/** One KEY=value per line; blank lines and lines with no '=' are ignored. */
-function parseEnvVarsText(text: string): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq === -1) continue;
-    env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
-  }
-  return env;
-}
-
-mcpServerFormSave.addEventListener("click", () => {
-  mcpServerFormError.textContent = "";
-  const name = mcpServerNameInput.value.trim();
-  const command = mcpServerCommandInput.value.trim();
-  if (!name || !command) {
-    mcpServerFormError.textContent = "Name and command are required.";
-    return;
-  }
-  const args = mcpServerArgsInput.value.trim().split(/\s+/).filter(Boolean);
-  const env = parseEnvVarsText(mcpServerEnvInput.value);
-  void withBusyLabel(mcpServerFormSave, "Saving…", async () => {
-    try {
-      const result = await window.agent.addMcpServer({ name, command, args, env });
-      if (result.ok) {
-        showMcpServersListView();
-        await refreshMcpServersList();
-      } else {
-        mcpServerFormError.textContent = result.error;
-      }
-    } catch (err) {
-      mcpServerFormError.textContent = errorMessage(err);
-    }
-  });
-});
-
-window.agent.onMcpServerStatusChanged(() => {
-  if (!mcpServersPanel.hidden && !mcpServersListView.hidden) void refreshMcpServersList();
-});
+const mcpServersPanelDeps: McpServersPanelDeps = { closeOtherFullScreenModals: closeAllFullScreenModals };
+initMcpServersPanel(mcpServersPanelDeps);
 
 // Tracks whether the user actually typed into the secret field this time
 // it was open — saving must NOT overwrite a previously-saved secret just
@@ -1036,16 +849,6 @@ let settingsSecretTouched = false;
 settingsClientSecretInput.addEventListener("input", () => {
   settingsSecretTouched = true;
 });
-
-/** Readability finding (code-review-and-quality pass): this used to be
- * used only by the catch blocks openSettingsPanel's own correctness fix
- * added, leaving 9 other pre-existing inline
- * `err instanceof Error ? err.message : String(err)` occurrences
- * scattered through this file — now the single shared spelling used
- * everywhere that pattern is needed. */
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /**
  * Readability finding (code-review-and-quality pass): Anthropic, OpenAI,
@@ -1233,7 +1036,7 @@ function staticPaletteCommands(): PaletteCommand[] {
     { id: "new-session", label: "New session", run: () => { closeCommandPalette(); newSessionBtn.click(); } },
     { id: "open-settings", label: "Open Settings", run: () => { closeCommandPalette(); settingsToggle.click(); } },
     { id: "open-about", label: "Open About", run: () => { closeCommandPalette(); openAboutPanel(aboutPanelDeps); } },
-    { id: "open-mcp-servers", label: "Open MCP Servers", run: () => { closeCommandPalette(); mcpServersToggle.click(); } },
+    { id: "open-mcp-servers", label: "Open MCP Servers", run: () => { closeCommandPalette(); openMcpServersPanel(mcpServersPanelDeps); } },
   ];
 }
 
@@ -1363,7 +1166,7 @@ document.addEventListener("keydown", (e) => {
   if (isOnboardingOpen()) dismissOnboarding();
   else if (isWhatsNewOpen()) dismissWhatsNew();
   else if (isAboutPanelOpen()) closeAboutPanel();
-  else if (!mcpServersPanel.hidden) closeMcpServersPanel();
+  else if (isMcpServersPanelOpen()) closeMcpServersPanel();
   else if (!settingsPanel.hidden) closeSettingsPanel();
   else if (!commandPaletteOverlay.hidden) closeCommandPalette();
   else if (!changesPanel.hidden) closeChangesPanel();
