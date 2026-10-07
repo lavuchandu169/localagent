@@ -1,0 +1,98 @@
+WEBVTT
+
+00:00:01.200 --> 00:00:05.140
+Most AI coding tools want you to trust a server you don't control.
+
+00:00:05.140 --> 00:00:06.812
+This one doesn't ask you to.
+
+00:00:08.810 --> 00:00:13.576
+localagent is a local-first coding agent that actually gets things done.
+
+00:00:13.576 --> 00:00:18.144
+Bring your own model: an embedded GGUF file, Ollama, LM Studio, vLLM,
+
+00:00:18.144 --> 00:00:22.315
+or a cloud API with your own key, and you get a complete agent.
+
+00:00:22.315 --> 00:00:26.419
+It reads your code, proposes changes, and checks its own work.
+
+00:00:26.419 --> 00:00:28.074
+No telemetry, no account,
+
+00:00:28.074 --> 00:00:33.436
+and nothing leaves your machine unless you point it at a cloud provider yourself.
+
+00:00:35.440 --> 00:00:39.847
+Pick a workspace, pick a model: a tiny local model for offline work,
+
+00:00:39.847 --> 00:00:45.744
+a custom model straight from Hugging Face, or Claude, OpenAI, and Gemini with your own key.
+
+00:00:45.744 --> 00:00:46.457
+Then start.
+
+00:00:46.457 --> 00:00:49.178
+Every tab keeps its own provider and mode,
+
+00:00:49.178 --> 00:00:53.650
+so you can run a careful cloud session next to a throwaway local one.
+
+00:00:55.650 --> 00:00:58.558
+Send a task and watch the loop: read, act, check.
+
+00:00:58.558 --> 00:01:02.771
+Every file write shows you the exact diff before anything touches disk.
+
+00:01:02.771 --> 00:01:04.314
+You approve what you want.
+
+00:01:04.314 --> 00:01:06.806
+This isn't the model guessing what's safe.
+
+00:01:06.806 --> 00:01:09.654
+It's a deterministic permission engine deciding.
+
+00:01:11.650 --> 00:01:17.300
+Four modes, plain code rules, not model judgment: ask every time, auto-accept edits,
+
+00:01:17.300 --> 00:01:21.605
+auto-accept only what's provably safe, or plan first, read-only.
+
+00:01:21.605 --> 00:01:23.959
+And every task gets one checkpoint.
+
+00:01:23.959 --> 00:01:29.946
+If it goes sideways, revert, and your workspace is exactly how it was before you hit Run.
+
+00:01:31.950 --> 00:01:33.644
+Add your own tools over MCP.
+
+00:01:33.644 --> 00:01:37.213
+Sign in with Google and your sessions sync across machines.
+
+00:01:37.213 --> 00:01:40.358
+Switch providers mid-project without losing history.
+
+00:01:40.358 --> 00:01:41.931
+This isn't a model runner.
+
+00:01:41.931 --> 00:01:45.681
+It's the agent layer on top of whichever model you trust most.
+
+00:01:47.680 --> 00:01:52.495
+Run graphify on a codebase and it builds a real knowledge graph: what calls what,
+
+00:01:52.495 --> 00:01:56.894
+which files cluster together, the connections a file tree never shows you.
+
+00:01:58.890 --> 00:01:59.663
+localagent.
+
+00:01:59.663 --> 00:02:02.402
+Free, local-first, no account required.
+
+00:02:02.402 --> 00:02:06.406
+Download it for Mac or Windows, and bring your own model.
+
