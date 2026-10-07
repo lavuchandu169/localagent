@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.102 — 2026-10-07
+
+- Gitignore local skill-tooling state (.agents/, skills-lock.json)
+
 ## v0.1.0-beta.101 — 2026-10-07
 
 - Replace the hand-chained test script with an auto-discovering runner, and split src/test/ by domain
