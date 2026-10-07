@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.103 — 2026-10-07
+
+- Let the user stop a running task, and queue a follow-up while one runs
+
 ## v0.1.0-beta.102 — 2026-10-07
 
 - Gitignore local skill-tooling state (.agents/, skills-lock.json)
