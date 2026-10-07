@@ -53,6 +53,7 @@ import {
   resetChangesPanel,
   type ChangesPanelDeps,
 } from "./changesPanel.js";
+import { initCommandPalette, isCommandPaletteOpen, closeCommandPalette, type CommandPaletteDeps } from "./commandPalette.js";
 import {
   initOnboarding,
   markFirstTaskSent,
@@ -89,7 +90,7 @@ interface AuthIdentity {
 type SignInResult = AuthIdentity | { error: string };
 type AuthStatus = { signedIn: false } | ({ signedIn: true } & AuthIdentity);
 
-interface SessionIndexEntry {
+export interface SessionIndexEntry {
   id: string;
   title: string;
   updatedAt: number;
@@ -311,12 +312,6 @@ const updateBannerLink = byId<HTMLAnchorElement>("update-banner-link");
 const updateBannerOpenFileBtn = byId<HTMLButtonElement>("update-banner-open-file");
 const updateBannerRestartBtn = byId<HTMLButtonElement>("update-banner-restart");
 const updateBannerDismiss = byId<HTMLButtonElement>("update-banner-dismiss");
-const commandPaletteToggle = byId<HTMLButtonElement>("command-palette-toggle");
-const commandPaletteOverlay = byId<HTMLDivElement>("command-palette-overlay");
-const commandPaletteCloseX = byId<HTMLButtonElement>("command-palette-close-x");
-const commandPaletteInput = byId<HTMLInputElement>("command-palette-input");
-const commandPaletteResults = byId<HTMLUListElement>("command-palette-results");
-const commandPaletteEmpty = byId<HTMLDivElement>("command-palette-empty");
 const freellmapiPanelEl = byId<HTMLDivElement>("freellmapi-panel");
 const freellmapiFallbackPanelEl = byId<HTMLDivElement>("freellmapi-fallback-panel");
 const settingsToggle = byId<HTMLButtonElement>("settings-toggle");
@@ -835,7 +830,7 @@ function closeAllFullScreenModals(): boolean {
   if (isAboutPanelOpen()) closeAboutPanel();
   if (isMcpServersPanelOpen()) closeMcpServersPanel();
   if (!settingsPanel.hidden) closeSettingsPanel();
-  if (!commandPaletteOverlay.hidden) closeCommandPalette();
+  if (isCommandPaletteOpen()) closeCommandPalette();
   closeFreellmapiPanel();
   return closeFreellmapiFallbackPanel();
 }
@@ -1027,142 +1022,15 @@ settingsPanel.addEventListener("click", (e) => {
   if (e.target === settingsPanel) closeSettingsPanel();
 });
 
-// Command palette (Ctrl+K / ⌘K) — navigation only: jump to an existing
-// session, or open one of the three panels above. Deliberately excludes
-// anything that mutates a running session's state (switching its model,
-// starting a task, reverting a checkpoint) — those need their own form UI,
-// not a one-line list entry, and mixing "go to X" with "do X to the
-// currently active session" in the same list invites mistakes.
-interface PaletteCommand {
-  id: string;
-  label: string;
-  hint?: string;
-  run: () => void;
-}
-
-/** The four fixed entries, always present regardless of what's typed — the dynamic per-session entries (below) are appended after these. */
-function staticPaletteCommands(): PaletteCommand[] {
-  return [
-    { id: "new-session", label: "New session", run: () => { closeCommandPalette(); newSessionBtn.click(); } },
-    { id: "open-settings", label: "Open Settings", run: () => { closeCommandPalette(); settingsToggle.click(); } },
-    { id: "open-about", label: "Open About", run: () => { closeCommandPalette(); openAboutPanel(aboutPanelDeps); } },
-    { id: "open-mcp-servers", label: "Open MCP Servers", run: () => { closeCommandPalette(); openMcpServersPanel(mcpServersPanelDeps); } },
-  ];
-}
-
-/** Fetched fresh each time the palette opens (see openCommandPalette) — hasn't gone stale by the time it's used, since the palette is a short-lived one-shot flow, not something left open in the background. */
-let paletteSessions: SessionIndexEntry[] = [];
-
-function sessionPaletteCommands(): PaletteCommand[] {
-  return paletteSessions.map((entry) => ({
-    id: `session:${entry.id}`,
-    label: entry.title,
-    hint: "session",
-    run: () => {
-      closeCommandPalette();
-      void resumeSession(entry.id);
-    },
-  }));
-}
-
-function filteredPaletteCommands(): PaletteCommand[] {
-  const query = commandPaletteInput.value.trim().toLowerCase();
-  const all = [...staticPaletteCommands(), ...sessionPaletteCommands()];
-  if (!query) return all;
-  return all.filter((c) => c.label.toLowerCase().includes(query));
-}
-
-let paletteSelectedIndex = 0;
-
-function renderCommandPaletteResults(): void {
-  const commands = filteredPaletteCommands();
-  paletteSelectedIndex = Math.min(paletteSelectedIndex, Math.max(commands.length - 1, 0));
-  commandPaletteResults.innerHTML = "";
-  commandPaletteEmpty.hidden = commands.length > 0;
-  commands.forEach((cmd, i) => {
-    const li = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = cmd.label;
-    if (cmd.hint) {
-      const hintSpan = document.createElement("span");
-      hintSpan.className = "command-palette-hint";
-      hintSpan.textContent = cmd.hint;
-      button.appendChild(hintSpan);
-    }
-    if (i === paletteSelectedIndex) {
-      button.classList.add("selected");
-      // Keeps arrow-key navigation visible once the list is taller than its
-      // own scrollable area (many saved sessions) — a mouse click never
-      // needs this, only ArrowUp/ArrowDown do.
-      button.scrollIntoView({ block: "nearest" });
-    }
-    button.addEventListener("click", () => cmd.run());
-    li.appendChild(button);
-    commandPaletteResults.appendChild(li);
-  });
-}
-
-function closeCommandPalette(): void {
-  closeOverlayPanel(commandPaletteOverlay);
-  commandPaletteToggle.setAttribute("aria-expanded", "false");
-  commandPaletteToggle.focus();
-}
-
-function openCommandPalette(): void {
-  if (!closeAllFullScreenModals()) return;
-  commandPaletteInput.value = "";
-  paletteSelectedIndex = 0;
-  openOverlayPanel(commandPaletteOverlay);
-  commandPaletteToggle.setAttribute("aria-expanded", "true");
-  renderCommandPaletteResults(); // static commands show immediately; the line below fills in sessions once they've loaded
-  commandPaletteInput.focus();
-  void window.agent
-    .listSessions()
-    .then((entries) => {
-      paletteSessions = entries;
-      if (!commandPaletteOverlay.hidden) renderCommandPaletteResults();
-    })
-    .catch((err) => console.error("[command-palette] listSessions failed:", err));
-}
-
-commandPaletteToggle.addEventListener("click", () => {
-  if (commandPaletteOverlay.hidden) openCommandPalette();
-  else closeCommandPalette();
-});
-commandPaletteCloseX.addEventListener("click", closeCommandPalette);
-commandPaletteOverlay.addEventListener("click", (e) => {
-  if (e.target === commandPaletteOverlay) closeCommandPalette();
-});
-
-commandPaletteInput.addEventListener("input", () => {
-  paletteSelectedIndex = 0;
-  renderCommandPaletteResults();
-});
-
-commandPaletteInput.addEventListener("keydown", (e) => {
-  const commands = filteredPaletteCommands();
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    paletteSelectedIndex = Math.min(paletteSelectedIndex + 1, commands.length - 1);
-    renderCommandPaletteResults();
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    paletteSelectedIndex = Math.max(paletteSelectedIndex - 1, 0);
-    renderCommandPaletteResults();
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    commands[paletteSelectedIndex]?.run();
-  }
-});
-
-document.addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-    e.preventDefault();
-    if (commandPaletteOverlay.hidden) openCommandPalette();
-    else closeCommandPalette();
-  }
-});
+const commandPaletteDeps: CommandPaletteDeps = {
+  closeOtherFullScreenModals: closeAllFullScreenModals,
+  openNewSession: () => newSessionBtn.click(),
+  openSettings: () => settingsToggle.click(),
+  openAbout: () => openAboutPanel(aboutPanelDeps),
+  openMcpServers: () => openMcpServersPanel(mcpServersPanelDeps),
+  resumeSession: (id) => void resumeSession(id),
+};
+initCommandPalette(commandPaletteDeps);
 
 // Escape closes whichever of these dismissible panels/modals is currently
 // open — the standard keyboard expectation. Onboarding and what's-new take
@@ -1178,7 +1046,7 @@ document.addEventListener("keydown", (e) => {
   else if (isAboutPanelOpen()) closeAboutPanel();
   else if (isMcpServersPanelOpen()) closeMcpServersPanel();
   else if (!settingsPanel.hidden) closeSettingsPanel();
-  else if (!commandPaletteOverlay.hidden) closeCommandPalette();
+  else if (isCommandPaletteOpen()) closeCommandPalette();
   else if (isChangesPanelOpen()) closeChangesPanel();
   else if (!freellmapiPanelEl.hidden) closeFreellmapiPanel();
   else if (!freellmapiFallbackPanelEl.hidden) closeFreellmapiFallbackPanel();
