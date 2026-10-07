@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.96 — 2026-10-07
+
+- Extract the About panel into its own module (renderer.ts split, part 2)
+
 ## v0.1.0-beta.95 — 2026-10-07
 
 - docs: replace the full-demo video with a narrated walkthrough
