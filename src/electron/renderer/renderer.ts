@@ -41,7 +41,6 @@ import { initFreellmapiPanel, openFreellmapiPanel, closeFreellmapiPanel } from "
 import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 import { initFreellmapiFallbackPanel, openFreellmapiFallbackPanel, closeFreellmapiFallbackPanel } from "./freellmapiFallbackPanel.js";
 import { byId, errorMessage, withBusyLabel } from "./domHelpers.js";
-import { isAllowedExternalUrl } from "../externalUrl.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import { renderDiff } from "./diffView.js";
@@ -54,6 +53,7 @@ import {
   type ChangesPanelDeps,
 } from "./changesPanel.js";
 import { initCommandPalette, isCommandPaletteOpen, closeCommandPalette, type CommandPaletteDeps } from "./commandPalette.js";
+import { initAuthPanel, renderAuthState, refreshGithubStatus, type AuthPanelDeps } from "./authPanel.js";
 import {
   initOnboarding,
   markFirstTaskSent,
@@ -88,7 +88,7 @@ interface AuthIdentity {
   pictureUrl: string | null;
 }
 type SignInResult = AuthIdentity | { error: string };
-type AuthStatus = { signedIn: false } | ({ signedIn: true } & AuthIdentity);
+export type AuthStatus = { signedIn: false } | ({ signedIn: true } & AuthIdentity);
 
 export interface SessionIndexEntry {
   id: string;
@@ -339,20 +339,6 @@ const geminiEnvOverrideNotice = byId<HTMLDivElement>("gemini-env-override");
 const geminiSettingsError = byId<HTMLDivElement>("gemini-settings-error");
 const geminiSettingsSaved = byId<HTMLDivElement>("gemini-settings-saved");
 const geminiSettingsSaveBtn = byId<HTMLButtonElement>("gemini-settings-save");
-const googleSignInBtn = byId<HTMLButtonElement>("google-sign-in");
-const signOutBtn = byId<HTMLButtonElement>("sign-out-btn");
-const githubConnectBtn = byId<HTMLButtonElement>("github-connect");
-const githubDisconnectBtn = byId<HTMLButtonElement>("github-disconnect");
-const githubNotConnectedEl = byId<HTMLDivElement>("github-not-connected");
-const githubConnectedEl = byId<HTMLDivElement>("github-connected");
-const githubConnectedAsEl = byId<HTMLSpanElement>("github-connected-as");
-const githubDeviceCodeEl = byId<HTMLDivElement>("github-device-code");
-const githubSettingsErrorEl = byId<HTMLDivElement>("github-settings-error");
-const authSignedOut = byId<HTMLDivElement>("auth-signed-out");
-const authSignedIn = byId<HTMLDivElement>("auth-signed-in");
-const authAvatar = byId<HTMLSpanElement>("auth-avatar");
-const authName = byId<HTMLSpanElement>("auth-name");
-const authError = byId<HTMLDivElement>("auth-error");
 const downloadProgressRow = byId<HTMLDivElement>("download-progress");
 const downloadBarFill = byId<HTMLDivElement>("download-bar-fill");
 const downloadLabel = byId<HTMLSpanElement>("download-label");
@@ -2399,120 +2385,6 @@ taskInput.addEventListener("input", () => {
   if (tab) tab.draftTask = taskInput.value;
 });
 
-function renderAuthState(status: AuthStatus): void {
-  authError.textContent = "";
-  if (status.signedIn) {
-    authSignedOut.hidden = true;
-    authSignedIn.hidden = false;
-    authName.textContent = `${status.name} · `;
-    if (status.pictureUrl) {
-      authAvatar.style.backgroundImage = `url(${JSON.stringify(status.pictureUrl)})`;
-      authAvatar.textContent = "";
-    } else {
-      authAvatar.style.backgroundImage = "";
-      authAvatar.textContent = status.name.slice(0, 1).toUpperCase();
-    }
-  } else {
-    authSignedOut.hidden = false;
-    authSignedIn.hidden = true;
-  }
-}
-
-googleSignInBtn.addEventListener("click", () => {
-  authError.textContent = "";
-  // The whole flow — waiting for you to finish in the browser, plus
-  // claiming unowned local sessions and running the Drive reconcile pass
-  // — happens before this resolves, which can take real time. A plain
-  // disabled button with no label change reads as frozen; this makes
-  // clear it's actually working.
-  void withBusyLabel(googleSignInBtn, "Signing in…", async () => {
-    const result = await window.agent.googleSignIn();
-    if ("error" in result) {
-      authError.textContent = result.error;
-    } else {
-      renderAuthState({ signedIn: true, ...result });
-    }
-  });
-});
-
-signOutBtn.addEventListener("click", () => {
-  authError.textContent = "";
-  void withBusyLabel(signOutBtn, "Signing out…", async () => {
-    try {
-      await window.agent.signOut();
-      renderAuthState({ signedIn: false });
-      // Session history is filtered by the signed-in account server-side —
-      // refresh now so the sidebar clears immediately instead of continuing
-      // to show the just-signed-out account's sessions until the next
-      // unrelated list refresh.
-      await refreshSessionList(sessionSearchInput.value.trim());
-    } catch (err) {
-      authError.textContent = errorMessage(err);
-    }
-  });
-});
-
-async function refreshGithubStatus(): Promise<void> {
-  const status = await window.agent.githubStatus();
-  githubNotConnectedEl.hidden = status.connected;
-  githubConnectedEl.hidden = !status.connected;
-  if (status.connected) githubConnectedAsEl.textContent = `Connected as @${status.login}`;
-}
-
-githubConnectBtn.addEventListener("click", () => {
-  githubSettingsErrorEl.textContent = "";
-  githubDeviceCodeEl.hidden = true;
-  const stopListening = window.agent.onGithubDeviceCode((code) => {
-    githubDeviceCodeEl.hidden = false;
-    // Security/readability finding (code-review-and-quality pass): this
-    // used to build the whole line as an HTML template literal — code's
-    // userCode and verificationUri come from GitHub's device-flow
-    // response (external data), the same "never parsed as HTML" rule
-    // this file states explicitly elsewhere (renderMcpServerRow,
-    // renderTabStrip's doc comments) for anything not typed by this
-    // process. A malformed/compromised verificationUri set directly as
-    // `.href` could also carry a javascript: scheme and execute on
-    // click, not just render wrong — isAllowedExternalUrl (already used
-    // for this app's other external-open paths) gates that.
-    githubDeviceCodeEl.innerHTML = "";
-    githubDeviceCodeEl.appendChild(document.createTextNode("Enter code "));
-    const codeEl = document.createElement("strong");
-    codeEl.textContent = code.userCode;
-    githubDeviceCodeEl.appendChild(codeEl);
-    githubDeviceCodeEl.appendChild(document.createTextNode(" at "));
-    if (isAllowedExternalUrl(code.verificationUri)) {
-      const link = document.createElement("a");
-      link.href = code.verificationUri;
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.textContent = code.verificationUri;
-      githubDeviceCodeEl.appendChild(link);
-    } else {
-      githubDeviceCodeEl.appendChild(document.createTextNode(code.verificationUri));
-    }
-  });
-  void withBusyLabel(githubConnectBtn, "Waiting for authorization…", async () => {
-    try {
-      const result = await window.agent.githubConnect();
-      if ("error" in result) {
-        githubSettingsErrorEl.textContent = result.error;
-      } else {
-        githubDeviceCodeEl.hidden = true;
-        await refreshGithubStatus();
-      }
-    } finally {
-      stopListening();
-    }
-  });
-});
-
-githubDisconnectBtn.addEventListener("click", () => {
-  void withBusyLabel(githubDisconnectBtn, "Disconnecting…", async () => {
-    await window.agent.githubDisconnect();
-    await refreshGithubStatus();
-  });
-});
-
 window.agent.onSessionsChanged(() => {
   void refreshSessionList(sessionSearchInput.value.trim());
   void syncTabTitlesFromSidebar();
@@ -2533,9 +2405,10 @@ async function syncTabTitlesFromSidebar(): Promise<void> {
   if (changed) renderTabStrip();
 }
 
-window.agent.onCloudSyncScopeWarning(() => {
-  authError.textContent = "Sign in again to keep backing up your sessions to Google Drive.";
-});
+const authPanelDeps: AuthPanelDeps = {
+  onSignedOut: () => refreshSessionList(sessionSearchInput.value.trim()),
+};
+initAuthPanel(authPanelDeps);
 
 let lastUpdateStatus: UpdateStatus | null = null;
 let lastKnownUpdateVersion: string | null = null;
