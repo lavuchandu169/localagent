@@ -544,10 +544,13 @@ actual and complete description of what it does with your data.
 npm test
 ```
 
-No test framework — plain Node scripts under `src/test/` with a
-hand-rolled `check(name, condition)` assertion, chained together in
-`package.json`'s `test` script (also run in CI on every push, gating the
-release workflow). Coverage spans command-risk classification, permission
+No test framework — plain Node scripts under `src/test/` (mirroring the
+same `core/`/`electron/`/`providers/`/`tools/` split as `src/` itself)
+with a hand-rolled `check(name, condition)` assertion, auto-discovered
+and run by `scripts/run-tests.mjs` (also run in CI on every push, gating
+the release workflow) — every `dist/test/**/*.test.js` and
+`scripts/*.test.mjs` file runs automatically, so a new test file is never
+silently left out. Coverage spans command-risk classification, permission
 decisions across every mode, a full scripted agent run, Google OAuth
 token/PKCE plumbing, MCP client connection/tool-adapter/registry behavior,
 multi-session tab-state transitions, Hugging Face model search, the
@@ -631,7 +634,7 @@ calling each other directly.
 | `src/electron/renderer/` | `renderer.ts` (UI logic), `tabState.ts` (multi-session tab state machine), `index.html`, `styles.css` |
 | `vendor/freellmapi/` | FreeLLMAPI itself, vendored as a pinned git submodule — see [First-time setup](CONTRIBUTING.md#first-time-setup) |
 | `src/demo.ts` + `fixture-repo/` | The scripted, offline, end-to-end proof |
-| `src/test/` | The suite `npm test` runs |
+| `src/test/` | The suite `npm test` runs, split into `core/`, `electron/`, `providers/`, `tools/` mirroring `src/` |
 
 None of `agent.ts`, `permissions.ts`, `toolRegistry.ts`, or the tools
 import any UI-specific code — the CLI and the Electron app sit on top of
