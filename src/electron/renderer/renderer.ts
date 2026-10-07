@@ -43,6 +43,7 @@ import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 import { initFreellmapiFallbackPanel, openFreellmapiFallbackPanel, closeFreellmapiFallbackPanel } from "./freellmapiFallbackPanel.js";
 import { byId } from "./domHelpers.js";
 import { isAllowedExternalUrl } from "../externalUrl.js";
+import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import {
   initOnboarding,
   markFirstTaskSent,
@@ -331,12 +332,8 @@ const commandPaletteCloseX = byId<HTMLButtonElement>("command-palette-close-x");
 const commandPaletteInput = byId<HTMLInputElement>("command-palette-input");
 const commandPaletteResults = byId<HTMLUListElement>("command-palette-results");
 const commandPaletteEmpty = byId<HTMLDivElement>("command-palette-empty");
-const aboutToggle = byId<HTMLButtonElement>("about-toggle");
-const aboutPanel = byId<HTMLDivElement>("about-panel");
-const aboutClose = byId<HTMLButtonElement>("about-close");
 const freellmapiPanelEl = byId<HTMLDivElement>("freellmapi-panel");
 const freellmapiFallbackPanelEl = byId<HTMLDivElement>("freellmapi-fallback-panel");
-const aboutCloseX = byId<HTMLButtonElement>("about-close-x");
 const mcpServersToggle = byId<HTMLButtonElement>("mcp-servers-toggle");
 const mcpServersPanel = byId<HTMLDivElement>("mcp-servers-panel");
 const mcpServersListView = byId<HTMLDivElement>("mcp-servers-list-view");
@@ -354,10 +351,6 @@ const mcpServerFormError = byId<HTMLDivElement>("mcp-server-form-error");
 const mcpServerFormSave = byId<HTMLButtonElement>("mcp-server-form-save");
 const mcpServersClose = byId<HTMLButtonElement>("mcp-servers-close");
 const mcpServersCloseX = byId<HTMLButtonElement>("mcp-servers-close-x");
-const reportIssueLink = byId<HTMLAnchorElement>("report-issue-link");
-const openErrorLogBtn = byId<HTMLButtonElement>("open-error-log");
-const aboutWorkspace = byId<HTMLSpanElement>("about-workspace");
-const aboutHardware = byId<HTMLSpanElement>("about-hardware");
 const settingsToggle = byId<HTMLButtonElement>("settings-toggle");
 const settingsPanel = byId<HTMLDivElement>("settings-panel");
 const settingsClose = byId<HTMLButtonElement>("settings-close");
@@ -820,7 +813,7 @@ async function refreshDownloadedModelsList(): Promise<void> {
 Promise.all([window.agent.listCachedModels(), window.agent.getHardwareInfo()]).then(([cached, hw]) => {
   hardwareInfo = hw;
   const ramGb = (hw.totalRamBytes / 1024 ** 3).toFixed(0);
-  aboutHardware.textContent = hw.gpu ? `${ramGb}GB RAM · ${hw.gpu} GPU` : `${ramGb}GB RAM · CPU only`;
+  setAboutHardwareText(hw.gpu ? `${ramGb}GB RAM · ${hw.gpu} GPU` : `${ramGb}GB RAM · CPU only`);
   refreshEmbeddedModelLabels(cached);
   // Onboarding-only: before the user has ever dismissed the onboarding
   // modal (i.e. this machine's very first launch), the dropdown starts on
@@ -856,13 +849,6 @@ async function buildReportIssueUrl(): Promise<string> {
   return `https://github.com/lavuchandu169/localagent/issues/new?${new URLSearchParams({ body }).toString()}`;
 }
 
-/** Hides the panel, updates its toggle's aria-expanded, and returns focus to the toggle — the reverse of opening it, so a keyboard/screen-reader user always lands back where they started instead of on a now-hidden element. */
-function closeAboutPanel(): void {
-  closeOverlayPanel(aboutPanel);
-  aboutToggle.setAttribute("aria-expanded", "false");
-  aboutToggle.focus();
-}
-
 /**
  * Readability/correctness finding (code-review-and-quality pass): these
  * full-window modals (see .modal-card in styles.css) are mutually
@@ -882,7 +868,7 @@ function closeAboutPanel(): void {
  * same as every call site already did before this.
  */
 function closeAllFullScreenModals(): boolean {
-  if (!aboutPanel.hidden) closeAboutPanel();
+  if (isAboutPanelOpen()) closeAboutPanel();
   if (!mcpServersPanel.hidden) closeMcpServersPanel();
   if (!settingsPanel.hidden) closeSettingsPanel();
   if (!commandPaletteOverlay.hidden) closeCommandPalette();
@@ -890,29 +876,8 @@ function closeAllFullScreenModals(): boolean {
   return closeFreellmapiFallbackPanel();
 }
 
-aboutToggle.addEventListener("click", () => {
-  const opening = aboutPanel.hidden;
-  if (opening) {
-    if (!closeAllFullScreenModals()) return;
-  }
-  if (opening) openOverlayPanel(aboutPanel);
-  else closeOverlayPanel(aboutPanel);
-  aboutToggle.setAttribute("aria-expanded", String(opening));
-  if (opening) {
-    void buildReportIssueUrl()
-      .then((url) => (reportIssueLink.href = url))
-      .catch((err) => console.error("[about] buildReportIssueUrl failed:", err));
-    aboutClose.focus(); // moves focus into the panel, so a keyboard/screen-reader user actually lands on its content
-  }
-});
-aboutClose.addEventListener("click", closeAboutPanel);
-aboutCloseX.addEventListener("click", closeAboutPanel);
-// Clicking the dimmed backdrop (not the card itself) closes it — the
-// standard modal affordance, and the only way to close that doesn't
-// depend on scroll position within a possibly-long panel.
-aboutPanel.addEventListener("click", (e) => {
-  if (e.target === aboutPanel) closeAboutPanel();
-});
+const aboutPanelDeps: AboutPanelDeps = { closeOtherFullScreenModals: closeAllFullScreenModals, buildReportIssueUrl };
+initAboutPanel(aboutPanelDeps);
 
 function closeMcpServersPanel() {
   closeOverlayPanel(mcpServersPanel);
@@ -1062,10 +1027,6 @@ mcpServerFormSave.addEventListener("click", () => {
 
 window.agent.onMcpServerStatusChanged(() => {
   if (!mcpServersPanel.hidden && !mcpServersListView.hidden) void refreshMcpServersList();
-});
-
-openErrorLogBtn.addEventListener("click", () => {
-  void window.agent.openErrorLog();
 });
 
 // Tracks whether the user actually typed into the secret field this time
@@ -1271,7 +1232,7 @@ function staticPaletteCommands(): PaletteCommand[] {
   return [
     { id: "new-session", label: "New session", run: () => { closeCommandPalette(); newSessionBtn.click(); } },
     { id: "open-settings", label: "Open Settings", run: () => { closeCommandPalette(); settingsToggle.click(); } },
-    { id: "open-about", label: "Open About", run: () => { closeCommandPalette(); aboutToggle.click(); } },
+    { id: "open-about", label: "Open About", run: () => { closeCommandPalette(); openAboutPanel(aboutPanelDeps); } },
     { id: "open-mcp-servers", label: "Open MCP Servers", run: () => { closeCommandPalette(); mcpServersToggle.click(); } },
   ];
 }
@@ -1401,7 +1362,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (isOnboardingOpen()) dismissOnboarding();
   else if (isWhatsNewOpen()) dismissWhatsNew();
-  else if (!aboutPanel.hidden) closeAboutPanel();
+  else if (isAboutPanelOpen()) closeAboutPanel();
   else if (!mcpServersPanel.hidden) closeMcpServersPanel();
   else if (!settingsPanel.hidden) closeSettingsPanel();
   else if (!commandPaletteOverlay.hidden) closeCommandPalette();
@@ -1488,7 +1449,7 @@ chooseWorkspaceBtn.addEventListener("click", async () => {
   if (picked) {
     requireActiveTab().workspaceRoot = picked;
     setWorkspaceText(picked);
-    aboutWorkspace.textContent = picked;
+    setAboutWorkspaceText(picked);
   }
 });
 
@@ -2084,7 +2045,7 @@ async function beginSession(tab: TabState, resume?: ResumePayload): Promise<void
       tab.workspaceRoot = result.workspaceRoot;
       if (isActiveTab(tab)) {
         setWorkspaceText(`${result.workspaceRoot} (default — no folder chosen)`);
-        aboutWorkspace.textContent = result.workspaceRoot;
+        setAboutWorkspaceText(result.workspaceRoot);
       }
     }
     tab.editingSession = false;
@@ -2423,7 +2384,7 @@ function clearEventLog(): void {
 /** Restores the setup form's fields (workspace text, model/mode selects, plan-first checkbox, and the two custom-server subfields) from a tab's stored selection — the visual half of switching tabs. Does not touch anything session-lifecycle-related (setSetupControlsDisabled, editSettingsBtn, revert/changes buttons) — that's handled by clearAndReplayEventLog below, since those depend on whether the tab has ever had a session, which the event replay determines. */
 function syncFormFromTab(tab: TabState): void {
   setWorkspaceText(tab.workspaceRoot ? tab.workspaceRoot : "No workspace selected — optional, you can just chat");
-  aboutWorkspace.textContent = tab.workspaceRoot ?? "(none selected)";
+  setAboutWorkspaceText(tab.workspaceRoot ?? "(none selected)");
 
   // Defense in depth for a tab that already has a running session: show what
   // that session is ACTUALLY running on, not merely whatever the form last
