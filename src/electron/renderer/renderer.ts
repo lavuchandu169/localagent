@@ -1,6 +1,5 @@
 import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, PermissionMode, ProposedPlan, ToolCall } from "../../types.js";
 import { isEphemeralStreamEvent } from "../../types.js";
-import type { Change } from "diff";
 import { groupDiffIntoSegments } from "../../diffUtil.js";
 import type { ProviderConfig, SessionConfig } from "../sessionRegistry.js";
 import type { FileChangeWithDiff } from "../../changesSince.js";
@@ -45,6 +44,15 @@ import { byId, errorMessage, withBusyLabel } from "./domHelpers.js";
 import { isAllowedExternalUrl } from "../externalUrl.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
+import { renderDiff } from "./diffView.js";
+import {
+  initChangesPanel,
+  isChangesPanelOpen,
+  closeChangesPanel,
+  setViewChangesButtonVisible,
+  resetChangesPanel,
+  type ChangesPanelDeps,
+} from "./changesPanel.js";
 import {
   initOnboarding,
   markFirstTaskSent,
@@ -358,10 +366,6 @@ const activeModelBadge = byId<HTMLDivElement>("active-model-badge");
 const usageBadge = byId<HTMLSpanElement>("usage-badge");
 const editSettingsBtn = byId<HTMLButtonElement>("edit-settings");
 const revertCheckpointBtn = byId<HTMLButtonElement>("revert-checkpoint");
-const viewChangesBtn = byId<HTMLButtonElement>("view-changes");
-const changesPanel = byId<HTMLDivElement>("changes-panel");
-const changesPanelBody = byId<HTMLDivElement>("changes-panel-body");
-const changesPanelClose = byId<HTMLButtonElement>("changes-panel-close");
 const downloadedModelsList = byId<HTMLUListElement>("downloaded-models-list");
 const downloadedModelsEmpty = byId<HTMLDivElement>("downloaded-models-empty");
 const sidebarSessionList = byId<HTMLDivElement>("session-list");
@@ -842,6 +846,12 @@ initAboutPanel(aboutPanelDeps);
 const mcpServersPanelDeps: McpServersPanelDeps = { closeOtherFullScreenModals: closeAllFullScreenModals };
 initMcpServersPanel(mcpServersPanelDeps);
 
+const changesPanelDeps: ChangesPanelDeps = {
+  getActiveSessionId: () => activeTab(tabRegistry)?.sessionId ?? null,
+  logError: (text) => logLine(text, "log-error"),
+};
+initChangesPanel(changesPanelDeps);
+
 // Tracks whether the user actually typed into the secret field this time
 // it was open — saving must NOT overwrite a previously-saved secret just
 // because the field displays its masked placeholder unchanged.
@@ -1169,7 +1179,7 @@ document.addEventListener("keydown", (e) => {
   else if (isMcpServersPanelOpen()) closeMcpServersPanel();
   else if (!settingsPanel.hidden) closeSettingsPanel();
   else if (!commandPaletteOverlay.hidden) closeCommandPalette();
-  else if (!changesPanel.hidden) closeChangesPanel();
+  else if (isChangesPanelOpen()) closeChangesPanel();
   else if (!freellmapiPanelEl.hidden) closeFreellmapiPanel();
   else if (!freellmapiFallbackPanelEl.hidden) closeFreellmapiFallbackPanel();
 });
@@ -1280,76 +1290,6 @@ function toolCard(call: ToolCall): HTMLElement {
   eventLog.scrollTop = eventLog.scrollHeight;
   toolCards.set(call.id, card);
   return card;
-}
-
-const DIFF_LINE_CAP = 300;
-
-/** Splits a segment's value into its individual lines the same way the old flat renderer did — split("\n") on a trailing-newline string leaves one empty trailing entry, popped off. */
-function linesOf(value: string): string[] {
-  const lines = value.split("\n");
-  if (lines[lines.length - 1] === "") lines.pop();
-  return lines;
-}
-
-/**
- * Renders a diff as context lines interleaved with per-hunk blocks, each
- * hunk carrying its own checkbox (checked by default, matching today's
- * implicit "approve everything") so an Approve click can read back exactly
- * which hunks are still checked. `readOnly` is used for a diff shown
- * alongside a decision that isn't ASK (already-decided ALLOW/DENY, or the
- * read-only copy under a sent task) — no checkboxes there, since there's
- * no prompt to attach a selection to.
- */
-function renderDiff(diff: Change[], readOnly = false): HTMLElement {
-  const container = document.createElement("div");
-  container.className = "diff-view";
-  const segments = groupDiffIntoSegments(diff);
-  let linesShown = 0;
-
-  outer: for (const segment of segments) {
-    let hunkWrapper: HTMLElement | null = null;
-    if (segment.kind === "hunk" && !readOnly) {
-      hunkWrapper = document.createElement("div");
-      hunkWrapper.className = "diff-hunk";
-      const toggle = document.createElement("label");
-      toggle.className = "diff-hunk-toggle";
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.checked = true;
-      checkbox.dataset.hunkId = String(segment.id);
-      toggle.appendChild(checkbox);
-      toggle.appendChild(document.createTextNode("Apply this change"));
-      hunkWrapper.appendChild(toggle);
-      container.appendChild(hunkWrapper);
-    }
-    const target = hunkWrapper ?? container;
-
-    const parts: { value: string; added?: boolean; removed?: boolean }[] =
-      segment.kind === "context"
-        ? [{ value: segment.value }]
-        : [
-            ...(segment.removedValue !== undefined ? [{ value: segment.removedValue, removed: true }] : []),
-            ...(segment.addedValue !== undefined ? [{ value: segment.addedValue, added: true }] : []),
-          ];
-
-    for (const part of parts) {
-      for (const line of linesOf(part.value)) {
-        if (linesShown >= DIFF_LINE_CAP) {
-          const truncated = document.createElement("div");
-          truncated.className = "diff-line diff-truncated";
-          truncated.textContent = "… diff truncated …";
-          container.appendChild(truncated);
-          break outer;
-        }
-        const lineEl = document.createElement("div");
-        lineEl.className = `diff-line ${part.added ? "diff-added" : part.removed ? "diff-removed" : "diff-context"}`;
-        lineEl.textContent = `${part.added ? "+" : part.removed ? "-" : " "} ${line}`;
-        target.appendChild(lineEl);
-        linesShown++;
-      }
-    }
-  }
-  return container;
 }
 
 /**
@@ -1537,7 +1477,7 @@ function renderEvent(event: AgentEvent): void {
     case "checkpoint.created":
       logLine("[checkpoint] Saved — this task can now be reverted.", "log-status");
       revertCheckpointBtn.hidden = false;
-      viewChangesBtn.hidden = false;
+      setViewChangesButtonVisible(true);
       break;
     case "usage": {
       // Only ever fires for an Anthropic-backed session (the only provider
@@ -1875,7 +1815,7 @@ async function beginSession(tab: TabState, resume?: ResumePayload): Promise<void
       // checkpoint.created event from history. result.checkpointHash is
       // the real, post-restore answer.
       revertCheckpointBtn.hidden = result.checkpointHash === null;
-      viewChangesBtn.hidden = result.checkpointHash === null;
+      setViewChangesButtonVisible(result.checkpointHash !== null);
       // Chat-first once a session is running: the setup form collapses out of
       // the way, and Edit settings… brings it back (see editSettingsBtn's
       // handler for the reverse, and resetToSetup for the full teardown).
@@ -1945,8 +1885,7 @@ revertCheckpointBtn.addEventListener("click", () => {
         logLine("[checkpoint] Reverted — the workspace is back to how it was before this task.", "log-done");
         revertCheckpointBtn.hidden = true;
         // Nothing's changed anymore — reverting undid it all.
-        viewChangesBtn.hidden = true;
-        changesPanel.hidden = true;
+        resetChangesPanel();
       } else {
         // Same graceful-failure posture as everywhere else in this app: show
         // the real reason (most likely "a task is running") rather than
@@ -1962,88 +1901,6 @@ revertCheckpointBtn.addEventListener("click", () => {
     }
   });
 });
-
-const CHANGE_STATUS_LABEL: Record<FileChangeWithDiff["status"], string> = { added: "A", modified: "M", deleted: "D" };
-
-/** Sums the line count of every added (or every removed) chunk in a diff — the +N/-M counts shown next to each file, same source data renderDiff already walks. */
-function countDiffLines(diff: FileChangeWithDiff["diff"], kind: "added" | "removed"): number {
-  return diff.reduce((total, chunk) => total + (chunk[kind] ? (chunk.count ?? 0) : 0), 0);
-}
-
-/**
- * Renders the "Files changed" panel — one section per file (path, status
- * badge, +insertions/-deletions), each followed by its diff rendered with
- * the exact same renderDiff() the per-edit approval view uses, so a whole
- * task's changes read like a single GitHub commit/PR page instead of
- * being scattered across individual approval prompts in the log.
- */
-function renderChangesPanel(changes: FileChangeWithDiff[]): void {
-  changesPanelBody.innerHTML = "";
-  if (changes.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "hint-text";
-    empty.textContent = "No changes since the checkpoint.";
-    changesPanelBody.appendChild(empty);
-    return;
-  }
-  for (const file of changes) {
-    const section = document.createElement("div");
-    section.className = "changed-file";
-
-    const header = document.createElement("div");
-    header.className = "changed-file-header";
-    const badge = document.createElement("span");
-    badge.className = `change-status change-status-${file.status}`;
-    badge.textContent = CHANGE_STATUS_LABEL[file.status];
-    header.appendChild(badge);
-    const pathEl = document.createElement("span");
-    pathEl.className = "changed-file-path";
-    pathEl.textContent = file.path;
-    header.appendChild(pathEl);
-    const added = countDiffLines(file.diff, "added");
-    const removed = countDiffLines(file.diff, "removed");
-    const counts = document.createElement("span");
-    counts.className = "changed-file-counts";
-    const addedCount = document.createElement("span");
-    addedCount.className = "diff-added-count";
-    addedCount.textContent = `+${added}`;
-    const removedCount = document.createElement("span");
-    removedCount.className = "diff-removed-count";
-    removedCount.textContent = `-${removed}`;
-    counts.appendChild(addedCount);
-    counts.appendChild(document.createTextNode(" "));
-    counts.appendChild(removedCount);
-    header.appendChild(counts);
-    section.appendChild(header);
-
-    section.appendChild(renderDiff(file.diff, true));
-    changesPanelBody.appendChild(section);
-  }
-}
-
-/** Same contract as closeAboutPanel/closeSettingsPanel — hide, return focus to the toggle. */
-function closeChangesPanel(): void {
-  changesPanel.hidden = true;
-  viewChangesBtn.focus();
-}
-
-viewChangesBtn.addEventListener("click", () => {
-  const tab = activeTab(tabRegistry);
-  if (!tab?.sessionId) return;
-  const idToView = tab.sessionId;
-  void withBusyLabel(viewChangesBtn, "Loading…", async () => {
-    const result = await window.agent.getChanges(idToView);
-    if (result.ok) {
-      renderChangesPanel(result.changes);
-      changesPanel.hidden = false;
-      changesPanelClose.focus();
-    } else {
-      logLine(`[changes] Couldn't load changes: ${result.error}`, "log-error");
-    }
-  });
-});
-
-changesPanelClose.addEventListener("click", closeChangesPanel);
 
 function providerConfigsEqual(a: ProviderConfig, b: ProviderConfig): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -2236,8 +2093,7 @@ function clearAndReplayEventLog(tab: TabState): void {
   // tab's open file-diff panel) over a tab that has no checkpoint at all. The
   // replay below re-shows them if and only if THIS tab earned them.
   revertCheckpointBtn.hidden = true;
-  viewChangesBtn.hidden = true;
-  changesPanel.hidden = true;
+  resetChangesPanel();
   for (const event of tab.events) renderEvent(event);
 
   const hasSession = tab.sessionId !== null;
@@ -2376,8 +2232,7 @@ function resetToSetup(): void {
   editSettingsBtn.hidden = true;
   editSettingsBtn.textContent = "Edit settings…";
   revertCheckpointBtn.hidden = true;
-  viewChangesBtn.hidden = true;
-  changesPanel.hidden = true;
+  resetChangesPanel();
   startError.textContent = "";
   // Repaints the workspace text, model/mode/plan-first selects, draft task
   // (now empty), and attachment chips (now empty) from the tab's freshly
