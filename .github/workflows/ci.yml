@@ -31,3 +31,18 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+      # Security audit finding (checklist gap): no automated dependency-
+      # vulnerability scanning ran in CI before this — a prior manual audit
+      # had to invoke `npm audit` by hand to catch what's already in the
+      # lockfile. Non-blocking (continue-on-error) rather than a hard gate:
+      # as of this step's addition, 4 critical + 9 moderate findings exist
+      # in this app's own dependency tree, every one individually traced
+      # and confirmed unreachable through this app's actual usage (see
+      # security-audit/VULNERABILITY_REGISTER.md) — failing CI on an
+      # already-triaged, accepted-risk baseline would just train everyone
+      # to ignore red CI, not fix anything. This step exists so a NEW
+      # vulnerability is visible in every run's output from the moment it
+      # appears, not only during the next manual audit.
+      - name: Dependency vulnerability scan (non-blocking)
+        run: npm audit --audit-level=high
+        continue-on-error: true
