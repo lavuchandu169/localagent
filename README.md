@@ -645,8 +645,7 @@ the exact same core interchangeably, and the desktop app was built with
 
 Real gaps, not hedging: a VS Code extension, Tree-sitter/LSP symbol
 intelligence, subagents, agent hooks, and sandboxed execution aren't
-built. Drive delete-propagation has a known edge case (deleting a session
-while signed out can reappear on the next sign-in). The Mac build is Apple Silicon only (no Intel/x64); the
+built. The Mac build is Apple Silicon only (no Intel/x64); the
 Windows build is x64 only (no ARM64). Neither installer is code-signed
 yet, so both trigger a one-time OS warning on first launch (see
 [Download the beta](#download-the-beta)) and Mac auto-updates can
