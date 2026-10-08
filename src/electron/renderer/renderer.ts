@@ -307,6 +307,7 @@ const taskInput = byId<HTMLTextAreaElement>("task-input");
 const runTaskBtn = byId<HTMLButtonElement>("run-task");
 const stopTaskBtn = byId<HTMLButtonElement>("stop-task");
 const queuedFollowupHint = byId<HTMLDivElement>("queued-followup-hint");
+const preSendCostEstimate = byId<HTMLDivElement>("pre-send-cost-estimate");
 const attachFileBtn = byId<HTMLButtonElement>("attach-file");
 const attachmentChipsRow = byId<HTMLDivElement>("attachment-chips");
 const eventLog = byId<HTMLDivElement>("event-log");
@@ -448,6 +449,42 @@ let sessionUsage = { inputTokens: 0, outputTokens: 0, knownCostUsd: 0, hasUnknow
 
 function formatTokenCount(tokens: number): string {
   return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}K` : String(tokens);
+}
+
+/**
+ * ~4 characters per token is the standard rough-estimate ratio for English
+ * text (no real tokenizer is a dependency of this project, and adding one
+ * just for a pre-send estimate isn't worth it — see formatTokenCount's own
+ * sibling sessionUsage, which uses the API's real post-response token
+ * counts and needs no heuristic at all).
+ */
+const ESTIMATED_CHARS_PER_TOKEN = 4;
+
+/**
+ * Updates the composer's live pre-send estimate from the task text alone —
+ * deliberately INPUT-only: how long the model's reply will be (the other
+ * half of a real request's cost) isn't knowable before sending, so showing
+ * a made-up output number would be worse than not showing one. Only shown
+ * for an Anthropic-backed session, the only provider with real pricing
+ * data (estimateCostUsd) — other providers either have no usage-based
+ * pricing or aren't metered by this app at all.
+ */
+function updatePreSendCostEstimate(): void {
+  const tab = activeTab(tabRegistry);
+  const text = taskInput.value;
+  if (!tab?.activeProvider || tab.activeProvider.kind !== "anthropic" || !text.trim()) {
+    preSendCostEstimate.hidden = true;
+    return;
+  }
+  const estimatedTokens = Math.ceil(text.length / ESTIMATED_CHARS_PER_TOKEN);
+  const modelId = tab.activeProvider.model ?? DEFAULT_ANTHROPIC_MODEL;
+  const cost = estimateCostUsd(modelId, estimatedTokens, 0);
+  if (cost === null) {
+    preSendCostEstimate.hidden = true;
+    return;
+  }
+  preSendCostEstimate.textContent = `Est. input cost: ~$${cost.toFixed(4)} (≈${formatTokenCount(estimatedTokens)} tokens, output not included)`;
+  preSendCostEstimate.hidden = false;
 }
 
 const MAX_ATTACHMENTS_PER_TASK = 5;
@@ -1703,6 +1740,7 @@ async function beginSession(tab: TabState, resume?: ResumePayload): Promise<void
       // handler for the reverse, and resetToSetup for the full teardown).
       setupSection.hidden = true;
       renderActiveModelBadge(provider);
+      updatePreSendCostEstimate();
     }
     // Cheap and correct for a backgrounded tab too — the strip is always
     // redrawn wholesale from tabRegistry, so this just flips this tab's dot
@@ -1964,6 +2002,7 @@ function syncFormFromTab(tab: TabState): void {
 
   taskInput.value = tab.draftTask;
   renderAttachmentChips();
+  updatePreSendCostEstimate();
 }
 
 /** Clears the shared event log and re-renders a tab's entire stored `events` history through it — the same reconstruction resumeSession already does when loading a session from disk, just from memory instead. Also restores every other piece of UI state that Step 6's replay-driven renderEvent cases set as a side effect (revert/changes button visibility via checkpoint.created, the usage badge via "usage" events) by virtue of actually replaying those events. Session-lifecycle chrome that ISN'T derivable from events alone (setSetupControlsDisabled, editSettingsBtn's label/visibility, the model badge) is set here directly from the tab's own fields. */
@@ -2344,6 +2383,7 @@ function queueFollowup(tab: TabState): void {
   tab.queuedFollowup = tab.queuedFollowup ? `${tab.queuedFollowup}\n\n${text}` : text;
   taskInput.value = "";
   tab.draftTask = "";
+  updatePreSendCostEstimate();
   logLine("Queued — will be sent automatically once the current task finishes.", "log-status");
 }
 
@@ -2406,6 +2446,7 @@ runTaskBtn.addEventListener("click", async () => {
   tab.draftTask = "";
   taskInput.value = "";
   renderAttachmentChips();
+  updatePreSendCostEstimate();
   try {
     await window.agent.runTask(tab.sessionId, task, attachments);
     await refreshSessionList(sessionSearchInput.value.trim());
@@ -2438,6 +2479,7 @@ taskInput.addEventListener("keydown", (e) => {
 taskInput.addEventListener("input", () => {
   const tab = activeTab(tabRegistry);
   if (tab) tab.draftTask = taskInput.value;
+  updatePreSendCostEstimate();
 });
 
 window.agent.onSessionsChanged(() => {

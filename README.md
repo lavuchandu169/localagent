@@ -437,7 +437,10 @@ Pro/Max subscription: Anthropic's terms reserve that subscription's
 sign-in for Claude Code and claude.ai itself, so it can't be used from
 this (or any other third-party) app — an API key is the only supported
 way in. The status bar shows a running token/cost estimate while an
-Anthropic session is active, at Anthropic's standard API rates.
+Anthropic session is active, at Anthropic's standard API rates. The
+composer also shows a rough input-only cost estimate as you type,
+before you send — from the message's character count (not a real
+tokenizer), so it's a ballpark, not a bill.
 
 Set the matching environment variable (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, or `GEMINI_API_KEY`; a `.env` file works too, from
