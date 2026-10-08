@@ -407,6 +407,16 @@ const DOT_GLYPH: Record<ReturnType<typeof tabDotState>, string> = {
   error: "✕",
 };
 
+/** Screen-reader text for the same dot state DOT_GLYPH renders as a shape — the glyph alone has no accessible name. */
+const DOT_LABEL: Record<ReturnType<typeof tabDotState>, string> = {
+  unconfigured: "Not started",
+  idle: "Idle",
+  running: "Running",
+  "waiting-approval": "Waiting for approval",
+  done: "Done",
+  error: "Error",
+};
+
 let hardwareInfo: HardwareInfo | null = null;
 const toolCards = new Map<string, HTMLElement>();
 let streamingTextEl: HTMLElement | null = null;
@@ -2049,10 +2059,14 @@ function renderTabStrip(): void {
     const tab = tabRegistry.tabs.get(tabId)!;
     const item = document.createElement("div");
     item.className = "tab-strip-item" + (tabId === tabRegistry.activeTabId ? " active" : "");
+    item.setAttribute("role", "tab");
+    item.tabIndex = 0;
+    item.setAttribute("aria-selected", tabId === tabRegistry.activeTabId ? "true" : "false");
 
     const dot = document.createElement("span");
     dot.className = `tab-strip-item-dot tab-strip-item-dot-${tabDotState(tab)}`;
     dot.textContent = DOT_GLYPH[tabDotState(tab)];
+    dot.setAttribute("aria-label", DOT_LABEL[tabDotState(tab)]);
     item.appendChild(dot);
 
     const title = document.createElement("span");
@@ -2097,6 +2111,18 @@ function renderTabStrip(): void {
     item.appendChild(close);
 
     item.addEventListener("click", () => switchToTab(tabId));
+    item.addEventListener("keydown", (e) => {
+      // Only react when the tab itself is focused — this listener also
+      // sees a keydown that bubbles up from the nested close button
+      // (e.target === close), which already handles its own Enter/Space
+      // activation natively; acting on it here too would both switch to
+      // the tab AND close it from a single keypress.
+      if (e.target !== item) return;
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        switchToTab(tabId);
+      }
+    });
     tabStripList.appendChild(item);
   }
   tabStripNew.disabled = tabRegistry.order.length >= MAX_OPEN_TABS;
@@ -2330,6 +2356,7 @@ function renderSessionList(entries: SessionIndexEntry[]): void {
       badge.className = "session-item-pending-approval";
       badge.textContent = "⏸";
       badge.title = "Waiting for approval — reopen this session to respond";
+      badge.setAttribute("aria-label", "Waiting for approval — reopen this session to respond");
       item.appendChild(badge);
       label.title = `${entry.title} (waiting for approval — reopen to respond)`;
     } else {

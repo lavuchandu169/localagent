@@ -8,6 +8,7 @@ import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 
 let panel: HTMLElement;
 let closeBtn: HTMLButtonElement;
+let openBtn: HTMLButtonElement;
 let refreshBtn: HTMLButtonElement;
 let errorEl: HTMLElement;
 let loadingEl: HTMLElement;
@@ -58,6 +59,7 @@ let currentStrategy: RoutingStrategy | null = null;
 export function initFreellmapiFallbackPanel(): void {
   panel = document.getElementById("freellmapi-fallback-panel")!;
   closeBtn = document.getElementById("freellmapi-fallback-close-x") as HTMLButtonElement;
+  openBtn = document.getElementById("open-freellmapi-fallback-panel") as HTMLButtonElement;
   refreshBtn = document.getElementById("freellmapi-fallback-refresh") as HTMLButtonElement;
   errorEl = document.getElementById("freellmapi-fallback-error")!;
   loadingEl = document.getElementById("freellmapi-fallback-loading")!;
@@ -121,11 +123,13 @@ export function closeFreellmapiFallbackPanel(): boolean {
   }
   markDirty(false);
   closeOverlayPanel(panel);
+  openBtn.focus();
   return true;
 }
 
 export async function openFreellmapiFallbackPanel(): Promise<void> {
   openOverlayPanel(panel);
+  closeBtn.focus(); // moves focus into the panel, so a keyboard/screen-reader user actually lands on its content
   await refreshRouting();
   await refreshModels();
 }
@@ -315,6 +319,7 @@ function renderModelList(): void {
     const upBtn = document.createElement("button");
     upBtn.type = "button";
     upBtn.textContent = "↑";
+    upBtn.setAttribute("aria-label", `Move ${model.displayName} up`);
     upBtn.disabled = index === 0;
     upBtn.addEventListener("click", () => {
       swapPriority(sorted, index, index - 1);
@@ -326,6 +331,7 @@ function renderModelList(): void {
     const downBtn = document.createElement("button");
     downBtn.type = "button";
     downBtn.textContent = "↓";
+    downBtn.setAttribute("aria-label", `Move ${model.displayName} down`);
     downBtn.disabled = index === sorted.length - 1;
     downBtn.addEventListener("click", () => {
       swapPriority(sorted, index, index + 1);
