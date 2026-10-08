@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { listRemoteSessions, downloadSession, uploadSession, deleteRemoteSession, DriveScopeError, reconcileSessions } from "../../cloudSync.js";
 import type { SessionRecord } from "../../sessionStore.js";
-import { loadSessionRecord, saveSession, listSessions } from "../../sessionStore.js";
+import { loadSessionRecord, saveSession, listSessions, readPendingDeletes, addPendingDelete, removePendingDelete } from "../../sessionStore.js";
 import type { ChatMessage } from "../../types.js";
 
 let failures = 0;
@@ -377,6 +377,7 @@ console.log("\nreconcileSessions:");
         knownFileIds.push(knownFileId);
         return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
+      deleteRemoteSession: async () => {},
     },
   });
   check("pushes a local-only session to remote", uploaded.length === 1 && uploaded[0]?.id === "local-only");
@@ -399,6 +400,7 @@ console.log("\nreconcileSessions:");
       uploadSession: async () => {
         throw new Error("should not be called");
       },
+      deleteRemoteSession: async () => {},
     },
   });
   const local = await loadSessionRecord(sessionsDir, "remote-only");
@@ -428,6 +430,7 @@ console.log("\nreconcileSessions:");
       uploadSession: async () => {
         throw new Error("should not be called");
       },
+      deleteRemoteSession: async () => {},
     },
   });
   const local = await loadSessionRecord(sessionsDir, "remote-only-malicious");
@@ -454,6 +457,7 @@ console.log("\nreconcileSessions:");
       uploadSession: async () => {
         throw new Error("should not be called");
       },
+      deleteRemoteSession: async () => {},
     },
   });
   const local = await loadSessionRecord(sessionsDir, "both-malicious");
@@ -476,6 +480,7 @@ console.log("\nreconcileSessions:");
       uploadSession: async () => {
         throw new Error("should not be called");
       },
+      deleteRemoteSession: async () => {},
     },
   });
   const local = await loadSessionRecord(sessionsDir, "both");
@@ -499,6 +504,7 @@ console.log("\nreconcileSessions:");
         knownFileIds.push(knownFileId);
         return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
+      deleteRemoteSession: async () => {},
     },
   });
   check("local-newer pushes the local copy to remote", uploaded.length === 1 && uploaded[0]?.updatedAt === 300);
@@ -527,6 +533,7 @@ console.log("\nreconcileSessions:");
         uploaded.push(record);
         return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
+      deleteRemoteSession: async () => {},
     },
   });
   check("a failed remote download doesn't abort the rest of the pass", uploaded.some((r) => r.id === "ok"));
@@ -560,6 +567,7 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
         knownFileIds.push(knownFileId);
         return { modifiedTime: "2024-01-02T00:00:00.000Z" };
       },
+      deleteRemoteSession: async () => {},
     },
   });
   check("remote unchanged + local changed pushes, even though local's updatedAt doesn't reflect it", uploaded.length === 1 && result.pushed === 1);
@@ -589,6 +597,7 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
       uploadSession: async () => {
         throw new Error("should not be called");
       },
+      deleteRemoteSession: async () => {},
     },
   });
   check("remote changed + local unchanged pulls, even though remote's own updatedAt is older", result.pulled === 1 && result.pushed === 0);
@@ -612,6 +621,7 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
       uploadSession: async () => {
         throw new Error("should not be called");
       },
+      deleteRemoteSession: async () => {},
     },
   });
   check("nothing changed on either side since the last sync -> skipped, no push or pull", result.pulled === 0 && result.pushed === 0);
@@ -637,6 +647,7 @@ console.log("\nreconcileSessions: clock-skew-safe merge via a sync checkpoint (c
       uploadSession: async () => {
         throw new Error("should not be called — a conflict adopts remote, it doesn't push");
       },
+      deleteRemoteSession: async () => {},
     },
   });
   check("reports exactly one conflict", result.conflicts === 1);
@@ -683,6 +694,7 @@ console.log("\nreconcileSessions: a remote tombstone (correctness audit: session
         uploaded.push(record);
         return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
+      deleteRemoteSession: async () => {},
     },
   });
   const local = await loadSessionRecord(sessionsDir, "deleted-elsewhere");
@@ -707,6 +719,7 @@ console.log("\nreconcileSessions: a remote tombstone (correctness audit: session
       uploadSession: async () => {
         throw new Error("should not be called — a locally-edited-since-sync tombstone preserves, it doesn't push");
       },
+      deleteRemoteSession: async () => {},
     },
   });
   const local = await loadSessionRecord(sessionsDir, "deleted-but-edited");
@@ -730,6 +743,7 @@ console.log("\nreconcileSessions: a remote tombstone (correctness audit: session
       uploadSession: async () => {
         throw new Error("should not be called");
       },
+      deleteRemoteSession: async () => {},
     },
   });
   check("a tombstone with no local copy anywhere is a pure no-op", result.deletedLocal === 0 && result.pulled === 0 && result.pushed === 0);
@@ -755,6 +769,7 @@ console.log("\nreconcileSessions: stale local index doesn't cause data loss:");
         uploaded.push(record);
         return { modifiedTime: "2024-03-01T00:00:00.000Z" };
       },
+      deleteRemoteSession: async () => {},
     },
   });
 
@@ -792,6 +807,7 @@ console.log("\nreconcileSessions: sessions are reconciled concurrently, not one 
       uploadSession: async () => {
         throw new Error("should not be called");
       },
+      deleteRemoteSession: async () => {},
     },
   });
   const elapsedMs = Date.now() - start;
@@ -836,6 +852,7 @@ console.log("\nreconcileSessions: concurrency is capped, not unbounded (performa
       uploadSession: async () => {
         throw new Error("should not be called");
       },
+      deleteRemoteSession: async () => {},
     },
   });
 
@@ -869,6 +886,7 @@ console.log("\nreconcileSessions: one batched index update for the whole pass, n
       uploadSession: async () => {
         throw new Error("should not be called");
       },
+      deleteRemoteSession: async () => {},
     },
   });
 
@@ -879,6 +897,95 @@ console.log("\nreconcileSessions: one batched index update for the whole pass, n
     "every session's real data made it into the index (not just a placeholder from an earlier partial write)",
     remoteEntries.every((e, i) => indexed.some((entry) => entry.id === e.sessionId && entry.updatedAt === 100 + i))
   );
+}
+
+console.log("\npending-delete persistence (sessionStore.ts) — addPendingDelete/removePendingDelete/readPendingDeletes:");
+{
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-pending-delete-test-"));
+
+  check("starts empty", (await readPendingDeletes(sessionsDir)).length === 0);
+
+  await addPendingDelete(sessionsDir, "sess-a");
+  check("recording one id makes it show up", (await readPendingDeletes(sessionsDir)).includes("sess-a"));
+
+  await addPendingDelete(sessionsDir, "sess-a");
+  check("recording the same id twice doesn't duplicate it", (await readPendingDeletes(sessionsDir)).filter((id) => id === "sess-a").length === 1);
+
+  await addPendingDelete(sessionsDir, "sess-b");
+  check("a second id is recorded alongside the first", new Set(await readPendingDeletes(sessionsDir)).size === 2);
+
+  await removePendingDelete(sessionsDir, "sess-a");
+  const afterRemove = await readPendingDeletes(sessionsDir);
+  check("removing one id clears exactly that one", !afterRemove.includes("sess-a") && afterRemove.includes("sess-b"));
+
+  await removePendingDelete(sessionsDir, "sess-nonexistent");
+  check("removing an id that was never recorded is a harmless no-op", (await readPendingDeletes(sessionsDir)).includes("sess-b"));
+}
+
+console.log("\nreconcileSessions: a session deleted while offline/signed-out is NOT resurrected — its pending tombstone push is flushed before anything else in the pass (Drive delete-propagation edge case):");
+{
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-pending-delete-reconcile-test-"));
+  // No local record at all — this session was already deleted locally
+  // (deleteSession already ran) before this reconcile ever starts, exactly
+  // like the real removeSession -> syncDeleteFromCloud -> addPendingDelete
+  // path. If the flush didn't run first, reconcileSessions' own
+  // no-local-copy branch would pull this "still there" remote content
+  // right back down.
+  await addPendingDelete(sessionsDir, "deleted-while-offline");
+
+  const deleteRemoteCalls: string[] = [];
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [{ sessionId: "deleted-while-offline", driveFileId: "file-1", modifiedTime: "2024-03-01T00:00:00.000Z" }],
+      downloadSession: async () => {
+        // Simulates the file Drive now holds AFTER this pass's own flush
+        // step already overwrote it with a tombstone — if the flush didn't
+        // run (or didn't run first), production code would instead still
+        // see real content here and pull it back.
+        return { tombstone: true, sessionId: "deleted-while-offline", deletedAt: "2024-03-01T00:00:00.000Z" };
+      },
+      uploadSession: async () => {
+        throw new Error("should not be called — nothing local to push");
+      },
+      deleteRemoteSession: async (_token, sessionId) => {
+        deleteRemoteCalls.push(sessionId);
+      },
+    },
+  });
+
+  check("the pending delete's tombstone push was actually attempted", deleteRemoteCalls.length === 1 && deleteRemoteCalls[0] === "deleted-while-offline");
+  check("reconcileSessions reports exactly one flushed pending delete", result.pendingDeletesFlushed === 1);
+  check("the session was NOT resurrected (pulled) — the flush ran before the normal pull logic saw it", result.pulled === 0);
+  check("the id is cleared from the pending list once its push succeeds", (await readPendingDeletes(sessionsDir)).length === 0);
+  check("no local record exists for it either", (await loadSessionRecord(sessionsDir, "deleted-while-offline")) === null);
+}
+
+console.log("\nreconcileSessions: a pending delete whose flush attempt fails stays recorded for next time, and doesn't block the rest of the pass:");
+{
+  const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-pending-delete-retry-test-"));
+  await saveSession(sessionsDir, makeRecord("local-only", 100));
+  await addPendingDelete(sessionsDir, "still-cant-delete");
+
+  const uploaded: SessionRecord[] = [];
+  const result = await reconcileSessions(sessionsDir, "tok", {
+    ops: {
+      listRemoteSessions: async () => [],
+      downloadSession: async () => {
+        throw new Error("should not be called");
+      },
+      uploadSession: async (_token, record) => {
+        uploaded.push(record);
+        return { modifiedTime: "2024-03-01T00:00:00.000Z" };
+      },
+      deleteRemoteSession: async () => {
+        throw new Error("simulated: still offline");
+      },
+    },
+  });
+
+  check("the failed flush leaves the id recorded for the next attempt", (await readPendingDeletes(sessionsDir)).includes("still-cant-delete"));
+  check("reports zero flushed, not a crash", result.pendingDeletesFlushed === 0);
+  check("the rest of the reconcile pass still ran normally despite the flush failure", uploaded.length === 1 && result.pushed === 1);
 }
 
 console.log(failures === 0 ? "\nAll cloudSync tests passed." : `\n${failures} cloudSync test(s) FAILED.`);
