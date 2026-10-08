@@ -29,6 +29,8 @@ const mcpServerCommandInput = byId<HTMLInputElement>("mcp-server-command");
 const mcpServerArgsInput = byId<HTMLInputElement>("mcp-server-args");
 const mcpServerEnvInput = byId<HTMLTextAreaElement>("mcp-server-env");
 const mcpServerFormError = byId<HTMLDivElement>("mcp-server-form-error");
+const mcpServerTestResult = byId<HTMLDivElement>("mcp-server-test-result");
+const mcpServerFormTest = byId<HTMLButtonElement>("mcp-server-form-test");
 const mcpServerFormSave = byId<HTMLButtonElement>("mcp-server-form-save");
 const mcpServersClose = byId<HTMLButtonElement>("mcp-servers-close");
 const mcpServersCloseX = byId<HTMLButtonElement>("mcp-servers-close-x");
@@ -48,6 +50,7 @@ function showMcpServersListView(): void {
   mcpServersFormView.hidden = true;
   mcpServersListView.hidden = false;
   mcpServerFormError.textContent = "";
+  mcpServerTestResult.textContent = "";
 }
 
 /** Builds one server row via createElement/.textContent, never innerHTML — server.name/command/args and a failed connection's status.error are all untrusted (user-typed, or emitted by a third-party MCP server process), so they must never be parsed as HTML. Same pattern as refreshDownloadedModelsList's list items elsewhere in this file. */
@@ -126,6 +129,19 @@ function parseEnvVarsText(text: string): Record<string, string> {
   return env;
 }
 
+/** Shared by Test connection and Save — both need the same fields and the same "name and command are required" validation. Sets mcpServerFormError and returns null if the form isn't fillable yet. */
+function readMcpServerFormFields(): { name: string; command: string; args: string[]; env: Record<string, string> } | null {
+  const name = mcpServerNameInput.value.trim();
+  const command = mcpServerCommandInput.value.trim();
+  if (!name || !command) {
+    mcpServerFormError.textContent = "Name and command are required.";
+    return null;
+  }
+  const args = mcpServerArgsInput.value.trim().split(/\s+/).filter(Boolean);
+  const env = parseEnvVarsText(mcpServerEnvInput.value);
+  return { name, command, args, env };
+}
+
 export interface McpServersPanelDeps {
   /** Closes every other full-screen modal first (mutual exclusion) — returns false if the caller should abort, same contract as every other panel's open path. */
   closeOtherFullScreenModals: () => boolean;
@@ -165,6 +181,7 @@ export function initMcpServersPanel(deps: McpServersPanelDeps): void {
     mcpServerArgsInput.value = "";
     mcpServerEnvInput.value = "";
     mcpServerFormError.textContent = "";
+    mcpServerTestResult.textContent = "";
     mcpServersListView.hidden = true;
     mcpServersFormView.hidden = false;
     mcpServerNameInput.focus();
@@ -172,19 +189,36 @@ export function initMcpServersPanel(deps: McpServersPanelDeps): void {
 
   mcpServersFormBack.addEventListener("click", showMcpServersListView);
 
+  mcpServerFormTest.addEventListener("click", () => {
+    mcpServerFormError.textContent = "";
+    mcpServerTestResult.textContent = "";
+    mcpServerTestResult.className = "";
+    const fields = readMcpServerFormFields();
+    if (!fields) return;
+    void withBusyLabel(mcpServerFormTest, "Testing…", async () => {
+      try {
+        const result = await window.agent.testMcpServer(fields);
+        if (result.ok) {
+          mcpServerTestResult.textContent = `✓ Connected — ${result.toolCount} tool${result.toolCount === 1 ? "" : "s"} available.`;
+          mcpServerTestResult.className = "success-text";
+        } else {
+          mcpServerTestResult.textContent = `✗ ${result.error}`;
+          mcpServerTestResult.className = "error-text";
+        }
+      } catch (err) {
+        mcpServerTestResult.textContent = `✗ ${errorMessage(err)}`;
+        mcpServerTestResult.className = "error-text";
+      }
+    });
+  });
+
   mcpServerFormSave.addEventListener("click", () => {
     mcpServerFormError.textContent = "";
-    const name = mcpServerNameInput.value.trim();
-    const command = mcpServerCommandInput.value.trim();
-    if (!name || !command) {
-      mcpServerFormError.textContent = "Name and command are required.";
-      return;
-    }
-    const args = mcpServerArgsInput.value.trim().split(/\s+/).filter(Boolean);
-    const env = parseEnvVarsText(mcpServerEnvInput.value);
+    const fields = readMcpServerFormFields();
+    if (!fields) return;
     void withBusyLabel(mcpServerFormSave, "Saving…", async () => {
       try {
-        const result = await window.agent.addMcpServer({ name, command, args, env });
+        const result = await window.agent.addMcpServer(fields);
         if (result.ok) {
           showMcpServersListView();
           await refreshMcpServersList();

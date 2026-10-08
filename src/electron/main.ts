@@ -325,6 +325,24 @@ app.whenReady().then(async () => {
     return { ok: true as const, server: { id: config.id, name: config.name, command: config.command, args: config.args, status: connection.status } };
   });
 
+  // UX gap: addMcpServer deliberately saves even a mistyped command (see its
+  // own doc comment above) — the only way to find out a server is broken
+  // was to save it, see the list render a red "failed" status, then remove
+  // and re-add it to try again. This lets the form verify a command/args/
+  // env combination BEFORE committing to saving it: connects exactly like
+  // a real add would, using a throwaway id never persisted anywhere and
+  // never added to mcpConnections, then always disconnects again
+  // afterward regardless of outcome — this is a probe, not a lasting
+  // connection, so nothing here should outlive the one IPC call.
+  ipcMain.handle("agent:test-mcp-server", async (_event, input: { name: string; command: string; args: string[]; env: Record<string, string> }) => {
+    const probeConfig: McpServerConfig = { id: crypto.randomUUID(), name: input.name, command: input.command, args: input.args, env: input.env, enabled: true };
+    const connection = await connectMcpServer(probeConfig, () => {});
+    await disconnectMcpServer(connection);
+    return connection.status.state === "connected"
+      ? { ok: true as const, toolCount: connection.status.toolCount }
+      : { ok: false as const, error: connection.status.state === "failed" ? connection.status.error : "Connection attempt did not complete." };
+  });
+
   ipcMain.handle("agent:remove-mcp-server", async (_event, id: string) => {
     const oldConnection = mcpConnections.find((c) => c.config.id === id);
     if (oldConnection) await disconnectMcpServer(oldConnection);
