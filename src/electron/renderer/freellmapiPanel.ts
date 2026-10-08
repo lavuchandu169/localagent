@@ -82,6 +82,7 @@ const PROVIDER_SIGNUP_URLS: Record<string, string> = {
 
 let panel: HTMLElement;
 let closeBtn: HTMLButtonElement;
+let openBtn: HTMLButtonElement;
 let refreshBtn: HTMLButtonElement;
 let errorEl: HTMLElement;
 let loadingEl: HTMLElement;
@@ -91,6 +92,7 @@ let customEndpointsEl: HTMLElement;
 export function initFreellmapiPanel(): void {
   panel = document.getElementById("freellmapi-panel")!;
   closeBtn = document.getElementById("freellmapi-panel-close-x") as HTMLButtonElement;
+  openBtn = document.getElementById("open-freellmapi-dashboard") as HTMLButtonElement;
   refreshBtn = document.getElementById("freellmapi-panel-refresh") as HTMLButtonElement;
   errorEl = document.getElementById("freellmapi-panel-error")!;
   loadingEl = document.getElementById("freellmapi-panel-loading")!;
@@ -114,11 +116,18 @@ export function initFreellmapiPanel(): void {
  * this file - Task 9 wires the reverse direction when it rewires the
  * "Manage free providers..." button itself. */
 export function closeFreellmapiPanel(): void {
+  // Guarded like closeFreellmapiFallbackPanel's own `if (panel.hidden)`
+  // check — this is called unconditionally from closeAllFullScreenModals
+  // (renderer.ts), and focusing openBtn for a panel that was never open
+  // would steal focus from whichever panel that sweep is about to open.
+  if (panel.hidden) return;
   closeOverlayPanel(panel);
+  openBtn.focus();
 }
 
 export async function openFreellmapiPanel(): Promise<void> {
   openOverlayPanel(panel);
+  closeBtn.focus(); // moves focus into the panel, so a keyboard/screen-reader user actually lands on its content
   await refreshProviders();
   await refreshCustomEndpoints(customEndpointsEl);
 }

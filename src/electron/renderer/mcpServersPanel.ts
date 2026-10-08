@@ -58,6 +58,7 @@ function renderMcpServerRow(server: McpServerView): HTMLDivElement {
   const row = document.createElement("div");
   row.className = "mcp-server-row";
   const dot = server.status.state === "connected" ? "🟢" : server.status.state === "connecting" ? "🟡" : "🔴";
+  const dotLabel = server.status.state === "connected" ? "Connected" : server.status.state === "connecting" ? "Connecting" : "Error";
   const detail =
     server.status.state === "connected"
       ? `${server.status.toolCount} tool${server.status.toolCount === 1 ? "" : "s"} available`
@@ -68,6 +69,7 @@ function renderMcpServerRow(server: McpServerView): HTMLDivElement {
   const dotSpan = document.createElement("span");
   dotSpan.className = "mcp-server-status-dot";
   dotSpan.textContent = dot;
+  dotSpan.setAttribute("aria-label", dotLabel);
 
   const nameSpan = document.createElement("span");
   nameSpan.className = "mcp-server-name";
@@ -154,6 +156,7 @@ export function openMcpServersPanel(deps: McpServersPanelDeps): void {
   mcpServersToggle.setAttribute("aria-expanded", "true");
   showMcpServersListView();
   void refreshMcpServersList();
+  mcpServersCloseX.focus(); // moves focus into the panel, so a keyboard/screen-reader user actually lands on its content
 }
 
 export function initMcpServersPanel(deps: McpServersPanelDeps): void {
