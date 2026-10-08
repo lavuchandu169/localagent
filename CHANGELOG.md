@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.106 — 2026-10-08
+
+- Fix Drive delete-propagation: deleting while signed out no longer loses the delete
+
 ## v0.1.0-beta.105 — 2026-10-08
 
 - Wire up AUTO_SAFE mode's promised safe-command auto-approval
