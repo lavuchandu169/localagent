@@ -2,6 +2,7 @@ import { promises as fsPromises } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PermissionEngine, classifyCommand } from "../../permissions.js";
+import { KNOWN_VERIFY_COMMANDS } from "../../verifyCommand.js";
 import type { ToolCall } from "../../types.js";
 
 let failures = 0;
@@ -91,15 +92,23 @@ console.log("\nclassifyCommand: project test-runner commands are their own tier,
   check("go test ./... is PROJECT_SCRIPT, not SAFE_READ", classifyCommand("go test ./...") === "PROJECT_SCRIPT");
 }
 
-console.log("\nPermissionEngine.evaluate: a model-issued PROJECT_SCRIPT command is NEVER auto-ALLOW from the engine's own stateless perspective, in any mode:");
+console.log("\nPermissionEngine.evaluate: a model-issued PROJECT_SCRIPT command is NEVER auto-ALLOW from the engine's own stateless perspective, in DEFAULT or ACCEPT_EDITS mode:");
 {
-  for (const mode of ["DEFAULT", "ACCEPT_EDITS", "AUTO_SAFE"] as const) {
+  for (const mode of ["DEFAULT", "ACCEPT_EDITS"] as const) {
     const engine = new PermissionEngine(mode);
     check(`npm test is not auto-ALLOW in ${mode} mode`, engine.evaluate(runCommandCall("npm test"), "EXECUTE") !== "ALLOW");
   }
 }
 
-console.log("\nPermissionEngine.evaluate: flag-injected variants of a project-script command are still never auto-ALLOW (a bare classifyCommand prefix match alone proved insufficient for C1 too):");
+console.log("\nPermissionEngine.evaluate: AUTO_SAFE auto-ALLOWs an EXACT match against KNOWN_VERIFY_COMMANDS — the same fixed set this app's own auto-verify step already runs unprompted (modeLabels.ts's 'safe-command auto-approval' promise):");
+{
+  const engine = new PermissionEngine("AUTO_SAFE");
+  for (const cmd of KNOWN_VERIFY_COMMANDS) {
+    check(`"${cmd}" is auto-ALLOW in AUTO_SAFE mode`, engine.evaluate(runCommandCall(cmd), "EXECUTE") === "ALLOW");
+  }
+}
+
+console.log("\nPermissionEngine.evaluate: flag-injected variants of a project-script command are still never auto-ALLOW, even in AUTO_SAFE mode — a test runner's own flags can redirect what actually executes, a risk shape no shell-metacharacter/escaping-argument check would catch (a bare classifyCommand prefix match alone proved insufficient for C1 too):");
 {
   const engine = new PermissionEngine("AUTO_SAFE");
   const variants = ["npm test --script-shell=./x.sh", "go test -exec=./x ./...", "pytest -p evilplugin"];

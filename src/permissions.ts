@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PermissionMode, PermissionDecision, ToolCall, PermissionLevel } from "./types.js";
+import { KNOWN_VERIFY_COMMANDS } from "./verifyCommand.js";
 
 // Deterministic command risk classification (Section 16).
 // The LLM's judgment is never trusted alone for safety-relevant decisions.
@@ -189,7 +190,27 @@ export class PermissionEngine {
       // point at — only auto-allow a command with no shell metacharacters
       // (hasShellMetacharacters) AND no escaping argument (hasEscapingArguments).
       if (risk === "SAFE_READ") return hasShellMetacharacters(command) || hasEscapingArguments(command, workspaceRoot) ? "ASK" : "ALLOW";
-      return "ASK"; // UNKNOWN defaults to asking (Section 16).
+      // AUTO_SAFE's own promise ("safe-command auto-approval", modeLabels.ts)
+      // extends auto-allow to PROJECT_SCRIPT — but NOT via the same
+      // metacharacter/escaping-argument checks SAFE_READ uses: a
+      // test-runner's own flags can redirect what actually executes
+      // ("npm test --script-shell=./x.sh", "go test -exec=./x", "pytest -p
+      // evilplugin"), with no shell metacharacter and no filesystem-escaping
+      // argument in sight — a risk shape SAFE_READ commands (cat/ls/git
+      // status) don't have (final review Critical #2 / security audit C1
+      // already established a bare classifyCommand prefix match alone isn't
+      // enough here). Auto-allow is restricted to an EXACT match against
+      // KNOWN_VERIFY_COMMANDS — the fixed, closed set this app's own
+      // auto-verify step already runs unprompted after one approval
+      // (verifyCommand.ts's detectVerifyCommand never returns anything
+      // else) — never a model-supplied variant carrying extra flags. Every
+      // other mode is unchanged: PROJECT_SCRIPT still always asks on its
+      // own first attempt (agent.ts's projectScriptApprovedThisTask memo is
+      // what lets a later approval in the SAME task skip asking again).
+      if (risk === "PROJECT_SCRIPT" && this.mode === "AUTO_SAFE" && (KNOWN_VERIFY_COMMANDS as readonly string[]).includes(command.trim())) {
+        return "ALLOW";
+      }
+      return "ASK"; // UNKNOWN (and any PROJECT_SCRIPT this block didn't already return for) defaults to asking (Section 16).
     }
 
     if (toolPermission === "WRITE") {
