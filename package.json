@@ -100,10 +100,12 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^20.14.9",
     "electron": "^44.0.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.24.2",
+    "jsdom": "^29.1.1",
     "license-checker-rseidelsohn": "^4.4.2",
     "typescript": "^5.5.4"
   }
