@@ -1760,7 +1760,10 @@ await (async () => {
     // just because it decided to) was still auto-ALLOWed with zero
     // approval in every mode, since classifyCommand still put it in
     // SAFE_READ. This proves the model's own direct call is now gated
-    // exactly the same way, and shares the same once-per-task memo.
+    // exactly the same way, and shares the same once-per-task memo. Uses
+    // DEFAULT mode specifically: AUTO_SAFE now auto-allows an exact
+    // KNOWN_VERIFY_COMMANDS match outright (see permissions.ts), which
+    // would skip the very ASK this test exists to prove happens.
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-modelcall-projectscript-test-"));
     const script: ChatResponse[] = [
       { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "npm test" } }] } },
@@ -1773,7 +1776,7 @@ await (async () => {
       model: "mock",
       provider: new MockProvider(script),
       tools: defaultToolRegistry(),
-      permissionMode: "AUTO_SAFE",
+      permissionMode: "DEFAULT",
       onApprovalNeeded: async (call) => {
         approvalRequests.push(call);
         return { approved: true };
@@ -1784,7 +1787,7 @@ await (async () => {
     for await (const event of session.run("run the tests")) events.push(event);
 
     const permissionRequests = events.filter((e) => e.type === "permission.request" && e.call.name === "run_command");
-    check("a model-issued run_command(\"npm test\") is forced through a real ASK, even in AUTO_SAFE mode", permissionRequests[0]?.type === "permission.request" && permissionRequests[0].decision === "ASK");
+    check("a model-issued run_command(\"npm test\") is forced through a real ASK in DEFAULT mode", permissionRequests[0]?.type === "permission.request" && permissionRequests[0].decision === "ASK");
     check("onApprovalNeeded was actually called for the model's own run_command", approvalRequests.length === 1);
     check("a SECOND model-issued run_command(\"npm test\") this same task auto-allows without asking again", permissionRequests[1]?.type === "permission.request" && permissionRequests[1].decision === "ALLOW");
 
@@ -1803,6 +1806,9 @@ await (async () => {
     // command is forced through a fresh ASK instead of silently reusing
     // the earlier approval, while a second call with the SAME exact safe
     // command still auto-allows (the memo isn't simply disabled outright).
+    // Uses DEFAULT mode: see the previous test's own comment on why
+    // AUTO_SAFE is no longer the right vehicle for "the first plain 'npm
+    // test' is asked for normally".
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-projectscript-injection-test-"));
     const script: ChatResponse[] = [
       { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "npm test" } }] } },
@@ -1816,7 +1822,7 @@ await (async () => {
       model: "mock",
       provider: new MockProvider(script),
       tools: defaultToolRegistry(),
-      permissionMode: "AUTO_SAFE",
+      permissionMode: "DEFAULT",
       onApprovalNeeded: async (call) => {
         approvalRequests.push(call);
         return { approved: true };
@@ -1840,6 +1846,37 @@ await (async () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
+})();
+
+console.log("\nAUTO_SAFE mode auto-allows a model-issued run_command exactly matching KNOWN_VERIFY_COMMANDS, with no approval at all:");
+await (async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-autosafe-projectscript-test-"));
+  const script: ChatResponse[] = [
+    { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "npm test" } }] } },
+    { turn: { type: "final", content: "done" } },
+  ];
+  const approvalRequests: ToolCall[] = [];
+  const session = new AgentSession({
+    workspaceRoot: tmpDir,
+    model: "mock",
+    provider: new MockProvider(script),
+    tools: defaultToolRegistry(),
+    permissionMode: "AUTO_SAFE",
+    onApprovalNeeded: async (call) => {
+      approvalRequests.push(call);
+      return { approved: true };
+    },
+  });
+
+  const events: AgentEvent[] = [];
+  for await (const event of session.run("run the tests")) events.push(event);
+
+  const permissionRequests = events.filter((e) => e.type === "permission.request" && e.call.name === "run_command");
+  check("the permission.request event itself already carries decision ALLOW, no ASK ever surfaced", permissionRequests[0]?.type === "permission.request" && permissionRequests[0].decision === "ALLOW");
+  check("onApprovalNeeded was never called at all — this mode's whole point is not interrupting for it", approvalRequests.length === 0);
+  check("the command actually ran", events.some((e) => e.type === "tool.start" && e.call.name === "run_command"));
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
 })();
 
 console.log("\nFallback to another configured provider on a retryable error:");

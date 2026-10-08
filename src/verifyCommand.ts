@@ -2,6 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 /**
+ * Every exact string detectVerifyCommand can return — a fixed, closed set
+ * this app's own code constructs, never a model-supplied or otherwise
+ * arbitrary string. Exported so permissions.ts can recognize exactly these
+ * forms (and only these — no flags, no variants) as safe to auto-approve
+ * in AUTO_SAFE mode: a single source of truth, so a future language/tool
+ * added here is automatically covered there too instead of silently
+ * drifting out of sync.
+ */
+export const KNOWN_VERIFY_COMMANDS = ["npm test", "pytest", "cargo test", "go test ./..."] as const;
+
+/**
  * Detects the project's own test/verify command from common project-root
  * markers — package.json's real "test" script, pytest, cargo, or go. First
  * match wins; returns null if nothing recognizable is found, which the

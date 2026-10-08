@@ -16,6 +16,6 @@ export const MODE_LABELS: Record<PermissionMode, { label: string; description: s
   },
   AUTO_SAFE: {
     label: "Auto-edit files (safe mode)",
-    description: "Same as Auto-edit files in this build — safe-command auto-approval isn't wired up yet.",
+    description: "File edits happen automatically, and so does running the project's own test/verify command — installs, network access, and anything destructive still wait for your approval.",
   },
 };

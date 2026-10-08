@@ -213,7 +213,7 @@ node dist/cli.js "explain how add() works in math.js" \
 | `PLAN` | ✅ free | 🚫 refused | 🚫 refused |
 | `DEFAULT` | ✅ free | ⏸ asks | ⏸ asks |
 | `ACCEPT_EDITS` | ✅ free | ✅ auto | ⏸ asks |
-| `AUTO_SAFE` | ✅ free | ✅ auto | ⏸ asks *(safe-command auto-approval not wired up yet — same as `ACCEPT_EDITS` today)* |
+| `AUTO_SAFE` | ✅ free | ✅ auto | ✅ auto *(only the project's own exact test/verify command — `npm test`, `pytest`, `cargo test`, `go test ./...`; everything else still asks)* |
 
 The custom Hugging Face path/search feature (below) is desktop-app only —
 the CLI's `--model` only accepts the curated ids.
@@ -646,9 +646,7 @@ the exact same core interchangeably, and the desktop app was built with
 Real gaps, not hedging: a VS Code extension, Tree-sitter/LSP symbol
 intelligence, subagents, agent hooks, and sandboxed execution aren't
 built. Drive delete-propagation has a known edge case (deleting a session
-while signed out can reappear on the next sign-in). Safe-command
-auto-approval in `AUTO_SAFE` mode isn't wired up yet (behaves like
-`ACCEPT_EDITS`). The Mac build is Apple Silicon only (no Intel/x64); the
+while signed out can reappear on the next sign-in). The Mac build is Apple Silicon only (no Intel/x64); the
 Windows build is x64 only (no ARM64). Neither installer is code-signed
 yet, so both trigger a one-time OS warning on first launch (see
 [Download the beta](#download-the-beta)) and Mac auto-updates can
