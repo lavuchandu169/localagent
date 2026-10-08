@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.108 — 2026-10-08
+
+- Show a rough pre-send input-cost estimate in the composer
+
 ## v0.1.0-beta.107 — 2026-10-08
 
 - Add a "Test connection" button to the MCP add-server form
