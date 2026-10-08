@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld("agent", {
   openUpdateFile: () => ipcRenderer.invoke("agent:open-update-file"),
   listMcpServers: () => ipcRenderer.invoke("agent:list-mcp-servers"),
   addMcpServer: (input) => ipcRenderer.invoke("agent:add-mcp-server", input),
+  testMcpServer: (input) => ipcRenderer.invoke("agent:test-mcp-server", input),
   removeMcpServer: (id) => ipcRenderer.invoke("agent:remove-mcp-server", id),
   onMcpServerStatusChanged: (callback) => {
     const listener = (_event, payload) => callback(payload);

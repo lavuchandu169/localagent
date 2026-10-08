@@ -192,6 +192,7 @@ interface AgentBridge {
   addMcpServer(
     input: { name: string; command: string; args: string[]; env: Record<string, string> }
   ): Promise<{ ok: true; server: { id: string; name: string; command: string; args: string[]; status: McpServerStatus } } | { ok: false; error: string }>;
+  testMcpServer(input: { name: string; command: string; args: string[]; env: Record<string, string> }): Promise<{ ok: true; toolCount: number } | { ok: false; error: string }>;
   removeMcpServer(id: string): Promise<void>;
   onMcpServerStatusChanged(callback: (payload: { id: string; status: McpServerStatus }) => void): () => void;
   getGoogleSettings(): Promise<{ clientId: string; hasSecret: boolean; envOverride: boolean }>;
