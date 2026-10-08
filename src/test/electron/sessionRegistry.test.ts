@@ -24,7 +24,7 @@ import {
   stopTask,
 } from "../../electron/sessionRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
-import { loadSessionRecord, listSessions, searchSessions } from "../../sessionStore.js";
+import { loadSessionRecord, listSessions, searchSessions, readPendingDeletes } from "../../sessionStore.js";
 import { DriveScopeError } from "../../cloudSync.js";
 import { groupDiffIntoSegments } from "../../diffUtil.js";
 import type { AgentEvent, ChatRequest, ChatResponse, HealthCheckResult, ModelProvider } from "../../types.js";
@@ -44,6 +44,15 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000, intervalMs = 
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("waitFor: condition not met within timeout");
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+/** Same polling contract as waitFor, for a condition that itself requires an async check (e.g. reading a file) — waitFor's own predicate type is synchronous only, and a Promise object is always truthy, so passing an async predicate there would silently "pass" on the very first check instead of actually waiting. */
+async function waitForAsync(predicate: () => Promise<boolean>, timeoutMs = 2000, intervalMs = 5): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await predicate())) {
+    if (Date.now() > deadline) throw new Error("waitForAsync: condition not met within timeout");
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 }
@@ -1061,6 +1070,61 @@ await (async () => {
     );
     await removeSession(registry, sessionId);
     check("removeSession best-effort deletes the remote copy when signed in", deletedSessionId === sessionId);
+  }
+
+  {
+    // Drive delete-propagation edge case (README's own "What's not built
+    // yet"): deleting a session while signed out used to just silently
+    // drop the delete intent — the local record was already gone, but
+    // nothing ever told Drive, so the next reconcile pulled the "still
+    // there" remote copy right back down. syncDeleteFromCloud now records
+    // the id as a pending delete instead of giving up outright.
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => null, // signed out
+      onScopeError: () => {
+        throw new Error("should not be called");
+      },
+      getOwnerEmail: async () => null,
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([]) }
+    );
+    await removeSession(registry, sessionId);
+    check("the session is actually gone locally", (await loadSessionRecord(sessionsDir, sessionId)) === null);
+    // syncDeleteFromCloud is deliberately fire-and-forget (removeSession
+    // doesn't await it, so a real delete never blocks on a network call) —
+    // its own addPendingDelete write (real disk I/O: read+write+rename)
+    // hasn't necessarily finished the instant removeSession's own promise
+    // resolves. Poll instead of a fixed sleep, same reasoning as this
+    // file's own waitFor doc comment above.
+    await waitForAsync(async () => (await readPendingDeletes(sessionsDir)).includes(sessionId));
+    check("deleting while signed out records a pending delete instead of silently dropping it", (await readPendingDeletes(sessionsDir)).includes(sessionId));
+  }
+
+  {
+    // Same edge case, the other failure shape: signed in, but the delete
+    // call itself fails (network blip, token rejected mid-request, etc.) —
+    // not just "no token at all".
+    const registry = createSessionRegistry(sessionsDir, {
+      getAccessToken: async () => "fake-token",
+      onScopeError: () => {
+        throw new Error("should not be called — this is a transient failure, not a scope error");
+      },
+      deleteRemoteSession: async () => {
+        throw new Error("simulated transient network failure");
+      },
+      getOwnerEmail: async () => null,
+    });
+    const { sessionId } = await startSession(
+      registry,
+      { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "PLAN" },
+      { providerFactory: () => new MockProvider([]) }
+    );
+    await removeSession(registry, sessionId);
+    await waitForAsync(async () => (await readPendingDeletes(sessionsDir)).includes(sessionId));
+    check("a failed (not just un-attemptable) remote delete also records a pending delete", (await readPendingDeletes(sessionsDir)).includes(sessionId));
   }
 
   console.log("\nsyncUploadToCloud doesn't overwrite newer local state with a stale snapshot (final-review finding C1):");

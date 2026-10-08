@@ -9,7 +9,7 @@ import { OpenAIProvider } from "../providers/openaiProvider.js";
 import { GeminiProvider } from "../providers/geminiProvider.js";
 import { FreellmapiProxyProvider } from "../providers/freellmapiProxy.js";
 import { isEmbeddedModelId } from "../models.js";
-import { saveSession, deleteSession, loadSessionRecord, type SessionRecord, type PersistedProviderConfig, type SessionIndexEntry } from "../sessionStore.js";
+import { saveSession, deleteSession, loadSessionRecord, addPendingDelete, removePendingDelete, type SessionRecord, type PersistedProviderConfig, type SessionIndexEntry } from "../sessionStore.js";
 import { uploadSession as driveUploadSession, deleteRemoteSession as driveDeleteRemoteSession, DriveScopeError } from "../cloudSync.js";
 import type { AgentEvent, AttachedImage, AttachedText, ChatMessage, ModelProvider, PermissionMode, PermissionResponse, Tool } from "../types.js";
 import { isEphemeralStreamEvent } from "../types.js";
@@ -602,17 +602,35 @@ async function syncUploadToCloud(registry: SessionRegistry, record: SessionRecor
   }
 }
 
-/** Mirrors syncUploadToCloud's best-effort contract for the delete path. */
+/**
+ * Mirrors syncUploadToCloud's best-effort contract for the delete path —
+ * with one difference upload doesn't need: a failed/un-attemptable delete
+ * must not be allowed to just vanish. The local record is already gone by
+ * the time this runs (removeSession's own deleteSession call happens
+ * first), so if the Drive-side tombstone never gets pushed, the NEXT
+ * reconcile sees a remote file with no local copy and resurrects it —
+ * silently undoing a delete the user already made. addPendingDelete
+ * durably records that this id still needs its tombstone pushed;
+ * reconcileSessions flushes the list (retrying this exact push) before it
+ * does anything else, including on the very first reconcile after a fresh
+ * sign-in — the case this was originally filed against (deleting while
+ * signed out).
+ */
 async function syncDeleteFromCloud(registry: SessionRegistry, sessionId: string): Promise<void> {
   if (!registry.cloudSync) return;
   const { getAccessToken, onScopeError, deleteRemoteSession: del = driveDeleteRemoteSession } = registry.cloudSync;
   try {
     const token = await getAccessToken();
-    if (!token) return;
+    if (!token) {
+      await addPendingDelete(registry.sessionsDir, sessionId);
+      return;
+    }
     await del(token, sessionId);
+    await removePendingDelete(registry.sessionsDir, sessionId);
   } catch (err) {
     if (err instanceof DriveScopeError) onScopeError();
-    else console.warn(`[cloudSync] remote delete failed for session ${sessionId}:`, err);
+    else console.warn(`[cloudSync] remote delete failed for session ${sessionId}, will retry on next reconcile:`, err);
+    await addPendingDelete(registry.sessionsDir, sessionId);
   }
 }
 

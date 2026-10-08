@@ -5,6 +5,8 @@ import {
   writeSessionRecordFile,
   removeSessionRecordFile,
   applyIndexMutations,
+  readPendingDeletes,
+  removePendingDelete,
   type SessionRecord,
   type SessionIndexEntry,
 } from "./sessionStore.js";
@@ -284,6 +286,8 @@ export interface ReconcileResult {
   deletedLocal: number;
   /** Correctness audit finding (session Medium #1): both sides changed since the last successful sync, with no logical ordering between them — the losing (local) version was preserved under a conflict-suffixed id rather than silently overwritten; see reconcileSessions' doc comment. */
   conflicts: number;
+  /** Drive delete-propagation edge case: a session deleted while signed out/offline had its remote tombstone push recorded as pending (sessionStore.ts's addPendingDelete) instead of lost outright. This counts how many of those this pass successfully flushed — i.e. how many previously-undelivered deletes just got pushed to Drive for real, before anything else in this pass ran. */
+  pendingDeletesFlushed: number;
 }
 
 export interface ReconcileOps {
@@ -293,6 +297,7 @@ export interface ReconcileOps {
    * exists for this record, `null` when it already knows one doesn't —
    * see uploadSession's doc comment. Omit it only when genuinely unknown. */
   uploadSession: (accessToken: string, record: SessionRecord, knownFileId?: string | null) => Promise<{ modifiedTime: string }>;
+  deleteRemoteSession: (accessToken: string, sessionId: string) => Promise<void>;
 }
 
 function defaultReconcileOps(fetchImpl: FetchImpl): ReconcileOps {
@@ -300,6 +305,7 @@ function defaultReconcileOps(fetchImpl: FetchImpl): ReconcileOps {
     listRemoteSessions: (token) => listRemoteSessions(token, fetchImpl),
     downloadSession: (token, id) => downloadSession(token, id, fetchImpl),
     uploadSession: (token, record, knownFileId) => uploadSession(token, record, fetchImpl, knownFileId),
+    deleteRemoteSession: (token, id) => deleteRemoteSession(token, id, fetchImpl),
   };
 }
 
@@ -378,6 +384,28 @@ export async function reconcileSessions(
   deps: { fetchImpl?: FetchImpl; ops?: ReconcileOps } = {}
 ): Promise<ReconcileResult> {
   const ops = deps.ops ?? defaultReconcileOps(deps.fetchImpl ?? fetch);
+
+  // Drive delete-propagation edge case: flush BEFORE doing anything else in
+  // this pass, including the listRemoteSessions call right below — a
+  // pending delete's tombstone has to actually be written first, or the
+  // normal pull logic that follows could still see the stale (pre-
+  // tombstone) remote content and resurrect exactly what this is trying to
+  // finally get rid of. A failure here (still offline, token rejected,
+  // etc.) just leaves that id in the pending list for the next attempt —
+  // never fatal to the rest of this reconcile pass.
+  const pendingDeletes = await readPendingDeletes(sessionsDir);
+  let pendingDeletesFlushed = 0;
+  if (pendingDeletes.length > 0) {
+    await mapWithConcurrency(pendingDeletes, RECONCILE_CONCURRENCY, async (id) => {
+      try {
+        await ops.deleteRemoteSession(accessToken, id);
+        await removePendingDelete(sessionsDir, id);
+        pendingDeletesFlushed++;
+      } catch (err) {
+        console.warn(`[cloudSync] retrying pending delete for session ${id} failed, will retry on next reconcile:`, err);
+      }
+    });
+  }
 
   const [localEntries, remoteEntries] = await Promise.all([listSessions(sessionsDir), ops.listRemoteSessions(accessToken)]);
   const remoteIds = new Set(remoteEntries.map((e) => e.sessionId));
@@ -577,5 +605,6 @@ export async function reconcileSessions(
     pushed: outcomes.filter((o) => o === "pushed").length,
     deletedLocal: outcomes.filter((o) => o === "deletedLocal").length,
     conflicts: outcomes.filter((o) => o === "conflict").length,
+    pendingDeletesFlushed,
   };
 }

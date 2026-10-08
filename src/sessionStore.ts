@@ -159,6 +159,83 @@ function withIndexLock<T>(sessionsDir: string, fn: () => Promise<T>): Promise<T>
   return run;
 }
 
+function pendingDeletesPath(sessionsDir: string): string {
+  return path.join(sessionsDir, "pending-deletes.json");
+}
+
+/**
+ * Correctness bug (Drive delete-propagation edge case, README's own
+ * "What's not built yet"): deleting a session while signed out (or while
+ * offline) removed the local record immediately, but the Drive-side
+ * tombstone push (syncDeleteFromCloud, sessionRegistry.ts) was a bare
+ * best-effort fire-and-forget attempt — if there was no access token (or
+ * the attempt otherwise failed), the delete intent was lost completely.
+ * The next successful reconcile saw a remote file with no local copy and
+ * pulled it back down, silently resurrecting a session the user had
+ * already deleted. This durable list is that missing record: a session id
+ * lands here whenever its remote tombstone push either couldn't be
+ * attempted or failed, and reconcileSessions (cloudSync.ts) flushes it —
+ * retrying the tombstone push — before it does anything else on every
+ * run, including the very first reconcile after a fresh sign-in.
+ *
+ * Same promise-chain mutex pattern as withIndexLock, over a SEPARATE lock
+ * map: this file and index.json are independent and shouldn't serialize
+ * against each other, but concurrent additions/removals to THIS list (an
+ * offline delete racing a reconcile's own flush, or several pending
+ * deletes being flushed at once) need the exact same read-modify-write
+ * protection index.json's own concurrent-save bug (final-review C2)
+ * already established is a real, frequently-hit failure mode, not a
+ * hypothetical one.
+ */
+const pendingDeleteLocks = new Map<string, Promise<void>>();
+
+function withPendingDeletesLock<T>(sessionsDir: string, fn: () => Promise<T>): Promise<T> {
+  const prior = pendingDeleteLocks.get(sessionsDir) ?? Promise.resolve();
+  const run = prior.then(fn, fn);
+  pendingDeleteLocks.set(
+    sessionsDir,
+    run.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return run;
+}
+
+async function readPendingDeletesRaw(sessionsDir: string): Promise<string[]> {
+  try {
+    const raw = await fs.readFile(pendingDeletesPath(sessionsDir), "utf-8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Current pending-delete list, outside any lock — a snapshot for display/diagnostic purposes. Callers that need to safely mutate the list use addPendingDelete/removePendingDelete instead, which hold the lock across their own read+write. */
+export async function readPendingDeletes(sessionsDir: string): Promise<string[]> {
+  return readPendingDeletesRaw(sessionsDir);
+}
+
+/** Records that `id`'s remote tombstone still needs to be pushed — a no-op if it's already recorded. */
+export async function addPendingDelete(sessionsDir: string, id: string): Promise<void> {
+  return withPendingDeletesLock(sessionsDir, async () => {
+    const current = await readPendingDeletesRaw(sessionsDir);
+    if (current.includes(id)) return;
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await writeFileAtomic(pendingDeletesPath(sessionsDir), JSON.stringify([...current, id], null, 2));
+  });
+}
+
+/** Clears `id` from the pending-delete list once its remote tombstone push actually succeeds — a no-op if it was never recorded (the common case: most deletes push successfully on the first try and never need this list at all). */
+export async function removePendingDelete(sessionsDir: string, id: string): Promise<void> {
+  return withPendingDeletesLock(sessionsDir, async () => {
+    const current = await readPendingDeletesRaw(sessionsDir);
+    if (!current.includes(id)) return;
+    await writeFileAtomic(pendingDeletesPath(sessionsDir), JSON.stringify(current.filter((x) => x !== id), null, 2));
+  });
+}
+
 /** Scans the directory and rebuilds index entries from each record file directly — the self-healing path for a missing/corrupted index.json. Never acquires the index lock or writes anything itself; every caller (both below) does both within its own single lock acquisition, so this can be safely called from inside an already-locked section without deadlocking. */
 async function buildIndexFromDisk(sessionsDir: string): Promise<SessionIndexEntry[]> {
   let files: string[];
@@ -170,7 +247,7 @@ async function buildIndexFromDisk(sessionsDir: string): Promise<SessionIndexEntr
 
   const entries: SessionIndexEntry[] = [];
   for (const file of files) {
-    if (file === "index.json" || !file.endsWith(".json") || file.includes(".tmp-")) continue;
+    if (file === "index.json" || file === "pending-deletes.json" || !file.endsWith(".json") || file.includes(".tmp-")) continue;
     const id = file.slice(0, -".json".length);
     const record = await loadSessionRecord(sessionsDir, id);
     if (record) entries.push({ id: record.id, title: record.title, updatedAt: record.updatedAt, ownerEmail: record.ownerEmail });
