@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.121 — 2026-10-09
+
+- Add test coverage for the session-ownership authorization decision
+
 ## v0.1.0-beta.120 — 2026-10-09
 
 - Close flag-injection gap in PROJECT_SCRIPT approval memo
