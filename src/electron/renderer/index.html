@@ -171,7 +171,8 @@
         <div id="settings-panel" hidden role="dialog" aria-modal="true" aria-label="Settings">
           <div class="modal-card">
             <button id="settings-close-x" class="modal-close-x" type="button" aria-label="Close">×</button>
-            <p>Appearance — pick the color theme.</p>
+            <h3>Appearance</h3>
+            <p>Pick the color theme.</p>
             <label>
               Theme
               <select id="theme-select">
@@ -182,78 +183,90 @@
               </select>
             </label>
 
-            <hr />
-            <p>Google sign-in needs your own OAuth Client ID (and sometimes a Client Secret) from Google Cloud Console. Saved locally, used only to sign in.</p>
-            <ol>
-              <li><a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a> → create or select a project.</li>
-              <li>APIs &amp; Services → OAuth consent screen → configure it, add yourself as a test user (or publish to production).</li>
-              <li>APIs &amp; Services → Credentials → Create Credentials → OAuth client ID → Application type: <strong>Desktop app</strong>.</li>
-              <li>Copy the Client ID (and Client Secret, if Google issued one) below.</li>
-            </ol>
-            <div class="hint-text">See the README's <a href="https://github.com/lavuchandu169/localagent#troubleshooting" target="_blank" rel="noopener">troubleshooting section</a> for help with test users, enabling the Drive API, and other setup issues.</div>
-            <div id="settings-env-override" class="hint-text" hidden>An environment variable (GOOGLE_OAUTH_CLIENT_ID) is currently active and overrides these saved values.</div>
-            <label>
-              Client ID
-              <input id="settings-client-id" type="text" placeholder="your-client-id.apps.googleusercontent.com" />
-            </label>
-            <label>
-              Client Secret <span class="hint-text">(only if Google asks for one)</span>
-              <input id="settings-client-secret" type="password" placeholder="" />
-            </label>
-            <div id="settings-error" class="error-text" role="alert"></div>
-            <div id="settings-saved" class="hint-text saved-toast" hidden role="status" aria-live="polite">Saved.</div>
-            <button id="settings-save">Save</button>
-            <button id="settings-close">Close</button>
-
-            <hr />
-            <p>GitHub — connect an account so the agent can push commits and open pull requests on your behalf. Uses GitHub's device authorization flow: no password or token to paste.</p>
-            <div id="github-not-connected">
-              <button id="github-connect" type="button">Connect GitHub account</button>
-              <div id="github-device-code" class="hint-text" hidden></div>
+            <div class="panel-section">
+              <h3>Google Sign-in</h3>
+              <p>Needs your own OAuth Client ID (and sometimes a Client Secret) from Google Cloud Console. Saved locally, used only to sign in.</p>
+              <ol>
+                <li><a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a> → create or select a project.</li>
+                <li>APIs &amp; Services → OAuth consent screen → configure it, add yourself as a test user (or publish to production).</li>
+                <li>APIs &amp; Services → Credentials → Create Credentials → OAuth client ID → Application type: <strong>Desktop app</strong>.</li>
+                <li>Copy the Client ID (and Client Secret, if Google issued one) below.</li>
+              </ol>
+              <div class="hint-text">See the README's <a href="https://github.com/lavuchandu169/localagent#troubleshooting" target="_blank" rel="noopener">troubleshooting section</a> for help with test users, enabling the Drive API, and other setup issues.</div>
+              <div id="settings-env-override" class="hint-text" hidden>An environment variable (GOOGLE_OAUTH_CLIENT_ID) is currently active and overrides these saved values.</div>
+              <label>
+                Client ID
+                <input id="settings-client-id" type="text" placeholder="your-client-id.apps.googleusercontent.com" />
+              </label>
+              <label>
+                Client Secret <span class="hint-text">(only if Google asks for one)</span>
+                <input id="settings-client-secret" type="password" placeholder="" />
+              </label>
+              <div id="settings-error" class="error-text" role="alert"></div>
+              <div id="settings-saved" class="hint-text saved-toast" hidden role="status" aria-live="polite">Saved.</div>
+              <button id="settings-save">Save</button>
+              <button id="settings-close">Close</button>
             </div>
-            <div id="github-connected" hidden>
-              <span id="github-connected-as"></span>
-              <button id="github-disconnect" type="button">Disconnect</button>
+
+            <div class="panel-section">
+              <h3>GitHub</h3>
+              <p>Connect an account so the agent can push commits and open pull requests on your behalf. Uses GitHub's device authorization flow: no password or token to paste.</p>
+              <div id="github-not-connected">
+                <button id="github-connect" type="button">Connect GitHub account</button>
+                <div id="github-device-code" class="hint-text" hidden></div>
+              </div>
+              <div id="github-connected" hidden>
+                <span id="github-connected-as"></span>
+                <button id="github-disconnect" type="button">Disconnect</button>
+              </div>
+              <div id="github-settings-error" class="error-text" role="alert"></div>
             </div>
-            <div id="github-settings-error" class="error-text" role="alert"></div>
 
-            <hr />
-            <p>Downloaded models — delete one to free up disk space; it re-downloads automatically the next time you pick it.</p>
-            <ul id="downloaded-models-list"></ul>
-            <div id="downloaded-models-empty" class="hint-text">No models downloaded yet.</div>
+            <div class="panel-section">
+              <h3>Downloaded Models</h3>
+              <p>Delete one to free up disk space; it re-downloads automatically the next time you pick it.</p>
+              <ul id="downloaded-models-list"></ul>
+              <div id="downloaded-models-empty" class="hint-text">No models downloaded yet.</div>
+            </div>
 
-            <hr />
-            <p>Anthropic API key — to use a Claude model (Model dropdown → Cloud), from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. This is a separate, pay-as-you-go API key — not your claude.ai Pro/Max subscription, which can't be used from other apps. Saved locally, sent only to Anthropic.</p>
-            <div id="anthropic-env-override" class="hint-text" hidden>An environment variable (ANTHROPIC_API_KEY) is currently active and overrides this saved value.</div>
-            <label>
-              API Key
-              <input id="anthropic-api-key" type="password" placeholder="" />
-            </label>
-            <div id="anthropic-settings-error" class="error-text" role="alert"></div>
-            <div id="anthropic-settings-saved" class="hint-text saved-toast" hidden role="status" aria-live="polite">Saved.</div>
-            <button id="anthropic-settings-save">Save</button>
+            <div class="panel-section">
+              <h3>Anthropic</h3>
+              <p>API key — to use a Claude model (Model dropdown → Cloud), from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. This is a separate, pay-as-you-go API key — not your claude.ai Pro/Max subscription, which can't be used from other apps. Saved locally, sent only to Anthropic.</p>
+              <div id="anthropic-env-override" class="hint-text" hidden>An environment variable (ANTHROPIC_API_KEY) is currently active and overrides this saved value.</div>
+              <label>
+                API Key
+                <input id="anthropic-api-key" type="password" placeholder="" />
+              </label>
+              <div id="anthropic-settings-error" class="error-text" role="alert"></div>
+              <div id="anthropic-settings-saved" class="hint-text saved-toast" hidden role="status" aria-live="polite">Saved.</div>
+              <button id="anthropic-settings-save">Save</button>
+            </div>
 
-            <hr />
-            <p>OpenAI API key — to use a GPT model (Model dropdown → Cloud), from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>. Saved locally, sent only to OpenAI.</p>
-            <div id="openai-env-override" class="hint-text" hidden>An environment variable (OPENAI_API_KEY) is currently active and overrides this saved value.</div>
-            <label>
-              API Key
-              <input id="openai-api-key" type="password" placeholder="" />
-            </label>
-            <div id="openai-settings-error" class="error-text" role="alert"></div>
-            <div id="openai-settings-saved" class="hint-text saved-toast" hidden role="status" aria-live="polite">Saved.</div>
-            <button id="openai-settings-save">Save</button>
+            <div class="panel-section">
+              <h3>OpenAI</h3>
+              <p>API key — to use a GPT model (Model dropdown → Cloud), from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>. Saved locally, sent only to OpenAI.</p>
+              <div id="openai-env-override" class="hint-text" hidden>An environment variable (OPENAI_API_KEY) is currently active and overrides this saved value.</div>
+              <label>
+                API Key
+                <input id="openai-api-key" type="password" placeholder="" />
+              </label>
+              <div id="openai-settings-error" class="error-text" role="alert"></div>
+              <div id="openai-settings-saved" class="hint-text saved-toast" hidden role="status" aria-live="polite">Saved.</div>
+              <button id="openai-settings-save">Save</button>
+            </div>
 
-            <hr />
-            <p>Gemini API key — to use a Gemini model (Model dropdown → Cloud), from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>. Gemini's free tier needs no payment method. Saved locally, sent only to Google.</p>
-            <div id="gemini-env-override" class="hint-text" hidden>An environment variable (GEMINI_API_KEY) is currently active and overrides this saved value.</div>
-            <label>
-              API Key
-              <input id="gemini-api-key" type="password" placeholder="" />
-            </label>
-            <div id="gemini-settings-error" class="error-text" role="alert"></div>
-            <div id="gemini-settings-saved" class="hint-text saved-toast" hidden role="status" aria-live="polite">Saved.</div>
-            <button id="gemini-settings-save">Save</button>
+            <div class="panel-section">
+              <h3>Gemini</h3>
+              <p>API key — to use a Gemini model (Model dropdown → Cloud), from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>. Gemini's free tier needs no payment method. Saved locally, sent only to Google.</p>
+              <div id="gemini-env-override" class="hint-text" hidden>An environment variable (GEMINI_API_KEY) is currently active and overrides this saved value.</div>
+              <label>
+                API Key
+                <input id="gemini-api-key" type="password" placeholder="" />
+              </label>
+              <div id="gemini-settings-error" class="error-text" role="alert"></div>
+              <div id="gemini-settings-saved" class="hint-text saved-toast" hidden role="status" aria-live="polite">Saved.</div>
+              <button id="gemini-settings-save">Save</button>
+            </div>
           </div>
         </div>
 
@@ -267,7 +280,7 @@
             <div id="freellmapi-panel-error" class="error-text" hidden role="alert"></div>
             <div id="freellmapi-panel-loading" class="hint-text">Loading providers…</div>
             <div id="freellmapi-provider-list"></div>
-            <div class="freellmapi-panel-section">
+            <div class="panel-section">
               <h3>Import / Export</h3>
               <div class="row">
                 <button id="freellmapi-import-btn" type="button">Import from file…</button>
@@ -276,7 +289,7 @@
               </div>
               <div id="freellmapi-import-preview" hidden></div>
             </div>
-            <div class="freellmapi-panel-section">
+            <div class="panel-section">
               <h3>Custom OpenAI-compatible provider</h3>
               <div class="row">
                 <input id="freellmapi-custom-base-url" type="text" aria-label="Base URL" placeholder="http://localhost:1234/v1" />
@@ -303,7 +316,7 @@
             </div>
             <div id="freellmapi-fallback-error" class="error-text" hidden role="alert"></div>
             <div id="freellmapi-fallback-loading" class="hint-text">Loading routing settings…</div>
-            <div class="freellmapi-panel-section">
+            <div class="panel-section">
               <h3>Routing strategy</h3>
               <div class="row">
                 <label>
@@ -346,7 +359,7 @@
               </div>
               <button id="freellmapi-fallback-save-routing" type="button">Save routing settings</button>
             </div>
-            <div class="freellmapi-panel-section">
+            <div class="panel-section">
               <h3>Model priority</h3>
               <div id="freellmapi-fallback-model-priority-hint" class="hint-text" hidden></div>
               <div class="row">
