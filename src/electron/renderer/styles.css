@@ -865,12 +865,17 @@ summary:focus-visible {
   color: var(--warn);
   word-break: break-all;
 }
-.freellmapi-panel-section {
+.panel-section {
   margin-top: 20px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
 }
-.freellmapi-panel-section h3 {
+/* Descendant selector (not scoped to .panel-section) so it also covers a
+   modal's first/unwrapped heading — e.g. Settings' "Appearance" section,
+   which has no .panel-section border-top since there's nothing above it
+   in the panel to divide from, but still wants the same heading treatment
+   as every section after it. */
+.modal-card h3 {
   margin: 0 0 10px;
   font-size: 13px;
   color: var(--text);
