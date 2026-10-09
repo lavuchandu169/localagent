@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.118 — 2026-10-09
+
+- README: link to the marketing website
+
 ## v0.1.0-beta.117 — 2026-10-09
 
 - Onboarding modal: visually separate the three model choices
