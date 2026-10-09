@@ -1204,6 +1204,20 @@ summary:focus-visible {
   color: var(--text-dim);
 }
 
+.mcp-server-row .mcp-server-remove {
+  /* Same hover/focus-reveal pattern as the sidebar's session-item-delete —
+     a server list permanently showing "Remove" on every row reads busier
+     than it needs to; kept reachable by keyboard via :focus-visible so
+     Tab-ing to it never lands on an invisible control. */
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.mcp-server-row:hover .mcp-server-remove,
+.mcp-server-row .mcp-server-remove:focus-visible {
+  opacity: 1;
+}
+
 #settings-panel ol {
   margin: 0 0 10px;
   padding-left: 18px;
