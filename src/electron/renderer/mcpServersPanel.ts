@@ -85,6 +85,7 @@ function renderMcpServerRow(server: McpServerView): HTMLDivElement {
 
   const removeBtn = document.createElement("button");
   removeBtn.type = "button";
+  removeBtn.className = "mcp-server-remove";
   removeBtn.textContent = "Remove";
   removeBtn.addEventListener("click", () => {
     void (async () => {
