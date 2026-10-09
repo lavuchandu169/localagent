@@ -336,6 +336,23 @@ console.log("\ndeleteRemoteSession:");
   check("no-ops without throwing when no remote file exists for this session (nothing to tombstone)", !threw);
 }
 
+console.log("\nfindRemoteFile's query escapes a sessionId containing a quote (code-review nit: unescaped interpolation into a Drive API query literal):");
+{
+  // sessionId is always a crypto.randomUUID() in practice, which never
+  // contains a quote — this proves the lookup query stays well-formed
+  // even if one ever did, rather than relying on every caller only ever
+  // passing a UUID.
+  const lookupUrls: string[] = [];
+  const fakeFetch: typeof fetch = async (url) => {
+    lookupUrls.push(url.toString());
+    return new Response(JSON.stringify({ files: [] }), { status: 200 });
+  };
+  await deleteRemoteSession("tok", "it's a \\test", fakeFetch);
+  const q = new URL(lookupUrls[0]!).searchParams.get("q");
+  check("the single quote is backslash-escaped and the backslash is doubled, not interpolated raw", q === "appProperties has { key='sessionId' and value='it\\'s a \\\\test' }");
+  check("the value literal is still terminated by the query's own closing quote, immediately before ' }'", q?.endsWith("test' }") === true);
+}
+
 console.log("\nDriveScopeError classification:");
 {
   const fakeFetch: typeof fetch = async () =>
