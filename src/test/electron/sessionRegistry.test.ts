@@ -1501,10 +1501,10 @@ await (async () => {
       { providerFactory: () => new MockProvider([{ turn: { type: "final", content: "done" } }]) }
     );
     const runPromise = runTask(registry, sessionId, "do something", () => {});
-    // entry.running is set synchronously inside runTask before its first
-    // await, so this check — made before awaiting runPromise — reliably
-    // lands while the task is still "running" from the registry's view,
-    // regardless of how fast MockProvider itself resolves.
+    // entry.inFlightOperation is set synchronously inside runTask before
+    // its first await, so this check — made before awaiting runPromise —
+    // reliably lands while the task is still in flight from the
+    // registry's view, regardless of how fast MockProvider itself resolves.
     const whileRunning = await revertSessionCheckpoint(registry, sessionId);
     check("revertSessionCheckpoint refuses while a task is running", whileRunning.ok === false && whileRunning.error === "Can't revert while a task is running.");
     await runPromise;
@@ -1515,8 +1515,8 @@ await (async () => {
     // direction of the guard above — a runTask call started WHILE a
     // revert is still mid-flight must be refused too, not race a live
     // agent write against the revert's own checkout+cleanup. Before this
-    // fix, revertSessionCheckpoint only checked entry.running ONCE
-    // (synchronously) then ran several awaited git subprocess calls with
+    // fix, revertSessionCheckpoint only checked entry.inFlightOperation
+    // ONCE (synchronously) then ran several awaited git subprocess calls with
     // no lock held across that window — nothing stopped a runTask call
     // issued during that window from starting a real task concurrently.
     const registry = createSessionRegistry(sessionsDir);
@@ -1550,12 +1550,12 @@ await (async () => {
     await runTask(registry, sessionId, "bump the file", () => {});
     check("a real checkpoint exists before the race", typeof getCheckpointHash(registry, sessionId) === "string");
 
-    // entry.running is set synchronously inside revertSessionCheckpoint
-    // too (this fix), before its first await — so a runTask call made
-    // immediately after, without awaiting the revert first, reliably
-    // lands while the revert is still "running" from the registry's
-    // view, same reliability guarantee the existing test above already
-    // relies on for the opposite direction.
+    // entry.inFlightOperation is set synchronously inside
+    // revertSessionCheckpoint too (this fix), before its first await — so
+    // a runTask call made immediately after, without awaiting the revert
+    // first, reliably lands while the revert is still in flight from the
+    // registry's view, same reliability guarantee the existing test above
+    // already relies on for the opposite direction.
     const revertPromise = revertSessionCheckpoint(registry, sessionId);
     let rejected = false;
     try {
@@ -1564,6 +1564,18 @@ await (async () => {
       rejected = true;
     }
     check("runTask refuses to start while a revert is mid-flight for this session", rejected);
+
+    // Code-review finding (Optional, type-design clarity): the lock's
+    // `kind` lets revertSessionCheckpoint tell "a task is running" apart
+    // from "a revert is already running" instead of reporting the same
+    // generic message either way — exercised here by calling revert a
+    // second time while the first is still mid-flight.
+    const secondRevertWhileFirstStillRunning = await revertSessionCheckpoint(registry, sessionId);
+    check(
+      "a second concurrent revert call gets its own distinct error message, not the task-specific one",
+      secondRevertWhileFirstStillRunning.ok === false && secondRevertWhileFirstStillRunning.error === "A revert is already in progress for this session."
+    );
+
     const revertResult = await revertPromise;
     check("the revert itself still completed successfully, undisturbed", revertResult.ok === true);
 

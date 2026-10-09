@@ -353,7 +353,7 @@ export class AgentSession {
     this.abortController?.abort();
   }
 
-  /** Stops only the CURRENTLY RUNNING task — see the stopRequested field's own doc comment for how this differs from cancel(). No-op if nothing is running (abortController is null between tasks); the caller (sessionRegistry.ts's stopTask) checks entry.running itself before ever reaching this, but a redundant call here is harmless either way. */
+  /** Stops only the CURRENTLY RUNNING task — see the stopRequested field's own doc comment for how this differs from cancel(). No-op if nothing is running (abortController is null between tasks); the caller (sessionRegistry.ts's stopTask) checks entry.inFlightOperation's kind itself before ever reaching this, but a redundant call here is harmless either way. */
   stopCurrentTask() {
     this.stopRequested = true;
     this.abortController?.abort();
