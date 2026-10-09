@@ -15,12 +15,12 @@ import type {
 } from "./types.js";
 import { ProviderChatError } from "./types.js";
 import { ToolRegistry } from "./toolRegistry.js";
-import { PermissionEngine, classifyCommand, hasShellMetacharacters, hasEscapingArguments } from "./permissions.js";
+import { PermissionEngine } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
 import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
 import { createCheckpoint } from "./checkpoints.js";
-import { detectVerifyCommand } from "./verifyCommand.js";
+import { detectVerifyCommand, KNOWN_VERIFY_COMMANDS } from "./verifyCommand.js";
 import { isProtectedPath } from "./protected.js";
 import { resolveWithinWorkspace } from "./workspacePath.js";
 import { applyOldStringReplace } from "./editResolution.js";
@@ -198,8 +198,34 @@ export class AgentSession {
    * calling run_command("npm test") directly completely unguarded — the
    * same hole, reachable a different way. Reset at the start of every
    * run() call, matching checkpointAttemptedThisTask's own once-per-task
-   * granularity. */
+   * granularity.
+   *
+   * Code-review finding: this memo originally keyed off classifyCommand's
+   * PROJECT_SCRIPT *category* (plus hasShellMetacharacters/
+   * hasEscapingArguments) rather than the exact command text. Those two
+   * checks catch shell-metacharacter injection but not flag injection —
+   * "npm test --script-shell=./x.sh", "go test -exec=./x", and
+   * "pytest -p evilplugin" all classify as PROJECT_SCRIPT with no shell
+   * metacharacters and no escaping-argument shape, so approving a bare
+   * "npm test" once silently authorized any of those later in the same
+   * task, never shown to the user. isApprovedVerifyCommand() below now
+   * requires an exact match against KNOWN_VERIFY_COMMANDS — the same
+   * fixed, closed set (and the same trust boundary) permissions.ts's own
+   * AUTO_SAFE mode already uses — which makes those checks redundant
+   * (an exact string match can't contain injected flags or
+   * metacharacters) and closes the gap outright rather than attempting to
+   * heuristically detect every way a command string could be dangerous. */
   private projectScriptApprovedThisTask = false;
+
+  /** Single source of truth for "is this exactly one of the project's own
+   * known verify commands" — shared by both places a PROJECT_SCRIPT
+   * run_command can originate (the main per-call loop and
+   * autoVerifyAfterEdit), so the two can't independently drift into
+   * different safety postures the way they did before this check existed
+   * (see projectScriptApprovedThisTask's own doc comment above). */
+  private isApprovedVerifyCommand(command: string): boolean {
+    return (KNOWN_VERIFY_COMMANDS as readonly string[]).includes(command.trim());
+  }
   /**
    * Whether the model's MOST RECENT attempt at a WRITE-permission tool this
    * task was denied or rejected — reset at the start of every run() call,
@@ -489,7 +515,12 @@ export class AgentSession {
     // repo-defined code. This override (shared with the main per-call
     // loop above, for a model-issued run_command of the same kind) is
     // what lets it stop asking after the first approval THIS task.
-    if (decision === "ASK" && this.projectScriptApprovedThisTask) decision = "ALLOW";
+    // isApprovedVerifyCommand() is always true here in practice (`command`
+    // only ever comes from detectVerifyCommand's own KNOWN_VERIFY_COMMANDS
+    // set), but checking it anyway keeps this call site symmetric with the
+    // main loop's — one shared rule, not an implicit invariant that only
+    // holds because of where this value happened to come from.
+    if (decision === "ASK" && this.projectScriptApprovedThisTask && this.isApprovedVerifyCommand(command)) decision = "ALLOW";
     yield { type: "permission.request", call, decision };
     this.messages.push({ role: "assistant", content: "", tool_calls: [call] });
 
@@ -829,25 +860,17 @@ export class AgentSession {
         // below. Without this, the model's own direct call was the one
         // path the original H3 fix never covered.
         //
-        // Security audit finding (confirmed, high): classifyCommand's
-        // PROJECT_SCRIPT regexes are bare prefix+word-boundary matches —
-        // "npm test; rm -rf ~" classifies identically to a bare "npm
-        // test". Reusing the memo on CATEGORY alone, with none of the
-        // shell-metacharacter/escaping-argument checks SAFE_READ's own
-        // auto-allow already requires, let one approval of an ordinary
-        // command silently authorize a later, differently-shaped command
-        // in the same task. Applying the same two checks here closes that
-        // gap without weakening the legitimate "don't ask again for the
-        // same kind of safe command" case the memo exists for.
-        const projectScriptCommand = String(call.arguments.command ?? "");
-        if (
-          decision === "ASK" &&
-          call.name === "run_command" &&
-          classifyCommand(projectScriptCommand) === "PROJECT_SCRIPT" &&
-          this.projectScriptApprovedThisTask &&
-          !hasShellMetacharacters(projectScriptCommand) &&
-          !hasEscapingArguments(projectScriptCommand, this.opts.workspaceRoot)
-        ) {
+        // Code-review finding (see projectScriptApprovedThisTask's own doc
+        // comment): this used to gate on classifyCommand's PROJECT_SCRIPT
+        // *category* plus hasShellMetacharacters/hasEscapingArguments —
+        // which stops shell-metacharacter injection ("npm test; rm -rf ~")
+        // but not flag injection ("npm test --script-shell=./x.sh",
+        // "pytest -p evilplugin"), both of which classify as PROJECT_SCRIPT
+        // with no metacharacters and no escaping-argument shape. Requiring
+        // an exact match against KNOWN_VERIFY_COMMANDS instead closes that
+        // gap outright — a flag-injected variant simply isn't an exact
+        // match, full stop, regardless of what shape the injection takes.
+        if (decision === "ASK" && call.name === "run_command" && this.projectScriptApprovedThisTask && this.isApprovedVerifyCommand(String(call.arguments.command ?? ""))) {
           decision = "ALLOW";
         }
         const diff = await this.computeEditDiffForCall(call);
@@ -877,7 +900,12 @@ export class AgentSession {
             });
             continue;
           }
-          if (call.name === "run_command" && classifyCommand(String(call.arguments.command ?? "")) === "PROJECT_SCRIPT") {
+          // Only an exact KNOWN_VERIFY_COMMANDS match sets the memo —
+          // approving a flag-carrying variant once (e.g. "npm test
+          // --coverage") does NOT unlock "don't ask again" for anything,
+          // the same narrow trust boundary isApprovedVerifyCommand()
+          // enforces everywhere else.
+          if (call.name === "run_command" && this.isApprovedVerifyCommand(String(call.arguments.command ?? ""))) {
             this.projectScriptApprovedThisTask = true;
           }
           // A genuinely PARTIAL hunk selection rewrites the arguments actually
