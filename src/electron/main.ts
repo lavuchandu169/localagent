@@ -13,7 +13,7 @@ import os from "node:os";
 import fsPromises from "node:fs/promises";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, stopTask, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries, getSessionOwnerEmail } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, stopTask, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries, getSessionOwnerEmail, isOwnerMatch } from "./sessionRegistry.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import type { AttachedImage, AttachedText, PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
@@ -874,8 +874,7 @@ app.whenReady().then(async () => {
   // avoid leaking which ids are real.
   async function isSessionOwnedByCurrentAccount(sessionId: string): Promise<boolean> {
     const [callerEmail, ownerEmail] = await Promise.all([getStoredEmail(authFilePath, storageCrypto), getSessionOwnerEmail(registry, sessionId)]);
-    if (ownerEmail === undefined) return true;
-    return ownerEmail === callerEmail;
+    return isOwnerMatch(callerEmail, ownerEmail);
   }
 
   // Session history is gated by the signed-in account: signed out (or no
