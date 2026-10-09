@@ -5,6 +5,20 @@ import type { ProviderConfig } from "../sessionRegistry.js";
 
 export const MAX_OPEN_TABS = 6;
 
+/**
+ * web-performance-auditor finding (full-project audit): tab.events grows
+ * for the entire life of a session with no cap, unlike DIFF_LINE_CAP's
+ * precedent for diff rendering. A long-running or heavily automated task
+ * (many tool calls over hours) can accumulate thousands of entries,
+ * each kept for the life of the tab and re-walked in full on every
+ * clearAndReplayEventLog (tab switch). Dropping the oldest entries once
+ * this cap is exceeded keeps memory and replay cost bounded; the
+ * newest MAX_TAB_EVENTS entries are always enough to show what's
+ * currently happening, which matters far more than an in-flight task's
+ * earliest history.
+ */
+export const MAX_TAB_EVENTS = 2000;
+
 export type TabDotState = "unconfigured" | "idle" | "running" | "waiting-approval" | "done" | "error";
 
 export interface TabState {
@@ -167,6 +181,9 @@ export function routeEvent(registry: TabRegistry, sessionId: string, event: Agen
   if (!tab) return;
   if (isEphemeralStreamEvent(event)) return;
   tab.events.push(event);
+  if (tab.events.length > MAX_TAB_EVENTS) {
+    tab.events.splice(0, tab.events.length - MAX_TAB_EVENTS);
+  }
   tab.running = lastEventStillRunning(tab.events);
 }
 

@@ -1,5 +1,6 @@
 import {
   MAX_OPEN_TABS,
+  MAX_TAB_EVENTS,
   createTabRegistry,
   openNewTab,
   closeTab,
@@ -131,6 +132,36 @@ console.log("\nrouteEvent does not persist/replay ephemeral streaming deltas (fi
   const finalText: AgentEvent = { type: "text", text: "Hello" };
   routeEvent(registry, "session-deltas", finalText);
   check("the terminal, non-ephemeral text event is still stored normally", tab.events.length === 1 && tab.events[0] === finalText);
+}
+
+console.log("\nrouteEvent caps tab.events at MAX_TAB_EVENTS (web-performance-auditor finding: unbounded growth):");
+{
+  const registry = createTabRegistry();
+  const tab = openNewTab(registry)!;
+  tab.sessionId = "session-cap";
+
+  for (let i = 0; i < MAX_TAB_EVENTS + 50; i++) {
+    routeEvent(registry, "session-cap", { type: "status", message: `event ${i}` });
+  }
+  check("tab.events never exceeds MAX_TAB_EVENTS even after far more events than that were routed", tab.events.length === MAX_TAB_EVENTS);
+  check(
+    "the oldest events are dropped, not the newest — the tail end is exactly what was most recently routed",
+    (tab.events[tab.events.length - 1] as { message: string }).message === `event ${MAX_TAB_EVENTS + 49}`
+  );
+  check(
+    "the retained head is the first event that survived eviction, not some arbitrary offset",
+    (tab.events[0] as { message: string }).message === "event 50"
+  );
+}
+{
+  const registry = createTabRegistry();
+  const tab = openNewTab(registry)!;
+  tab.sessionId = "session-under-cap";
+
+  for (let i = 0; i < 10; i++) {
+    routeEvent(registry, "session-under-cap", { type: "status", message: `event ${i}` });
+  }
+  check("well under the cap, nothing is evicted at all", tab.events.length === 10);
 }
 
 console.log("\nlastEventStillRunning:");
