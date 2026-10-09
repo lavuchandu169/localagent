@@ -1846,6 +1846,55 @@ await (async () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
+
+  {
+    // Code-review finding: the metacharacter/escaping-argument checks
+    // above (hasShellMetacharacters/hasEscapingArguments) catch shell
+    // injection but not FLAG injection — "pytest -p evilplugin" has no
+    // shell metacharacters and no escaping-argument shape, yet loads an
+    // arbitrary pytest plugin (arbitrary Python code) by flag alone, and
+    // still classifies as PROJECT_SCRIPT. The fix replaces those two
+    // heuristic checks with an exact match against KNOWN_VERIFY_COMMANDS
+    // — this proves a flag-injected variant is forced through a fresh ASK
+    // even though it trips neither of the old heuristics, while an exact
+    // repeat of the SAME safe command still auto-allows.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-projectscript-flaginjection-test-"));
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "pytest" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c2", name: "run_command", arguments: { command: "pytest -p evilplugin" } }] } },
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c3", name: "run_command", arguments: { command: "pytest" } }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const approvalRequests: ToolCall[] = [];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "DEFAULT",
+      onApprovalNeeded: async (call) => {
+        approvalRequests.push(call);
+        return { approved: true };
+      },
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("run pytest, then run it again with a plugin flag")) events.push(event);
+
+    const permissionRequests = events.filter((e) => e.type === "permission.request" && e.call.name === "run_command");
+    check("the first plain 'pytest' is asked for normally", permissionRequests[0]?.type === "permission.request" && permissionRequests[0].decision === "ASK");
+    check(
+      "a later flag-injected variant is NOT auto-allowed by the earlier approval — neither hasShellMetacharacters nor hasEscapingArguments would have caught this",
+      permissionRequests[1]?.type === "permission.request" && permissionRequests[1].decision === "ASK"
+    );
+    check(
+      "a third, exactly-the-same-safe-command call still auto-allows — the fix narrows the memo to an exact match, it doesn't disable it",
+      permissionRequests[2]?.type === "permission.request" && permissionRequests[2].decision === "ALLOW"
+    );
+    check("the user was actually asked about the flag-injected command, not silently bypassed", approvalRequests.some((c) => c.arguments.command === "pytest -p evilplugin"));
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 })();
 
 console.log("\nAUTO_SAFE mode auto-allows a model-issued run_command exactly matching KNOWN_VERIFY_COMMANDS, with no approval at all:");
