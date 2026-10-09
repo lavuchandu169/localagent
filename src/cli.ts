@@ -1,5 +1,6 @@
 import readline from "node:readline/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { AgentSession } from "./agent.js";
 import { defaultToolRegistry } from "./toolRegistry.js";
 import { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
@@ -14,7 +15,8 @@ function embeddedModelIdsByCategory(category: "coding" | "chat"): string {
     .join(" | ");
 }
 
-function parseArgs(argv: string[]) {
+/** Exported for direct unit testing (test-engineer finding, full-project audit: this file had no coverage at all) — pure and side-effect-free, so no entry-point guard is needed around the export itself, only around main()'s auto-invocation below. */
+export function parseArgs(argv: string[]) {
   const args: Record<string, string> = {};
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -135,7 +137,15 @@ async function main() {
   rl.close();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Guarded so importing this module (e.g. to unit test parseArgs above)
+// doesn't also run the whole CLI — main() used to fire unconditionally at
+// import time. pathToFileURL does the same platform-correct path-to-URL
+// conversion Node itself uses (see scripts/generate-whats-new.mjs's own
+// doc comment for why a naive string comparison is wrong on Windows), so
+// this only runs true when cli.ts is actually the invoked entry point.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
