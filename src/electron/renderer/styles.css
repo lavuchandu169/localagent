@@ -662,9 +662,22 @@ summary:focus-visible {
 }
 
 #onboarding-modal dt {
-  margin-top: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
   font-weight: 600;
   color: var(--text);
+  /* A thin divider between the three model choices — this is a list of
+     distinct options to pick between, not one continuous explanation, so
+     it reads better with some visual separation than three dt/dd pairs
+     run together with spacing alone. First entry skips the divider/
+     padding (nothing above it to divide from) via :first-child, below. */
+  border-top: 1px solid var(--border);
+}
+
+#onboarding-modal dt:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
 }
 
 #onboarding-modal dd {
