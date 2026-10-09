@@ -351,7 +351,18 @@ body {
   cursor: pointer;
   font-size: 12px;
   line-height: 1;
-  transition: color 0.15s ease;
+  /* Hidden until the row is hovered/focused (below) — every session
+     permanently showing a delete × read as visually busy for a list
+     that's otherwise just plain text. Kept reachable by keyboard
+     regardless of hover via :focus-visible, so Tabbing to it never
+     lands on an invisible control. */
+  opacity: 0;
+  transition: color 0.15s ease, opacity 0.15s ease;
+}
+
+.session-item:hover .session-item-delete,
+.session-item-delete:focus-visible {
+  opacity: 1;
 }
 
 .session-item-delete:hover {
