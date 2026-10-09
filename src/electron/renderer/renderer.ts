@@ -1812,8 +1812,8 @@ revertCheckpointBtn.addEventListener("click", () => {
   if (!tab?.sessionId) return;
   const idToRevert = tab.sessionId;
   // Final-review finding I2: a revert and a new task share the SAME
-  // entry.running lock server-side (sessionRegistry.ts) — runTask now
-  // throws if a revert is still in flight. Disabling Send for the
+  // entry.inFlightOperation lock server-side (sessionRegistry.ts) —
+  // runTask now throws if a revert is still in flight. Disabling Send for the
   // duration closes the race at the source, on top of the run-task
   // handler's own defensive catch for any case that still slips through
   // (e.g. a request already in flight the instant this click happens).
