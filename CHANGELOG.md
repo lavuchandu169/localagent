@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.115 — 2026-10-09
+
+- Sidebar: hide the per-session delete button until hover/focus
+
 ## v0.1.0-beta.114 — 2026-10-09
 
 - Shift UI chrome to sans-serif, keep monospace for technical content
