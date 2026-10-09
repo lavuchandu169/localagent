@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.124 — 2026-10-09
+
+- Escape sessionId before interpolating into a Drive API query literal
+
 ## v0.1.0-beta.123 — 2026-10-09
 
 - Cap TabState.events to bound a long session's memory footprint
