@@ -90,11 +90,26 @@ export async function listRemoteSessions(accessToken: string, fetchImpl: FetchIm
   return result;
 }
 
+/**
+ * Escapes a string for interpolation into a Drive API query's single-quoted
+ * literal, per Drive's own escaping convention (backslash, then quote —
+ * order matters so an already-escaped quote doesn't get double-escaped).
+ * sessionId is always a crypto.randomUUID() in practice (see
+ * sessionRegistry.ts's startSession), which never contains either
+ * character, but it also flows in from resume/IPC call sites as a plain
+ * string with no validation at that boundary — this keeps a stray quote
+ * from breaking out of the literal and altering which files the query
+ * matches, rather than relying on every caller only ever passing a UUID.
+ */
+function escapeDriveQueryLiteral(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
 /** Finds the Drive file id for one session by its sessionId, or null if it hasn't been uploaded yet. */
 async function findRemoteFile(accessToken: string, sessionId: string, fetchImpl: FetchImpl): Promise<string | null> {
   const url = new URL(DRIVE_FILES_ENDPOINT);
   url.searchParams.set("spaces", "appDataFolder");
-  url.searchParams.set("q", `appProperties has { key='sessionId' and value='${sessionId}' }`);
+  url.searchParams.set("q", `appProperties has { key='sessionId' and value='${escapeDriveQueryLiteral(sessionId)}' }`);
   url.searchParams.set("fields", "files(id)");
 
   const response = await fetchImpl(url.toString(), { headers: authHeaders(accessToken), signal: AbortSignal.timeout(10_000) });
