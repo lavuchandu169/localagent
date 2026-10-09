@@ -41,6 +41,7 @@ import { initFreellmapiPanel, openFreellmapiPanel, closeFreellmapiPanel } from "
 import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 import { initFreellmapiFallbackPanel, openFreellmapiFallbackPanel, closeFreellmapiFallbackPanel } from "./freellmapiFallbackPanel.js";
 import { byId, errorMessage, withBusyLabel } from "./domHelpers.js";
+import { createFrameCoalescer } from "./rafCoalesce.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import { renderDiff } from "./diffView.js";
@@ -1173,13 +1174,22 @@ chooseWorkspaceBtn.addEventListener("click", async () => {
   }
 });
 
+// text.delta fires once per streamed token — the highest-frequency event
+// in the app. Reading scrollHeight right after appending/mutating content
+// forces a synchronous layout, so calling that directly on every event
+// thrashes layout once per token. Coalesced via createFrameCoalescer so
+// any number of calls within one animation frame produce a single reflow.
+const scrollEventLogToBottom = createFrameCoalescer(() => {
+  eventLog.scrollTop = eventLog.scrollHeight;
+});
+
 function logLine(text: string, className: string): void {
   emptyState.hidden = true;
   const line = document.createElement("div");
   line.className = className;
   line.textContent = text;
   eventLog.appendChild(line);
-  eventLog.scrollTop = eventLog.scrollHeight;
+  scrollEventLogToBottom();
 }
 
 function toolCard(call: ToolCall): HTMLElement {
@@ -1194,7 +1204,7 @@ function toolCard(call: ToolCall): HTMLElement {
   header.appendChild(document.createTextNode(`${call.name}(${JSON.stringify(call.arguments)})`));
   card.appendChild(header);
   eventLog.appendChild(card);
-  eventLog.scrollTop = eventLog.scrollHeight;
+  scrollEventLogToBottom();
   toolCards.set(call.id, card);
   return card;
 }
@@ -1258,7 +1268,7 @@ function renderEvent(event: AgentEvent): void {
         eventLog.appendChild(streamingTextEl);
       }
       streamingTextEl.textContent += event.text;
-      eventLog.scrollTop = eventLog.scrollHeight;
+      scrollEventLogToBottom();
       break;
     }
     case "tool_call.start": {
@@ -1278,7 +1288,7 @@ function renderEvent(event: AgentEvent): void {
       card.appendChild(header);
       eventLog.appendChild(card);
       streamingToolCards[event.index] = card;
-      eventLog.scrollTop = eventLog.scrollHeight;
+      scrollEventLogToBottom();
       break;
     }
     case "tool_call.delta": {
@@ -1308,7 +1318,7 @@ function renderEvent(event: AgentEvent): void {
       result.className = event.result.ok ? "tool-card-ok" : "tool-card-error";
       result.textContent = event.result.ok ? "ok" : `error: ${event.result.error ?? "unknown"}`;
       card.appendChild(result);
-      eventLog.scrollTop = eventLog.scrollHeight;
+      scrollEventLogToBottom();
       break;
     }
     case "permission.request": {
@@ -1338,7 +1348,7 @@ function renderEvent(event: AgentEvent): void {
         status.className = "log-status";
         status.textContent = `[permission] ${event.call.name} -> ${event.decision}`;
         card.appendChild(status);
-        eventLog.scrollTop = eventLog.scrollHeight;
+        scrollEventLogToBottom();
         break;
       }
       const prompt = document.createElement("div");
@@ -1378,7 +1388,7 @@ function renderEvent(event: AgentEvent): void {
       prompt.appendChild(approve);
       prompt.appendChild(deny);
       card.appendChild(prompt);
-      eventLog.scrollTop = eventLog.scrollHeight;
+      scrollEventLogToBottom();
       break;
     }
     case "checkpoint.created":
@@ -1434,7 +1444,7 @@ function renderEvent(event: AgentEvent): void {
       prompt.appendChild(reject);
       card.appendChild(prompt);
       eventLog.appendChild(card);
-      eventLog.scrollTop = eventLog.scrollHeight;
+      scrollEventLogToBottom();
       break;
     }
     case "text":
@@ -2457,7 +2467,7 @@ runTaskBtn.addEventListener("click", async () => {
       sentChipsRow.appendChild(buildAttachmentChip(attachment));
     }
     eventLog.appendChild(sentChipsRow);
-    eventLog.scrollTop = eventLog.scrollHeight;
+    scrollEventLogToBottom();
   }
 
   const images = sentAttachments.filter((a) => a.kind === "image");
