@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, session } from "electron";
 // electron-updater is CommonJS; Node's ESM/CJS interop fails to statically
 // detect `autoUpdater` as a named export from it (confirmed live — a plain
 // `import { autoUpdater } from "electron-updater"` throws
@@ -135,6 +135,35 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(async () => {
+  // Security audit findings (defense-in-depth, no known exploitable sink
+  // today): the renderer loads only its own bundled file:// page — no
+  // remote content, no will-navigate (see createWindow's own guard) — so
+  // neither of these closes an active hole. They're here so a future
+  // regression (e.g. someone adding innerHTML for "rich" rendering, or a
+  // dependency that does) doesn't get a second, independent line of
+  // defense for free; CSP via response headers (not a <meta> tag) per
+  // Electron's own security checklist. img-src allows any https: host,
+  // not just 'self' — authPanel.ts sets the signed-in user's Google
+  // profile picture as a CSS background-image from Google's own CDN.
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [
+          "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https:; font-src 'self'; connect-src 'self'",
+        ],
+      },
+    });
+  });
+  // Electron auto-grants most permission requests (camera, mic,
+  // geolocation, notifications, clipboard-read) unless the host app
+  // installs a handler that denies by default — this app's own page
+  // never requests any of these, so this is an explicit, future-proof
+  // default-deny rather than relying on the page simply never asking.
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
+
   const authFilePath = path.join(app.getPath("userData"), "auth.json");
   const githubAuthFilePath = path.join(app.getPath("userData"), "github-auth.json");
   const githubSettingsFilePath = path.join(app.getPath("userData"), "githubSettings.json");
