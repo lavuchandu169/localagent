@@ -1,6 +1,6 @@
 # localagent
 
-**A local-first autonomous coding agent for macOS and Windows.** Bring your
+**[localagentapp.com](https://www.localagentapp.com)** — **A local-first autonomous coding agent for macOS and Windows.** Bring your
 own model — a GGUF file running entirely in-process, any Hugging Face GGUF
 repo by search or path, any OpenAI-compatible server (Ollama, LM Studio,
 vLLM, llama.cpp server), Claude, OpenAI, Google Gemini, or a bundled
