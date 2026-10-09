@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.113 — 2026-10-09
+
+- Add jsdom test coverage for aboutPanel.ts (second renderer test slice)
+
 ## v0.1.0-beta.112 — 2026-10-09
 
 - Fix critical proxy-addr vulnerability via a targeted override
