@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.125 — 2026-10-09
+
+- Make SessionEntry's task/revert mutual-exclusion lock type-explicit
+
 ## v0.1.0-beta.124 — 2026-10-09
 
 - Escape sessionId before interpolating into a Drive API query literal
