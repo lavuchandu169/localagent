@@ -42,6 +42,7 @@ import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 import { initFreellmapiFallbackPanel, openFreellmapiFallbackPanel, closeFreellmapiFallbackPanel } from "./freellmapiFallbackPanel.js";
 import { byId, errorMessage, withBusyLabel } from "./domHelpers.js";
 import { createFrameCoalescer } from "./rafCoalesce.js";
+import { createDebouncer } from "./debounce.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import { renderDiff } from "./diffView.js";
@@ -2407,8 +2408,14 @@ async function refreshSessionList(query: string): Promise<void> {
   renderSessionList(entries);
 }
 
+// web-performance-auditor finding (full-project audit): every keystroke
+// here round-tripped through IPC into a disk-backed search on the main
+// process with no debounce. Every OTHER refreshSessionList call site
+// (delete, tab switch, sign-out, etc.) stays immediate — only live typing
+// benefits from waiting for a pause.
+const debouncedSearchRefresh = createDebouncer((query: string) => void refreshSessionList(query), 200);
 sessionSearchInput.addEventListener("input", () => {
-  void refreshSessionList(sessionSearchInput.value.trim());
+  debouncedSearchRefresh(sessionSearchInput.value.trim());
 });
 
 void refreshSessionList("");
