@@ -98,6 +98,9 @@
     "node-llama-cpp": "^3.20.0",
     "zod": "^3.25.0"
   },
+  "overrides": {
+    "proxy-addr": "2.0.8"
+  },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
     "@types/jsdom": "^30.0.0",
