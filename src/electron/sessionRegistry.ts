@@ -428,6 +428,31 @@ export async function getSessionOwnerEmail(registry: SessionRegistry, sessionId:
   return record ? record.ownerEmail : undefined;
 }
 
+/**
+ * The actual authorization decision behind main.ts's
+ * isSessionOwnedByCurrentAccount: given the currently signed-in account's
+ * email and a session's real owner (from getSessionOwnerEmail above),
+ * is this caller allowed to act on this session? Pulled out as a pure
+ * function — no registry, no disk, no auth-file decryption — specifically
+ * so this security-critical boundary has direct test coverage. main.ts's
+ * own wrapper (which performs the two async lookups) is exercised only
+ * indirectly, since it requires a running Electron process to test; this
+ * is where a bug (e.g. an inverted comparison or a dropped undefined
+ * check) would actually hide.
+ *
+ * ownerEmail === undefined means the session exists nowhere at all
+ * (never persisted, no live entry) — allowed through unchanged so the
+ * caller's own "not found" handling still applies, and a denial stays
+ * indistinguishable from "doesn't exist" (see getSessionOwnerEmail's own
+ * doc comment). Any other ownerEmail (including a real null, which can
+ * occur for a legacy session type without a per-account model) must
+ * match the caller's email exactly.
+ */
+export function isOwnerMatch(callerEmail: string | null, ownerEmail: string | null | undefined): boolean {
+  if (ownerEmail === undefined) return true;
+  return ownerEmail === callerEmail;
+}
+
 export function getLiveSessionSnapshot(registry: SessionRegistry, sessionId: string): LiveSessionSnapshot | null {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return null;

@@ -21,6 +21,7 @@ import {
   getSessionIdsWithPendingApproval,
   withPendingApprovalEntries,
   getSessionOwnerEmail,
+  isOwnerMatch,
   stopTask,
 } from "../../electron/sessionRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
@@ -1636,6 +1637,17 @@ await (async () => {
   {
     const registry = createSessionRegistry(sessionsDir);
     check("returns undefined for a session id that exists nowhere at all — distinct from a real null owner", (await getSessionOwnerEmail(registry, "no-such-session-anywhere")) === undefined);
+  }
+
+  console.log("\nisOwnerMatch (the actual authorization decision main.ts's IPC handlers rely on):");
+  {
+    check("a session that exists nowhere (owner undefined) is allowed through even for a signed-out caller", isOwnerMatch(null, undefined) === true);
+    check("a session that exists nowhere (owner undefined) is allowed through for any signed-in caller too", isOwnerMatch("someone@example.com", undefined) === true);
+    check("the caller's own session (matching emails) is allowed", isOwnerMatch("owner@example.com", "owner@example.com") === true);
+    check("a different account's session is denied — this is the exact cross-account leak the audit finding described", isOwnerMatch("attacker@example.com", "owner@example.com") === false);
+    check("a signed-out caller (null) is denied access to a real session owned by someone", isOwnerMatch(null, "owner@example.com") === false);
+    check("a legacy session with a real null owner is allowed only for a signed-out (null) caller", isOwnerMatch(null, null) === true);
+    check("a legacy session with a real null owner is denied to a signed-in caller", isOwnerMatch("owner@example.com", null) === false);
   }
 
   console.log("\ndoRunTask does not persist/replay ephemeral streaming deltas (final review I4):");
