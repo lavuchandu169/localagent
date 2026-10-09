@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.117 — 2026-10-09
+
+- MCP servers panel: hide the per-server Remove button until hover/focus
+
 ## v0.1.0-beta.116 — 2026-10-09
 
 - Settings panel: real section headings instead of a wall of text
