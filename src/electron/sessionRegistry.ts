@@ -77,8 +77,21 @@ interface SessionEntry {
   title: string | null;
   createdAt: number;
   deleted: boolean;
-  /** The currently in-flight runTask() call, if any — awaited by finalizeEntry before disposing the provider, so a model's native resources are never freed while it's still mid-generation. */
-  running: Promise<void> | null;
+  /**
+   * Code-review finding (Optional, type-design clarity): this is the
+   * session's single mutual-exclusion lock, shared by runTask and
+   * revertSessionCheckpoint — at most one of either may be in flight for a
+   * session at a time (see each function's own doc comment for why they
+   * race each other). The old name/type (`running: Promise<void> | null`)
+   * made it look like "a task is running" when it also meant "a revert is
+   * in progress," which silently misled stopTask (only meaningful against
+   * an in-flight TASK) into treating either as the same thing. `kind` makes
+   * the two explicit instead of leaving a caller to assume one from the
+   * mere presence of a lock. Still awaited by finalizeEntry before
+   * disposing the provider, so a model's native resources are never freed
+   * while either is still in flight.
+   */
+  inFlightOperation: { kind: "task" | "revert"; promise: Promise<void> } | null;
   /** Fixed once at session creation (or carried over from a resumed session's prior record) — never re-derived from "whoever's currently signed in" on every save, so signing out or switching accounts mid-conversation can't silently strip ownership from an already-owned session. */
   ownerEmail: string | null;
   /** Fixed once at session creation — the provider/model never change for a live session's lifetime (editing either requires cancelSession + startSession(resume) instead, per updateLiveSessionSettings's own doc comment), so caching this here (rather than trying to derive it from the live ModelProvider instance, which has no clean way back to the original ProviderConfig "kind") is always accurate. Correctness audit finding (session High #1): persisted alongside mode/planFirst so resuming a session restores its real settings instead of silently falling back to a form's current defaults. */
@@ -334,7 +347,7 @@ export async function startSession(
     title: deps.resume?.title ?? null,
     createdAt: deps.resume?.createdAt ?? Date.now(),
     deleted: false,
-    running: null,
+    inFlightOperation: null,
     ownerEmail,
     providerConfig: toPersistedProviderConfig(config.provider),
   });
@@ -483,19 +496,20 @@ export function getCheckpointHash(registry: SessionRegistry, sessionId: string):
 export async function revertSessionCheckpoint(registry: SessionRegistry, sessionId: string): Promise<{ ok: boolean; error?: string }> {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return { ok: false, error: "Unknown session." };
-  if (entry.running) return { ok: false, error: "Can't revert while a task is running." };
+  if (entry.inFlightOperation?.kind === "task") return { ok: false, error: "Can't revert while a task is running." };
+  if (entry.inFlightOperation?.kind === "revert") return { ok: false, error: "A revert is already in progress for this session." };
   const hash = entry.session.getCheckpointHash();
   if (!hash) return { ok: false, error: "No checkpoint available for this session." };
-  // Correctness audit finding (session Medium #2): the entry.running
+  // Correctness audit finding (session Medium #2): the entry.inFlightOperation
   // check just above was the ONLY guard against a task starting mid-revert
   // — checked once, synchronously, then several awaited git subprocess
   // calls ran with no lock held across that window, leaving a real
   // check-then-act race (a runTask call issued during that window
   // started a real task concurrently with the revert's own checkout).
-  // Claiming the SAME entry.running lock revertSessionCheckpoint already
-  // reads from — synchronously, before the first await below — closes it
-  // symmetrically: runTask now refuses while this is set, exactly like
-  // this function already refuses while a task is running.
+  // Claiming the SAME entry.inFlightOperation lock revertSessionCheckpoint
+  // already reads from — synchronously, before the first await below —
+  // closes it symmetrically: runTask now refuses while this is set,
+  // exactly like this function already refuses while a task is running.
   const revertPromise = (async () => {
     // Correctness audit finding (session Medium #3): a checkpoint is a
     // deliberately dangling, unreferenced git commit (see checkpoints.ts's
@@ -507,14 +521,15 @@ export async function revertSessionCheckpoint(registry: SessionRegistry, session
     // {ok:false, error} this function's own return type promises.
     await revertToCheckpoint(entry.session.getWorkspaceRoot(), hash);
   })();
-  entry.running = revertPromise;
+  const lock = { kind: "revert" as const, promise: revertPromise };
+  entry.inFlightOperation = lock;
   try {
     await revertPromise;
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   } finally {
-    if (entry.running === revertPromise) entry.running = null;
+    if (entry.inFlightOperation === lock) entry.inFlightOperation = null;
   }
 }
 
@@ -579,10 +594,10 @@ async function persistSession(registry: SessionRegistry, sessionId: string, entr
   await saveSession(registry.sessionsDir, record);
   // Fire-and-forget: syncUploadToCloud never rejects (it catches everything
   // internally), and this function is awaited inside doRunTask, which
-  // entry.running tracks — finalizeEntry awaits entry.running before
-  // disposing the model provider's native resources, so an awaited slow/hung
-  // cloud sync call here would directly delay freeing the model's memory on
-  // cancel/delete/resume-over-existing.
+  // entry.inFlightOperation tracks — finalizeEntry awaits
+  // entry.inFlightOperation before disposing the model provider's native
+  // resources, so an awaited slow/hung cloud sync call here would directly
+  // delay freeing the model's memory on cancel/delete/resume-over-existing.
   void syncUploadToCloud(registry, record);
 }
 
@@ -705,18 +720,19 @@ export async function runTask(
   if (!entry) throw new Error(`Unknown session: ${sessionId}`);
   // Correctness audit finding (session Medium #2): the OPPOSITE direction
   // of revertSessionCheckpoint's own "can't revert while a task is
-  // running" guard — entry.running is now the single shared lock between
-  // a running task AND a mid-flight revert (see that function), so a
-  // runTask call during either refuses the same way, rather than racing
+  // running" guard — entry.inFlightOperation is now the single shared lock
+  // between a running task AND a mid-flight revert (see that function), so
+  // a runTask call during either refuses the same way, rather than racing
   // a live agent write against the revert's own checkout+cleanup.
-  if (entry.running) throw new Error("A task or revert is already in progress for this session.");
+  if (entry.inFlightOperation) throw new Error("A task or revert is already in progress for this session.");
 
   const runPromise = doRunTask(registry, sessionId, entry, task, onEvent, attachments);
-  entry.running = runPromise;
+  const lock = { kind: "task" as const, promise: runPromise };
+  entry.inFlightOperation = lock;
   try {
     await runPromise;
   } finally {
-    if (entry.running === runPromise) entry.running = null;
+    if (entry.inFlightOperation === lock) entry.inFlightOperation = null;
   }
 }
 
@@ -760,7 +776,7 @@ async function finalizeEntry(registry: SessionRegistry, entry: SessionEntry): Pr
   }
   if (hadPending) registry.onPendingApprovalsChanged?.();
   entry.session.cancel();
-  await entry.running?.catch(() => {});
+  await entry.inFlightOperation?.promise.catch(() => {});
   await entry.provider.dispose?.().catch(() => {});
 }
 
@@ -791,16 +807,21 @@ async function finalizeEntry(registry: SessionRegistry, entry: SessionEntry): Pr
  * provider isn't disposed, and the entry stays in the registry. The
  * in-flight runTask() call unwinds on its own (AgentSession.stopCurrentTask
  * aborts the provider call and winds the turn loop down to its normal
- * "done" event), and runTask's own `finally` clears entry.running exactly
- * as it would for a task that finished normally — so a new runTask() call
- * on this session works immediately afterward, no different from the
- * session having just finished a task on its own. No-op if nothing is
- * running (a stale click after the task already finished, or a session
- * that was never asked to run anything).
+ * "done" event), and runTask's own `finally` clears entry.inFlightOperation
+ * exactly as it would for a task that finished normally — so a new
+ * runTask() call on this session works immediately afterward, no
+ * different from the session having just finished a task on its own.
+ * No-op if nothing is running (a stale click after the task already
+ * finished, or a session that was never asked to run anything) — and,
+ * now that the lock's `kind` is explicit (see SessionEntry's own doc
+ * comment), also a no-op if what's actually in flight is a revert:
+ * AgentSession has no task to stop in that case, and calling
+ * stopCurrentTask anyway would be a silent, misleading no-op dressed up
+ * as "stopping" something that was never running.
  */
 export function stopTask(registry: SessionRegistry, sessionId: string): void {
   const entry = registry.sessions.get(sessionId);
-  if (!entry?.running) return;
+  if (entry?.inFlightOperation?.kind !== "task") return;
   entry.session.stopCurrentTask();
 }
 
