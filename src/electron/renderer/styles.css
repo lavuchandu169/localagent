@@ -168,11 +168,21 @@
   box-sizing: border-box;
 }
 
+/* Brainstorm finding (2026-10-09): every button/select/input/textarea below
+ * uses `font-family: inherit`, so this one declaration was making the whole
+ * app's UI chrome monospace, not just genuinely code-like content — a
+ * narrower, more "terminal tool" look than the comparable coding-adjacent
+ * apps (VS Code, Cursor, Claude.ai/ChatGPT desktop) that all reserve
+ * monospace for code/technical content and use a sans UI typeface for
+ * chrome. Flipping it to --font-sans here is the one change that cascades
+ * everywhere; the handful of genuinely technical spots (#event-log's tool
+ * output, file paths, etc.) already carry their own explicit
+ * `font-family: var(--font-mono)` override and don't rely on this default. */
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 13px;
   height: 100vh;
   overflow: hidden;
@@ -240,7 +250,7 @@ body {
 }
 
 #sidebar-title {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-weight: 600;
   font-size: 10px;
   text-transform: uppercase;
@@ -397,7 +407,7 @@ summary:focus-visible {
 }
 
 #brand-name {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-weight: 600;
   font-size: 12px;
   color: var(--text);
@@ -619,7 +629,7 @@ summary:focus-visible {
 
 #onboarding-title {
   margin: 0 0 10px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 16px;
   font-weight: 600;
   color: var(--text);
@@ -684,7 +694,7 @@ summary:focus-visible {
 
 #whats-new-title {
   margin: 0 0 12px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 16px;
   font-weight: 600;
   color: var(--text);
@@ -1054,7 +1064,7 @@ summary:focus-visible {
   justify-content: space-between;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 600;
   color: var(--text);
@@ -1282,7 +1292,13 @@ textarea:hover {
 button {
   cursor: pointer;
   font-weight: 500;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease, filter 0.15s ease;
+  /* transform gets its own curve (not plain "ease") — the only one of
+     these four properties a user actually perceives as motion, so it's
+     the one worth a deliberate, "emphasized decelerate" feel (snaps in,
+     settles smoothly) rather than the generic default. Color/border/
+     filter stay on plain ease — a fancier curve is imperceptible on a
+     property with no spatial component. */
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s cubic-bezier(0.2, 0, 0, 1), filter 0.15s ease;
 }
 
 button:hover:not(:disabled) {
@@ -1750,7 +1766,7 @@ label .hint-text {
   flex: 1;
   min-height: 40px;
   resize: vertical;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   /* Sits inside #composer-row's own pill chrome now — no border/
      background/radius of its own, so it reads as part of one
      continuous input area instead of a separate boxed field. */
@@ -1839,7 +1855,7 @@ label .hint-text {
 }
 
 #download-label {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
   color: var(--text-dim);
 }
