@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.131 — 2026-10-09
+
+- Add test coverage for onboarding.ts
+
 ## v0.1.0-beta.130 — 2026-10-09
 
 - Add test coverage for changesPanel.ts
