@@ -108,6 +108,11 @@ function filteredPaletteCommands(deps: CommandPaletteDeps): PaletteCommand[] {
   return all.filter((c) => c.label.toLowerCase().includes(query));
 }
 
+/** Unique, stable per-row id for the ARIA listbox pattern below — referenced by both the <li>'s own id and the input's aria-activedescendant. */
+function paletteOptionId(index: number): string {
+  return `command-palette-option-${index}`;
+}
+
 function renderCommandPaletteResults(deps: CommandPaletteDeps): void {
   const commands = filteredPaletteCommands(deps);
   paletteSelectedIndex = Math.min(paletteSelectedIndex, Math.max(commands.length - 1, 0));
@@ -115,6 +120,13 @@ function renderCommandPaletteResults(deps: CommandPaletteDeps): void {
   commandPaletteEmpty.hidden = commands.length > 0;
   commands.forEach((cmd, i) => {
     const li = document.createElement("li");
+    // ARIA listbox pattern (combobox on the input below, listbox on the
+    // <ul>): each row is the "option" a screen reader announces, with
+    // aria-selected tracking arrow-key navigation the same way the
+    // "selected" CSS class already does visually.
+    li.id = paletteOptionId(i);
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", i === paletteSelectedIndex ? "true" : "false");
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = cmd.label;
@@ -135,6 +147,15 @@ function renderCommandPaletteResults(deps: CommandPaletteDeps): void {
     li.appendChild(button);
     commandPaletteResults.appendChild(li);
   });
+  // The input itself owns the combobox role (see initCommandPalette) — this
+  // is the piece that actually changes on every render, telling a screen
+  // reader which option is "virtually" focused without moving real focus
+  // off the input (arrow keys/typing still happen there, same as today).
+  if (commands.length > 0) {
+    commandPaletteInput.setAttribute("aria-activedescendant", paletteOptionId(paletteSelectedIndex));
+  } else {
+    commandPaletteInput.removeAttribute("aria-activedescendant");
+  }
 }
 
 export function openCommandPalette(deps: CommandPaletteDeps): void {
@@ -155,6 +176,15 @@ export function openCommandPalette(deps: CommandPaletteDeps): void {
 }
 
 export function initCommandPalette(deps: CommandPaletteDeps): void {
+  // Static half of the ARIA combobox/listbox pattern — set once, since none
+  // of this changes between renders (unlike aria-activedescendant/
+  // aria-selected above, which track the current selection every render).
+  commandPaletteInput.setAttribute("role", "combobox");
+  commandPaletteInput.setAttribute("aria-autocomplete", "list");
+  commandPaletteInput.setAttribute("aria-expanded", "true");
+  commandPaletteInput.setAttribute("aria-controls", "command-palette-results");
+  commandPaletteResults.setAttribute("role", "listbox");
+
   commandPaletteToggle.addEventListener("click", () => {
     if (commandPaletteOverlay.hidden) openCommandPalette(deps);
     else closeCommandPalette();
