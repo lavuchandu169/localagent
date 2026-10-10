@@ -43,6 +43,7 @@ import { initFreellmapiFallbackPanel, openFreellmapiFallbackPanel, closeFreellma
 import { byId, errorMessage, withBusyLabel } from "./domHelpers.js";
 import { createFrameCoalescer } from "./rafCoalesce.js";
 import { createDebouncer } from "./debounce.js";
+import { formatDoneLine } from "./doneLine.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import { renderDiff } from "./diffView.js";
@@ -1467,7 +1468,7 @@ function renderEvent(event: AgentEvent): void {
       logLine(`✗ ${event.message}`, "log-error");
       break;
     case "done":
-      logLine(event.success ? `✔ done — ${event.summary}` : `✗ failed — ${event.summary}`, event.success ? "log-done" : "log-error");
+      logLine(formatDoneLine(event.success, event.summary), event.success ? "log-done" : "log-error");
       runTaskBtn.disabled = false;
       setRunningComposerState(false);
       break;
