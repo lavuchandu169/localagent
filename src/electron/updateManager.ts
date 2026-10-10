@@ -72,7 +72,15 @@ export function wireAutoUpdater(deps: UpdateManagerDeps): UpdateManager {
   const intervalMs = deps.checkIntervalMs ?? FOUR_HOURS_MS;
   const scheduleInterval = deps.setIntervalFn ?? ((cb, ms) => setInterval(cb, ms));
 
-  autoUpdater.allowPrerelease = true;
+  // Owner decision (2026-10-11): this project is moving to a real
+  // stable/beta distinction (release.yml now only tags a "-beta.N"
+  // version as a GitHub prerelease — a plain "X.Y.Z" cut is a real
+  // release). false means auto-update only ever offers users a stable
+  // release, never a beta — matching every other app's default update
+  // channel behavior. Existing installs get NO further auto-update
+  // until the next stable version is cut; see this change's own PR for
+  // that consequence.
+  autoUpdater.allowPrerelease = false;
   autoUpdater.autoDownload = true;
 
   let updateReadyToInstall = false;

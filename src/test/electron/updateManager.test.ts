@@ -28,7 +28,10 @@ function createFakeAutoUpdater() {
     quitAndInstallCallCount: () => number;
     checkForUpdatesCallCount: () => number;
   } = {
-    allowPrerelease: false,
+    // Starts true (the opposite of wireAutoUpdater's own setting) so the
+    // "set to false on wiring" check below proves wireAutoUpdater actively
+    // flips it, not that it was coincidentally already false.
+    allowPrerelease: true,
     autoDownload: false,
     on(event: string, listener: (...args: any[]) => void) {
       (listeners[event] ??= []).push(listener);
@@ -77,7 +80,10 @@ console.log("wireAutoUpdater — state machine:");
     setIntervalFn: () => 0,
   });
 
-  check("allowPrerelease is set to true on wiring", fakeUpdater.allowPrerelease === true);
+  check(
+    "allowPrerelease is set to false on wiring — only a real stable release is ever auto-updated to (owner decision 2026-10-11)",
+    fakeUpdater.allowPrerelease === false
+  );
   check("autoDownload is set to true on wiring", fakeUpdater.autoDownload === true);
   check("checkForUpdates is called once immediately on wiring", fakeUpdater.checkForUpdatesCallCount() === 1);
 
