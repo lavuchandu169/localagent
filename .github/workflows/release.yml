@@ -84,8 +84,23 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME already exists — skipping creation."
           else
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --title "${GITHUB_REF_NAME#v}" --notes "" --prerelease
+            # --prerelease only for a "-beta.N" version (bump-version.mjs's
+            # own BETA_VERSION_RE shape) — a plain "X.Y.Z" tag (cut via a
+            # manual patch/minor/major bump, see bump-version.mjs's own
+            # doc comment on "whenever this project eventually leaves
+            # beta") is a real stable release instead. allowPrerelease is
+            # now false in updateManager.ts, so this distinction is what
+            # existing users' auto-update actually gates on — tagging a
+            # stable cut as a prerelease here would silently strand every
+            # installed copy with no update ever offered.
+            PKG_VERSION=$(node -p "require('./package.json').version")
+            if [[ "$PKG_VERSION" == *-beta.* ]]; then
+              gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                --title "${GITHUB_REF_NAME#v}" --notes "" --prerelease
+            else
+              gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                --title "${GITHUB_REF_NAME#v}" --notes ""
+            fi
           fi
 
   build-mac:
