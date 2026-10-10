@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.135 — 2026-10-10
+
+- Stop repeating the model's answer in the success done line
+
 ## v0.1.0-beta.134 — 2026-10-10
 
 - Point vendor/freellmapi at a patched fork (VULN-03 + dependency bump)
