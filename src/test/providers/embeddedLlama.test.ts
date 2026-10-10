@@ -174,5 +174,82 @@ console.log("\nfromLlamaResult keeps explanatory text around a recovered fallbac
   check("no surrounding text means content stays undefined, not an empty string", response.turn.type === "tool_calls" && response.turn.content === undefined);
 }
 
+console.log("\ntryParseFallbackToolCall's own parsing edge cases, via fromLlamaResult (test-engineer finding, full-project audit — only the simplest bare-JSON shape had coverage before this):");
+{
+  // A fenced ```json block — tryParseFallbackToolCall's own doc comment
+  // says rawMatch is the WHOLE fence when the JSON was inside one, not
+  // just the inner JSON, specifically so the fence markers themselves
+  // count as "the recovered call" and don't leak into kept content.
+  const result = { response: 'Sure, one sec.\n```json\n{"name": "read_file", "arguments": {"path": "a.txt"}}\n```\nDone.' };
+  const response = fromLlamaResult(result);
+  check("recovers a tool call fenced in a ```json code block", response.turn.type === "tool_calls" && response.turn.toolCalls[0]?.name === "read_file");
+  check(
+    "the fence markers themselves are excluded from kept content, not left as stray ``` text",
+    response.turn.type === "tool_calls" && typeof response.turn.content === "string" && !response.turn.content.includes("```")
+  );
+  check(
+    "text before and after the fence is still preserved",
+    response.turn.type === "tool_calls" &&
+      typeof response.turn.content === "string" &&
+      response.turn.content.includes("Sure, one sec.") &&
+      response.turn.content.includes("Done.")
+  );
+}
+{
+  // Multiple top-level JSON objects in the same response — the doc
+  // comment is explicit that the LAST one wins, since a trailing call is
+  // the model's actual next action, not an example it mentioned in
+  // passing earlier in its own reasoning.
+  const result = {
+    response:
+      'Earlier I would have called {"name": "read_file", "arguments": {"path": "old.txt"}} but now ' +
+      '{"name": "write_file", "arguments": {"path": "new.txt", "content": "hi"}}',
+  };
+  const response = fromLlamaResult(result);
+  check(
+    "when multiple JSON objects are present, the LAST one is recovered as the real call",
+    response.turn.type === "tool_calls" && response.turn.toolCalls[0]?.name === "write_file"
+  );
+}
+{
+  // repairUnescapedQuotes's specific recovery: an otherwise-well-formed
+  // object with exactly one unescaped quote left inside a string value —
+  // the documented live failure mode from Qwen2.5-Coder 1.5B.
+  const result = { response: '{"name": "write_file", "arguments": {"path": "a.txt", "content": "say "hi" to them"}}' };
+  const response = fromLlamaResult(result);
+  check(
+    "a single unescaped quote inside a string value is repaired and still recovered as a valid tool call",
+    response.turn.type === "tool_calls" && response.turn.toolCalls[0]?.name === "write_file"
+  );
+  check(
+    "the repaired content value still reads correctly, quote included",
+    response.turn.type === "tool_calls" && (response.turn.toolCalls[0]?.arguments as any)?.content === 'say "hi" to them'
+  );
+}
+{
+  // A JSON object that parses fine but doesn't match the tool-call shape
+  // (no "arguments" key at all) must NOT be recovered as a fallback call
+  // — isToolCallShape's whole purpose is rejecting exactly this, falling
+  // through to treating the response as genuine final text instead.
+  const result = { response: 'Here is some config: {"name": "localagent", "version": "1.0.0"}' };
+  const response = fromLlamaResult(result);
+  check("a JSON object missing the tool-call shape is not recovered as a tool call", response.turn.type !== "tool_calls");
+  check("it's treated as ordinary final text instead", response.turn.type === "final");
+}
+{
+  // arguments present but as an array, not an object — also rejected by
+  // isToolCallShape's explicit !Array.isArray(arguments) check.
+  const result = { response: '{"name": "read_file", "arguments": ["a.txt"]}' };
+  const response = fromLlamaResult(result);
+  check("tool-call-shaped JSON with array arguments (not an object) is rejected, not recovered", response.turn.type !== "tool_calls");
+}
+{
+  // No JSON object anywhere at all — the plain final-text path, proving
+  // tryParseFallbackToolCall's null return doesn't itself break anything.
+  const result = { response: "Just a normal answer with no tool call in it." };
+  const response = fromLlamaResult(result);
+  check("a response with no JSON at all is left as plain final text", response.turn.type === "final" && response.turn.content === result.response);
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
