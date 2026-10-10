@@ -77,6 +77,28 @@ async function main() {
     check("still returns a usable result rather than hanging or crashing the test process", result.output !== undefined || result.error !== undefined);
   }
 
+  console.log(
+    "\nrunCommandTool: a command that traps and ignores SIGTERM is still killed, via the 2s SIGKILL escalation (test-engineer finding, full-project audit — the SIGKILL fallback itself had no test, only the SIGTERM-succeeds path above did):"
+  );
+  {
+    // `trap '' TERM` makes the shell itself ignore SIGTERM outright — a
+    // real, OS-level non-cooperative process, not a Node script that could
+    // just be slow to respond. `escalateToKill`'s first SIGTERM will be a
+    // genuine no-op here; only the SIGKILL fired ~2s later (SIGKILL cannot
+    // be trapped or ignored by any process) can actually end it. A short
+    // timeoutMs triggers escalateToKill almost immediately, so the test's
+    // wall-clock cost is ~2s (the hardcoded escalation delay), not the
+    // sleep's own 30s.
+    const start = Date.now();
+    const result = await runCommandTool.execute({ command: "trap '' TERM; sleep 30", timeoutMs: 300 }, ctx);
+    const elapsedMs = Date.now() - start;
+    check("resolves at all, rather than hanging for the full 30s sleep — proves SOME signal actually ended it", elapsedMs < 10000);
+    check("took at least the ~2s SIGKILL escalation delay — proves it was the SECOND signal, not a SIGTERM that actually worked", elapsedMs >= 1900);
+    check("still returns a usable result instead of crashing the test process", result.output !== undefined || result.error !== undefined);
+    const exitCode = (result.output as any)?.exitCode;
+    check("the exit code reflects death by signal (non-zero/null), not a clean exit", result.ok === false && (exitCode === null || exitCode !== 0));
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
