@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.137 — 2026-10-10
+
+- Override simple-git to 4.0.2, closing the argv-parser CVE
+
 ## v0.1.0-beta.136 — 2026-10-10
 
 - Add a real stable release channel, distinct from beta
