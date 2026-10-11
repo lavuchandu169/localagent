@@ -154,6 +154,52 @@ console.log("\nagent.ts falls back WITHOUT a reset when the stream never yielded
   check("no stream.reset fires when nothing was ever shown", !events.some((e) => e.type === "stream.reset"));
 }
 
+console.log("\nagent.ts surfaces a status line when a tool call was recovered from the embedded model's mis-flagged text (user-reported UX finding):");
+{
+  // Streamed "text" that later turns out to be a recovered fallback call
+  // still vanishes via its own stream.reset (embeddedLlama.ts's own
+  // behavior, unrelated to this test) — what this proves is that the
+  // NEW status line actually appears once recoveredFromTextFallback is
+  // set on the final response, regardless of how it got there.
+  const response: ChatResponse = {
+    turn: { type: "tool_calls", toolCalls: [{ id: "call_0", name: "read_file", arguments: { path: "a.txt" } }], recoveredFromTextFallback: true },
+  };
+  const provider = fakeStreamingProvider([{ type: "reset" }, { type: "done", response }]);
+  const session = new AgentSession({ workspaceRoot: "/tmp", model: "fake-model", provider, tools: new ToolRegistry([]), permissionMode: "PLAN" });
+  const events = await collectEvents(session, "read a.txt");
+  check(
+    "a status line explaining the recovery is emitted",
+    events.some((e) => e.type === "status" && e.message.includes("Recovered a tool call"))
+  );
+}
+{
+  // The common case — a NORMAL tool call, correctly flagged by the model
+  // from the start — must never show this notice. Nothing was recovered.
+  const response: ChatResponse = {
+    turn: { type: "tool_calls", toolCalls: [{ id: "call_0", name: "read_file", arguments: { path: "a.txt" } }] },
+  };
+  const provider = fakeStreamingProvider([{ type: "done", response }]);
+  const session = new AgentSession({ workspaceRoot: "/tmp", model: "fake-model", provider, tools: new ToolRegistry([]), permissionMode: "PLAN" });
+  const events = await collectEvents(session, "read a.txt");
+  check(
+    "no recovery status line appears for an ordinary, correctly-flagged tool call",
+    !events.some((e) => e.type === "status" && e.message.includes("Recovered a tool call"))
+  );
+}
+{
+  // A plain final-text answer (the overwhelmingly common case for a
+  // non-tool-calling turn) must never show this notice either — the
+  // check is specifically gated on turn.type === "tool_calls".
+  const response: ChatResponse = { turn: { type: "final", content: "Sure, here's the answer." } };
+  const provider = fakeStreamingProvider([{ type: "done", response }]);
+  const session = new AgentSession({ workspaceRoot: "/tmp", model: "fake-model", provider, tools: new ToolRegistry([]), permissionMode: "DEFAULT" });
+  const events = await collectEvents(session, "answer this");
+  check(
+    "no recovery status line appears for a plain final-text turn",
+    !events.some((e) => e.type === "status" && e.message.includes("Recovered a tool call"))
+  );
+}
+
 console.log("\nagent.ts reports a provider's gpuStatus (if any) once, right after the first successful turn:");
 {
   // EmbeddedLlamaProvider sets a plain `gpuStatus` string field once its

@@ -74,7 +74,15 @@ export interface ChatRequest {
 
 export type AssistantTurn =
   | { type: "final"; content: string }
-  | { type: "tool_calls"; toolCalls: ToolCall[]; content?: string };
+  /** recoveredFromTextFallback is true only when the embedded provider's
+   * tryParseFallbackToolCall recovered this call from plain-text output
+   * a small GGUF model mis-flagged (see its own doc comment in
+   * embeddedLlama.ts) — agent.ts surfaces a one-time status line for
+   * this, since otherwise the user sees streamed text vanish and a tool
+   * card appear with no explanation. Always false/undefined for every
+   * other provider and for the embedded provider's normal, correctly-
+   * flagged tool calls. */
+  | { type: "tool_calls"; toolCalls: ToolCall[]; content?: string; recoveredFromTextFallback?: boolean };
 
 export interface ChatResponse {
   turn: AssistantTurn;
