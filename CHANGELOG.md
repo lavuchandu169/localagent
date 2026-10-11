@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.142 — 2026-10-11
+
+- Stop unrequested file creation for plain questions and homedir writes
+
 ## v0.1.0-beta.141 — 2026-10-11
 
 - Add 6 more curated embedded models, extend hardware auto-recommend
