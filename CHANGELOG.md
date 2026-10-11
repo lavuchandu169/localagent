@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.143 — 2026-10-11
+
+- Disable git hooks during authenticated push to stop token exfiltration
+
 ## v0.1.0-beta.142 — 2026-10-11
 
 - Stop unrequested file creation for plain questions and homedir writes
