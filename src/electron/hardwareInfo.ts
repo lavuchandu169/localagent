@@ -25,14 +25,20 @@ const RAM_THRESHOLD_TOLERANCE_GB = 0.75;
  * running and actual peak memory varies a bit by quantization. Meant as a
  * pre-selected default the user can still override, not a hard limit.
  * Recommends among the coding models only — coding is this app's primary
- * path; the general-chat models are there to pick manually, not
- * auto-recommended.
+ * path; the general-chat and reasoning models are there to pick manually,
+ * not auto-recommended. Tiers only go as high as this app's curated coding
+ * models do (currently 32B) — doesn't use vramBytes/gpu yet, so a machine
+ * with modest RAM but strong GPU VRAM is under-recommended; tracked as a
+ * follow-up, not done here.
  */
 export function recommendModel(info: HardwareInfo): EmbeddedModelId {
   const gb = info.totalRamBytes / 1024 ** 3;
+  if (gb >= 64 - RAM_THRESHOLD_TOLERANCE_GB) return "qwen-coder-32b";
+  if (gb >= 32 - RAM_THRESHOLD_TOLERANCE_GB) return "qwen-coder-14b";
   if (gb >= 16 - RAM_THRESHOLD_TOLERANCE_GB) return "qwen-coder-7b";
   if (gb >= 8 - RAM_THRESHOLD_TOLERANCE_GB) return "qwen-coder-3b";
-  return "qwen-coder-1.5b";
+  if (gb >= 4 - RAM_THRESHOLD_TOLERANCE_GB) return "qwen-coder-1.5b";
+  return "qwen-coder-0.5b";
 }
 
 export async function detectHardware(): Promise<HardwareInfo> {
