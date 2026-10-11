@@ -200,6 +200,61 @@ console.log("\nagent.ts surfaces a status line when a tool call was recovered fr
   );
 }
 
+console.log("\nagent.ts passes through a provider's \"perf\" stream events (local-model tokens/sec + context usage):");
+{
+  const response: ChatResponse = { turn: { type: "final", content: "hi" } };
+  const provider = fakeStreamingProvider([
+    { type: "text", text: "hi" },
+    { type: "perf", tokensPerSecond: 42, contextUsedTokens: 500, contextSizeTokens: 8192 },
+    { type: "done", response },
+  ]);
+  const session = new AgentSession({ workspaceRoot: "/tmp", model: "fake-model", provider, tools: new ToolRegistry([]), permissionMode: "DEFAULT" });
+  const events = await collectEvents(session, "hi");
+  const perf = events.find((e) => e.type === "perf") as { type: "perf"; tokensPerSecond: number; contextUsedTokens: number; contextSizeTokens: number } | undefined;
+  check("a perf StreamEvent becomes a matching perf AgentEvent", perf !== undefined && perf.tokensPerSecond === 42 && perf.contextUsedTokens === 500 && perf.contextSizeTokens === 8192);
+}
+
+console.log("\nagent.ts does NOT fire a stream.reset for a provider-fallback retry when the only thing streamed before the failure was a \"perf\" event:");
+{
+  // perf has no visible partial text/tool-card state of its own (see its
+  // own doc comment in types.ts) — a fallback retry's stream.reset exists
+  // to clear exactly that kind of state, so a perf-only stream failing
+  // over to a fallback provider must behave like the "never yielded
+  // anything" case above, not like the "yielded real text" case.
+  let callCount = 0;
+  const perfOnlyThenFails: ModelProvider = {
+    id: "perf-only-then-fails",
+    async listModels() {
+      return [{ id: "m", local: false }];
+    },
+    async healthCheck() {
+      return { ok: true };
+    },
+    async chat(): Promise<ChatResponse> {
+      throw new Error("chat() should not be called");
+    },
+    async *chatStream(): AsyncGenerator<StreamEvent> {
+      callCount++;
+      yield { type: "perf", tokensPerSecond: 15, contextUsedTokens: 100, contextSizeTokens: 8192 };
+      throw new ProviderChatError("rate limited", { status: 429, retryable: true });
+    },
+  };
+  const fallbackResponse: ChatResponse = { turn: { type: "final", content: "ok" } };
+  const fallbackProvider = fakeStreamingProvider([{ type: "done", response: fallbackResponse }]);
+  const session = new AgentSession({
+    workspaceRoot: "/tmp",
+    model: "m",
+    provider: perfOnlyThenFails,
+    tools: new ToolRegistry([]),
+    permissionMode: "DEFAULT",
+    fallbackProviders: [{ provider: fallbackProvider, model: "fallback-model", label: "Fallback" }],
+  });
+  const events = await collectEvents(session, "go");
+  check("the perf event still came through before the failure", events.some((e) => e.type === "perf"));
+  check("no stream.reset fires — a perf-only stream has no partial UI state to clear", !events.some((e) => e.type === "stream.reset"));
+  check("the fallback still ran exactly once", callCount === 1);
+}
+
 console.log("\nagent.ts reports a provider's gpuStatus (if any) once, right after the first successful turn:");
 {
   // EmbeddedLlamaProvider sets a plain `gpuStatus` string field once its

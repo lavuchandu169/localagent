@@ -44,6 +44,7 @@ import { byId, errorMessage, withBusyLabel } from "./domHelpers.js";
 import { createFrameCoalescer } from "./rafCoalesce.js";
 import { createDebouncer } from "./debounce.js";
 import { formatDoneLine } from "./doneLine.js";
+import { formatPerfBadge } from "./perfBadge.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import { renderDiff } from "./diffView.js";
@@ -348,6 +349,7 @@ const downloadLabel = byId<HTMLSpanElement>("download-label");
 const cancelDownloadBtn = byId<HTMLButtonElement>("cancel-download");
 const activeModelBadge = byId<HTMLDivElement>("active-model-badge");
 const usageBadge = byId<HTMLSpanElement>("usage-badge");
+const perfBadge = byId<HTMLSpanElement>("perf-badge");
 const editSettingsBtn = byId<HTMLButtonElement>("edit-settings");
 const revertCheckpointBtn = byId<HTMLButtonElement>("revert-checkpoint");
 const downloadedModelsList = byId<HTMLUListElement>("downloaded-models-list");
@@ -1259,8 +1261,16 @@ function renderEvent(event: AgentEvent): void {
         streamingTextEl = null;
         streamingToolCards.length = 0;
         toolCallsSeenThisTurn = 0;
+        // A fresh turn hasn't reported its own speed/context reading
+        // yet — showing the PREVIOUS turn's stale numbers here would
+        // misrepresent what's actually happening right now.
+        perfBadge.hidden = true;
       }
       logLine(event.message, "log-status");
+      break;
+    case "perf":
+      perfBadge.textContent = formatPerfBadge(event.tokensPerSecond, event.contextUsedTokens, event.contextSizeTokens);
+      perfBadge.hidden = false;
       break;
     case "text.delta": {
       if (!streamingTextEl) {
@@ -1471,6 +1481,7 @@ function renderEvent(event: AgentEvent): void {
       logLine(formatDoneLine(event.success, event.summary), event.success ? "log-done" : "log-error");
       runTaskBtn.disabled = false;
       setRunningComposerState(false);
+      perfBadge.hidden = true;
       break;
   }
 }
@@ -1981,6 +1992,7 @@ function clearEventLog(): void {
   eventLog.appendChild(emptyState);
   sessionUsage = { inputTokens: 0, outputTokens: 0, knownCostUsd: 0, hasUnknownPricedUsage: false };
   usageBadge.hidden = true;
+  perfBadge.hidden = true;
 }
 
 /** Restores the setup form's fields (workspace text, model/mode selects, plan-first checkbox, and the two custom-server subfields) from a tab's stored selection — the visual half of switching tabs. Does not touch anything session-lifecycle-related (setSetupControlsDisabled, editSettingsBtn, revert/changes buttons) — that's handled by clearAndReplayEventLog below, since those depend on whether the tab has ever had a session, which the event replay determines. */
