@@ -149,5 +149,42 @@ await (async () => {
   await fsPromises.rm(outsideDir, { recursive: true, force: true });
 })();
 
+function editFileCall(path: string): ToolCall {
+  return { id: "call_0", name: "edit_file", arguments: { path, content: "x" } };
+}
+
+console.log(
+  "\nPermissionEngine.evaluate: a WRITE tool always ASKs when workspaceRoot is the user's real home directory (sessionRegistry.ts's own fallback when no project folder was ever chosen) — even in ACCEPT_EDITS/AUTO_SAFE, whose whole premise ('I trust this folder') doesn't hold for a folder nobody actually chose (real bug report: a model wrote unrequested files straight into ~):"
+);
+{
+  for (const mode of ["DEFAULT", "ACCEPT_EDITS", "AUTO_SAFE"] as const) {
+    const engine = new PermissionEngine(mode);
+    check(
+      `${mode} mode: a write into os.homedir() is ASK, not ALLOW`,
+      engine.evaluate(editFileCall("notes.md"), "WRITE", os.homedir()) === "ASK"
+    );
+  }
+}
+
+console.log(
+  "\nPermissionEngine.evaluate: an explicitly-chosen project workspace is unaffected by the homedir gate above — ACCEPT_EDITS/AUTO_SAFE still auto-ALLOW writes there, same as before this change:"
+);
+await (async () => {
+  const workspaceRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "localagent-permissions-write-test-"));
+  for (const mode of ["ACCEPT_EDITS", "AUTO_SAFE"] as const) {
+    const engine = new PermissionEngine(mode);
+    check(
+      `${mode} mode: a write into a real chosen project folder still auto-allows`,
+      engine.evaluate(editFileCall("notes.md"), "WRITE", workspaceRoot) === "ALLOW"
+    );
+  }
+  const defaultEngine = new PermissionEngine("DEFAULT");
+  check(
+    "DEFAULT mode: a write into a real chosen project folder still asks (unchanged)",
+    defaultEngine.evaluate(editFileCall("notes.md"), "WRITE", workspaceRoot) === "ASK"
+  );
+  await fsPromises.rm(workspaceRoot, { recursive: true, force: true });
+})();
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

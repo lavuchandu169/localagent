@@ -39,6 +39,10 @@ check(
   "tells the model plain conversation (a greeting, small talk) doesn't imply a file lookup — the exact gap that let a small model answer \"hello\" with \"I don't have any information about a file named 'hello'\"",
   DEFAULT_SYSTEM_PROMPT.toLowerCase().includes("greeting") && DEFAULT_SYSTEM_PROMPT.toLowerCase().includes("doesn't mean there's a file")
 );
+check(
+  "tells the model a general-knowledge/explanatory question about a topic doesn't imply creating a file either — the exact gap that let a small local model respond to \"tell me about plastic decomposition\"/\"tell me about programming\" by inventing an unrequested .md file instead of just answering (real bug report)",
+  DEFAULT_SYSTEM_PROMPT.includes("Discussing or explaining a topic is never, on its own, a request to create a document")
+);
 
 console.log("\nCommand risk classification:");
 check("rm is DESTRUCTIVE", classifyCommand("rm -rf foo") === "DESTRUCTIVE");
