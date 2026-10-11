@@ -1,5 +1,7 @@
 // src/electron/githubPushAuth.ts
 import { spawn } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 
 export function isUnauthenticatedGithubRemote(url: string): boolean {
   let parsed: URL;
@@ -68,10 +70,36 @@ export function isSimpleGitPushCommand(command: string): boolean {
 const CREDENTIAL_HELPER_SCRIPT = `!f() { echo username=x-access-token; echo \"password=$LOCALAGENT_GH_TOKEN\"; }; f`;
 
 /**
+ * Security-review finding: LOCALAGENT_GH_TOKEN lives in this invocation's
+ * own process environment (see buildAuthenticatedGitPushArgv's returned
+ * env) so the inline credential-helper script can read it — but ANY local
+ * git hook (pre-push, post-receive via a local transport, etc.) runs in
+ * that same environment and can read it too. A repo-committed hooks
+ * directory wired up automatically via `core.hooksPath` (the standard
+ * husky/simple-git-hooks pattern: `npm install` sets this up with zero
+ * further action from the user) is a mainstream, non-exotic setup — a
+ * malicious or compromised repo could ship a `pre-push` hook that reads
+ * `$LOCALAGENT_GH_TOKEN` and exfiltrates it, triggered by a completely
+ * innocuous-looking `git push origin main` with nothing suspicious for a
+ * user to notice in the permission-approval dialog. Verified live: a
+ * committed pre-push hook DOES see this exact env var during a real push.
+ * Pointing core.hooksPath at a path that doesn't exist disables hook
+ * lookup entirely for this one invocation (verified live: push succeeds
+ * normally, hook never runs) without touching the user's real hooks
+ * setup, which isn't modified — only this one authenticated argv is. A
+ * fresh os.tmpdir()-based path (rather than a hardcoded "/dev/null") is
+ * used so this works identically on Windows, where /dev/null isn't a
+ * real path in the same way.
+ */
+function noHooksPath(): string {
+  return path.join(os.tmpdir(), `localagent-no-hooks-${process.pid}-${Date.now()}`);
+}
+
+/**
  * Builds the argv (never a shell string) that runs the original push with
  * an injected, github.com-scoped, one-shot credential helper.
  *
- * Two -c overrides, always in this order:
+ * Three -c overrides, always in this order:
  * - "credential.helper=" (empty) RESETS git's helper list first. Without
  *   this, `-c credential.helper=X` only ADDS to whatever helpers are
  *   already configured (osxkeychain, `store`, `gh auth setup-git`, etc.) —
@@ -91,6 +119,20 @@ const CREDENTIAL_HELPER_SCRIPT = `!f() { echo username=x-access-token; echo \"pa
  *   individual credential request closes all of those at once — the
  *   helper is never even invoked for a request against a different host,
  *   regardless of how that request's URL was arrived at.
+ * - "core.hooksPath=<fresh nonexistent path>" — see noHooksPath's doc
+ *   comment above: the token-exposure-via-hooks fix.
+ *
+ * Deliberately does NOT allowlist/reject specific push flags (e.g.
+ * --receive-pack, --exec, --repo) the way a stricter review might
+ * suggest: --receive-pack/--exec only matter for ssh/local transports,
+ * and this function is only ever reached for an HTTPS github.com remote
+ * (isUnauthenticatedGithubRemote, checked by the caller before this runs)
+ * — so neither is actually exploitable here. --repo IS handled, but by
+ * parseGitPushRemoteName resolving it through the user's own real git
+ * config (getConfiguredRemoteUrl) before any token is ever injected, not
+ * by rejecting the flag outright — it can only redirect to another
+ * github.com remote the user already configured locally, never an
+ * arbitrary attacker-chosen host.
  *
  * Passed to a plain (non-shell) spawn — see runCommand.ts — so there is no
  * outer shell to interpret this feature's own quoting at all. That
@@ -100,7 +142,16 @@ const CREDENTIAL_HELPER_SCRIPT = `!f() { echo username=x-access-token; echo \"pa
  */
 export function buildAuthenticatedGitPushArgv(command: string, token: string): { argv: string[]; env: Record<string, string> } {
   const originalArgs = command.trim().split(/\s+/).slice(1); // drop the leading "git", keep "push ..."
-  const argv = ["git", "-c", "credential.helper=", "-c", `credential.https://github.com.helper=${CREDENTIAL_HELPER_SCRIPT}`, ...originalArgs];
+  const argv = [
+    "git",
+    "-c",
+    "credential.helper=",
+    "-c",
+    `credential.https://github.com.helper=${CREDENTIAL_HELPER_SCRIPT}`,
+    "-c",
+    `core.hooksPath=${noHooksPath()}`,
+    ...originalArgs,
+  ];
   return { argv, env: { LOCALAGENT_GH_TOKEN: token } };
 }
 
