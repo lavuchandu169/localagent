@@ -1,5 +1,5 @@
 // src/test/embeddedLlama.test.ts
-import { EmbeddedLlamaProvider, describeGpuStatus, fromLlamaResult } from "../../providers/embeddedLlama.js";
+import { EmbeddedLlamaProvider, describeGpuStatus, fromLlamaResult, maybeSamplePerf, type PerfSamplerState } from "../../providers/embeddedLlama.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -249,6 +249,40 @@ console.log("\ntryParseFallbackToolCall's own parsing edge cases, via fromLlamaR
   const result = { response: "Just a normal answer with no tool call in it." };
   const response = fromLlamaResult(result);
   check("a response with no JSON at all is left as plain final text", response.turn.type === "final" && response.turn.content === result.response);
+}
+
+console.log("\nmaybeSamplePerf (local-model live tokens/sec + context-usage throttling):");
+{
+  const state: PerfSamplerState = { lastEmitAtMs: 1000, lastOutputTokens: 10 };
+  const result = maybeSamplePerf(state, 1100, 12, 500, 8192, 300);
+  check("within the throttle interval, no sample is emitted", result.sample === null);
+  check("state is left unchanged when nothing is emitted", result.nextState === state);
+}
+{
+  const state: PerfSamplerState = { lastEmitAtMs: 1000, lastOutputTokens: 10 };
+  // 300ms elapsed, 30 new output tokens -> 100 tokens/sec.
+  const result = maybeSamplePerf(state, 1300, 40, 500, 8192, 300);
+  check("once the interval elapses, a sample is emitted", result.sample !== null);
+  check("tokens/sec is computed from the REAL elapsed time and token delta, not a fixed assumption", result.sample?.tokensPerSecond === 100);
+  check("context usage is passed through unchanged", result.sample?.contextUsedTokens === 500 && result.sample?.contextSizeTokens === 8192);
+  check("the returned state advances to the new emission point, not left stale", result.nextState.lastEmitAtMs === 1300 && result.nextState.lastOutputTokens === 40);
+}
+{
+  // A slower stretch of generation must report a LOWER rate than an
+  // earlier faster stretch — proving this is an instantaneous rate
+  // since the last sample, not a cumulative average pulled toward the
+  // session's historical speed.
+  let state: PerfSamplerState = { lastEmitAtMs: 0, lastOutputTokens: 0 };
+  const fast = maybeSamplePerf(state, 300, 60, 100, 8192, 300); // 200 tok/s
+  state = fast.nextState;
+  const slow = maybeSamplePerf(state, 600, 63, 103, 8192, 300); // 10 tok/s
+  check("a fast stretch reports a high rate", fast.sample?.tokensPerSecond === 200);
+  check("a subsequent slow stretch reports its OWN lower rate, not an average pulled toward the fast one", slow.sample?.tokensPerSecond === 10);
+}
+{
+  const state: PerfSamplerState = { lastEmitAtMs: 1000, lastOutputTokens: 10 };
+  const result = maybeSamplePerf(state, 1300, 10, 500, 8192, 300);
+  check("zero new tokens since the last sample reports a zero rate, not a division artifact", result.sample?.tokensPerSecond === 0);
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

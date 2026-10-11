@@ -612,15 +612,25 @@ export class AgentSession {
               gotDone = streamEvent.response;
               break;
             }
-            streamedAnything = true;
             if (streamEvent.type === "text") {
+              streamedAnything = true;
               yield { type: "text.delta", text: streamEvent.text };
             } else if (streamEvent.type === "tool_call_start") {
+              streamedAnything = true;
               yield { type: "tool_call.start", index: streamEvent.index, name: streamEvent.name };
             } else if (streamEvent.type === "tool_call_delta") {
+              streamedAnything = true;
               yield { type: "tool_call.delta", index: streamEvent.index, argumentsDelta: streamEvent.argumentsDelta };
             } else if (streamEvent.type === "reset") {
+              streamedAnything = true;
               yield { type: "stream.reset" };
+            } else if (streamEvent.type === "perf") {
+              // Deliberately does NOT set streamedAnything — this is an
+              // ambient speed/context readout with no visible partial
+              // text/tool-card state of its own, so a provider-fallback
+              // retry's stream.reset (which only exists to clear THAT
+              // kind of state) has nothing here to clear.
+              yield { type: "perf", tokensPerSecond: streamEvent.tokensPerSecond, contextUsedTokens: streamEvent.contextUsedTokens, contextSizeTokens: streamEvent.contextSizeTokens };
             }
           }
           if (!gotDone) throw new Error("Provider's chatStream ended without a final 'done' event.");

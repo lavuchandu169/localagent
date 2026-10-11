@@ -97,6 +97,14 @@ export type StreamEvent =
    * "text" was never real prose, so it must never stay on screen above
    * the tool card that recovery produces. */
   | { type: "reset" }
+  /** Local-generation-only, ambient speed/context readout — only the
+   * embedded provider emits this (a remote API has no local tokens/sec
+   * or KV-cache-fill concept to report). Throttled by the emitter, not a
+   * per-token event. tokensPerSecond is the INSTANTANEOUS rate since the
+   * last emission, not a cumulative average, so it reflects current
+   * generation speed (which can genuinely vary mid-turn, e.g. with
+   * thermal throttling) rather than smoothing it away. */
+  | { type: "perf"; tokensPerSecond: number; contextUsedTokens: number; contextSizeTokens: number }
   | { type: "done"; response: ChatResponse };
 
 /** healthCheck's result: `ok:false` always carries the real failure reason — the underlying error message, not a bare boolean — so a caller can show the user something more useful than "health check failed". */
@@ -190,6 +198,8 @@ export type AgentEvent =
   | { type: "usage"; model: string; inputTokens: number; outputTokens: number }
   /** Ephemeral UI-only signal: discard whatever partial text/tool-card state is being built for the current turn — a provider-fallback retry after a mid-stream failure fires this before its own "retrying..." status message, so the fallback's fresh output never visually mixes with the failed provider's partial one. */
   | { type: "stream.reset" }
+  /** Pass-through of StreamEvent's own "perf" — see its doc comment there. */
+  | { type: "perf"; tokensPerSecond: number; contextUsedTokens: number; contextSizeTokens: number }
   | { type: "done"; success: boolean; summary: string }
   | { type: "error"; message: string }
   /** Renderer-only, never emitted by the agent itself: pushed into a tab's own event history the moment a task is sent, purely so replaying that history (switching away from a tab mid-task and back) reproduces the user's own sent message, not just the agent's side of it. Never persisted to disk — sessionRegistry's own event stream has no equivalent and doesn't need one. */
@@ -203,5 +213,7 @@ export type AgentEvent =
  * skip storing every streamed token, which would otherwise double a long
  * answer's — or a whole-file edit_file call's — footprint for no benefit. */
 export function isEphemeralStreamEvent(event: AgentEvent): boolean {
-  return event.type === "text.delta" || event.type === "tool_call.start" || event.type === "tool_call.delta" || event.type === "stream.reset";
+  return (
+    event.type === "text.delta" || event.type === "tool_call.start" || event.type === "tool_call.delta" || event.type === "stream.reset" || event.type === "perf"
+  );
 }
