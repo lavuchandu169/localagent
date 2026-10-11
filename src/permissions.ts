@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { PermissionMode, PermissionDecision, ToolCall, PermissionLevel } from "./types.js";
 import { KNOWN_VERIFY_COMMANDS } from "./verifyCommand.js";
@@ -214,6 +215,14 @@ export class PermissionEngine {
     }
 
     if (toolPermission === "WRITE") {
+      // sessionRegistry.ts falls back to os.homedir() when no project
+      // folder was ever chosen — a real bug report showed a model writing
+      // unrequested files straight into the user's actual home directory
+      // under this default. ACCEPT_EDITS/AUTO_SAFE's whole premise ("I
+      // trust this folder, auto-apply writes") doesn't hold when "this
+      // folder" was never actually chosen, so always ask here regardless
+      // of mode — DEFAULT already asked before writes either way.
+      if (workspaceRoot !== undefined && workspaceRoot === os.homedir()) return "ASK";
       if (this.mode === "ACCEPT_EDITS" || this.mode === "AUTO_SAFE") return "ALLOW";
       return "ASK"; // DEFAULT mode asks before writes.
     }
