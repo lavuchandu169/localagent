@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.139 — 2026-10-11
+
+- Surface a status line when a tool call is recovered from mis-flagged text
+
 ## v0.1.0-beta.138 — 2026-10-11
 
 - Show live tokens/sec and context usage for the local embedded model
