@@ -228,7 +228,7 @@ export function fromLlamaResult(result: LlamaGenerateResult): ChatResponse {
         ? undefined
         : [result.response.slice(0, matchIndex).trim(), result.response.slice(matchIndex + fallback.rawMatch.length).trim()].filter(Boolean).join("\n\n") ||
           undefined;
-    return { turn: { type: "tool_calls", toolCalls, content }, raw: result };
+    return { turn: { type: "tool_calls", toolCalls, content, recoveredFromTextFallback: true }, raw: result };
   }
 
   return { turn: { type: "final", content: result.response }, raw: result };

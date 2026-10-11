@@ -682,6 +682,19 @@ export class AgentSession {
         yield { type: "usage", model: this.opts.model, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens };
       }
 
+      // User-reported UX finding: a small GGUF model mis-flagging its own
+      // <tool_call> control token streams what looks like prose, which
+      // then vanishes (embeddedLlama.ts's stream.reset) the instant a
+      // tool card appears in its place — with nothing explaining why.
+      // AssistantTurn.recoveredFromTextFallback (set only by
+      // embeddedLlama.ts's tryParseFallbackToolCall recovery path) is
+      // the one signal that this just happened; surfacing it here means
+      // this works for both chat() and chatStream(), since both run
+      // through fromLlamaResult.
+      if (response.turn.type === "tool_calls" && response.turn.recoveredFromTextFallback) {
+        yield { type: "status", message: "Recovered a tool call the model didn't flag correctly — continuing normally." };
+      }
+
       // Holds the task's very first turn for approval before any of it
       // runs — deliberately not a separate "plan-only, don't call tools
       // yet" turn: prompting a model to withhold tool calls proved

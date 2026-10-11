@@ -140,6 +140,10 @@ console.log("\nEmbedded llama provider conversion:");
     JSON.stringify(turn) ===
       JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "call_0", name: "read_file", arguments: { path: "a.js" } }] })
   );
+  check(
+    "a genuinely-flagged tool call (real functionCalls present) never carries recoveredFromTextFallback — that flag means the opposite happened",
+    turn.type === "tool_calls" && turn.recoveredFromTextFallback === undefined
+  );
 }
 {
   // Some GGUF quantizations mis-flag their <tool_call> control token (node-llama-cpp
@@ -152,7 +156,7 @@ console.log("\nEmbedded llama provider conversion:");
   check(
     "fromLlamaResult recovers a tool call from a fenced JSON-only response",
     JSON.stringify(turn) ===
-      JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "call_0", name: "list_directory", arguments: { path: "." } }] })
+      JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "call_0", name: "list_directory", arguments: { path: "." } }], recoveredFromTextFallback: true })
   );
 }
 {
@@ -160,7 +164,7 @@ console.log("\nEmbedded llama provider conversion:");
   check(
     "fromLlamaResult recovers a tool call from a bare JSON-only response",
     JSON.stringify(turn) ===
-      JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "call_0", name: "read_file", arguments: { path: "a.js" } }] })
+      JSON.stringify({ type: "tool_calls", toolCalls: [{ id: "call_0", name: "read_file", arguments: { path: "a.js" } }], recoveredFromTextFallback: true })
   );
 }
 {
