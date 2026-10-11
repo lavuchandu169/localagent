@@ -255,11 +255,64 @@ export function describeGpuStatus(gpu: "metal" | "cuda" | "vulkan" | false, gpuL
  * append-result → repeat loop (Section 68 boundary) is unchanged from the
  * OpenAICompatibleProvider path.
  */
+/** Default throttle for "perf" stream-event emission — frequent enough to
+ * feel live, far below the cost of a per-token DOM update this avoided
+ * (see rafCoalesce.ts's own doc comment for the exact failure mode a
+ * per-event-cycle UI write causes on a high-frequency stream). */
+export const PERF_SAMPLE_INTERVAL_MS = 300;
+
+export interface PerfSample {
+  tokensPerSecond: number;
+  contextUsedTokens: number;
+  contextSizeTokens: number;
+}
+
+export interface PerfSamplerState {
+  lastEmitAtMs: number;
+  lastOutputTokens: number;
+}
+
+/**
+ * Decides whether enough wall-clock time has passed since the last
+ * emission to report a fresh "perf" stream event, and if so, computes
+ * the INSTANTANEOUS tokens/sec since that last emission (not a
+ * cumulative average — see StreamEvent's "perf" doc comment in
+ * types.ts for why). Pure — all state passed in and returned
+ * explicitly, nothing closed over — specifically so this throttling/
+ * rate math has direct test coverage: the real call site (chatStream,
+ * driven by node-llama-cpp's native callbacks against a real loaded
+ * GGUF model) can't be unit tested directly.
+ */
+export function maybeSamplePerf(
+  state: PerfSamplerState,
+  now: number,
+  currentOutputTokens: number,
+  contextUsedTokens: number,
+  contextSizeTokens: number,
+  intervalMs: number = PERF_SAMPLE_INTERVAL_MS
+): { sample: PerfSample | null; nextState: PerfSamplerState } {
+  const elapsedMs = now - state.lastEmitAtMs;
+  if (elapsedMs < intervalMs) {
+    return { sample: null, nextState: state };
+  }
+  const deltaTokens = currentOutputTokens - state.lastOutputTokens;
+  const tokensPerSecond = elapsedMs > 0 ? deltaTokens / (elapsedMs / 1000) : 0;
+  return {
+    sample: { tokensPerSecond, contextUsedTokens, contextSizeTokens },
+    nextState: { lastEmitAtMs: now, lastOutputTokens: currentOutputTokens },
+  };
+}
+
 export class EmbeddedLlamaProvider implements ModelProvider {
   id = "embedded-llama";
   private chatPromise: Promise<import("node-llama-cpp").LlamaChat> | undefined;
   private model: import("node-llama-cpp").LlamaModel | undefined;
   private context: import("node-llama-cpp").LlamaContext | undefined;
+  /** Stored so chatStream can read live tokensMeter/nextTokenIndex/
+   * contextSize while generating — loadChat already creates this via
+   * context.getSequence(), but previously only handed it to `new
+   * LlamaChat(...)` and discarded its own reference. */
+  private sequence: import("node-llama-cpp").LlamaContextSequence | undefined;
   /**
    * getLlama() returns a distinct native backend instance every call — its
    * own GPU device handle, thread pool, and addon-level state, separate
@@ -317,6 +370,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     const context = await model.createContext({ contextSize: { max: 8192 } });
     this.context = context;
     const sequence = context.getSequence();
+    this.sequence = sequence;
     return new LlamaChat({ contextSequence: sequence });
   }
 
@@ -375,6 +429,18 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     const queue = new AsyncEventQueue<StreamEvent>();
     const knownCallIndices = new Set<number>();
 
+    // Sampled from both callbacks below — tool-call argument JSON is real
+    // generated output too, not just prose, so speed/context feedback
+    // should keep updating through either shape of output, not only text.
+    const sequence = this.sequence;
+    let perfState: PerfSamplerState = { lastEmitAtMs: Date.now(), lastOutputTokens: sequence?.tokenMeter.usedOutputTokens ?? 0 };
+    const samplePerf = () => {
+      if (!sequence) return;
+      const { sample, nextState } = maybeSamplePerf(perfState, Date.now(), sequence.tokenMeter.usedOutputTokens, sequence.nextTokenIndex, sequence.contextSize);
+      perfState = nextState;
+      if (sample) queue.push({ type: "perf", ...sample });
+    };
+
     const generation = chat
       .generateResponse(history, {
         functions,
@@ -383,6 +449,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
         signal: request.signal,
         onTextChunk: (text: string) => {
           queue.push({ type: "text", text });
+          samplePerf();
         },
         onFunctionCallParamsChunk: (chunk: { callIndex: number; functionName: string; paramsChunk: string; done: boolean }) => {
           if (!knownCallIndices.has(chunk.callIndex)) {
@@ -390,6 +457,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
             queue.push({ type: "tool_call_start", index: chunk.callIndex, name: chunk.functionName });
           }
           queue.push({ type: "tool_call_delta", index: chunk.callIndex, argumentsDelta: chunk.paramsChunk });
+          samplePerf();
         },
       })
       .then(

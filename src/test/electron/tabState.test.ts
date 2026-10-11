@@ -127,7 +127,8 @@ console.log("\nrouteEvent does not persist/replay ephemeral streaming deltas (fi
   routeEvent(registry, "session-deltas", { type: "tool_call.start", index: 0, name: "read_file" });
   routeEvent(registry, "session-deltas", { type: "tool_call.delta", index: 0, argumentsDelta: '{"path":"a.txt"}' });
   routeEvent(registry, "session-deltas", { type: "stream.reset" });
-  check("none of the 4 delta/reset events are stored", tab.events.length === 0);
+  routeEvent(registry, "session-deltas", { type: "perf", tokensPerSecond: 42, contextUsedTokens: 500, contextSizeTokens: 8192 });
+  check("none of the 5 delta/reset/perf events are stored", tab.events.length === 0);
 
   const finalText: AgentEvent = { type: "text", text: "Hello" };
   routeEvent(registry, "session-deltas", finalText);
