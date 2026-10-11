@@ -15,8 +15,20 @@ console.log("Hardware-based model recommendation:");
 const GB = 1024 ** 3;
 
 check(
+  "recommends qwen-coder-0.5b for a 2GB machine",
+  recommendModel({ totalRamBytes: 2 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-0.5b"
+);
+check(
+  "recommends qwen-coder-0.5b comfortably below the low threshold's tolerance (3GB)",
+  recommendModel({ totalRamBytes: 3 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-0.5b"
+);
+check(
   "recommends qwen-coder-1.5b for a 4GB machine",
   recommendModel({ totalRamBytes: 4 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-1.5b"
+);
+check(
+  "recommends qwen-coder-1.5b for a real-world 4GB machine reporting slightly under 4GB (3.5GB)",
+  recommendModel({ totalRamBytes: 3.5 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-1.5b"
 );
 check(
   "recommends qwen-coder-1.5b comfortably below the medium threshold's tolerance (7GB)",
@@ -53,8 +65,40 @@ check(
   recommendModel({ totalRamBytes: 15.5 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-7b"
 );
 check(
-  "recommends qwen-coder-7b for a 32GB machine",
-  recommendModel({ totalRamBytes: 32 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-7b"
+  "recommends qwen-coder-7b for a 24GB machine",
+  recommendModel({ totalRamBytes: 24 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-7b"
+);
+check(
+  "recommends qwen-coder-7b comfortably below the 32GB threshold's tolerance (31GB)",
+  recommendModel({ totalRamBytes: 31 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-7b"
+);
+check(
+  "recommends qwen-coder-14b at exactly 32GB",
+  recommendModel({ totalRamBytes: 32 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-14b"
+);
+check(
+  "recommends qwen-coder-14b for a real-world 32GB machine reporting slightly under 32GB (31.5GB)",
+  recommendModel({ totalRamBytes: 31.5 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-14b"
+);
+check(
+  "recommends qwen-coder-14b for a 48GB machine",
+  recommendModel({ totalRamBytes: 48 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-14b"
+);
+check(
+  "recommends qwen-coder-14b comfortably below the 64GB threshold's tolerance (63GB)",
+  recommendModel({ totalRamBytes: 63 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-14b"
+);
+check(
+  "recommends qwen-coder-32b at exactly 64GB",
+  recommendModel({ totalRamBytes: 64 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-32b"
+);
+check(
+  "recommends qwen-coder-32b for a real-world 64GB machine reporting slightly under 64GB (63.5GB)",
+  recommendModel({ totalRamBytes: 63.5 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-32b"
+);
+check(
+  "recommends qwen-coder-32b for a 128GB machine",
+  recommendModel({ totalRamBytes: 128 * GB, gpu: false, vramBytes: 0 }) === "qwen-coder-32b"
 );
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

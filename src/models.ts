@@ -7,15 +7,21 @@
 export type ModelCategory = "coding" | "chat" | "reasoning";
 
 export type EmbeddedModelId =
+  | "qwen-coder-0.5b"
   | "qwen-coder-1.5b"
   | "qwen-coder-3b"
   | "qwen-coder-7b"
+  | "qwen-coder-14b"
+  | "qwen-coder-32b"
   | "qwen-3b"
   | "llama-3.2-3b"
   | "phi-3.5-mini"
   | "mistral-7b"
+  | "llama-3.1-8b"
+  | "mistral-nemo-12b"
   | "qwen-14b"
   | "deepseek-r1-distill-qwen-14b"
+  | "deepseek-r1-distill-llama-8b"
   | "qwen-32b";
 
 export interface EmbeddedModelInfo {
@@ -29,6 +35,13 @@ export interface EmbeddedModelInfo {
 }
 
 export const EMBEDDED_MODELS: Record<EmbeddedModelId, EmbeddedModelInfo> = {
+  "qwen-coder-0.5b": {
+    uri: "hf:Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF:Q4_K_M",
+    name: "Qwen2.5-Coder 0.5B Instruct",
+    quant: "Q4_K_M",
+    category: "coding",
+    sizeNote: "~0.5GB download, smallest and fastest — only for very basic tasks on constrained hardware",
+  },
   "qwen-coder-1.5b": {
     uri: "hf:Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF:Q4_K_M",
     name: "Qwen2.5-Coder 1.5B Instruct",
@@ -49,6 +62,20 @@ export const EMBEDDED_MODELS: Record<EmbeddedModelId, EmbeddedModelInfo> = {
     quant: "Q4_K_M",
     category: "coding",
     sizeNote: "best quality, needs a capable machine",
+  },
+  "qwen-coder-14b": {
+    uri: "hf:bartowski/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M",
+    name: "Qwen2.5-Coder 14B Instruct",
+    quant: "Q4_K_M",
+    category: "coding",
+    sizeNote: "~9GB download, strong coding-specific quality, needs a capable machine",
+  },
+  "qwen-coder-32b": {
+    uri: "hf:bartowski/Qwen2.5-Coder-32B-Instruct-GGUF:Q4_K_M",
+    name: "Qwen2.5-Coder 32B Instruct",
+    quant: "Q4_K_M",
+    category: "coding",
+    sizeNote: "~20GB download, best local coding option — needs a powerful machine",
   },
   "qwen-3b": {
     uri: "hf:bartowski/Qwen2.5-3B-Instruct-GGUF:Q4_K_M",
@@ -78,6 +105,20 @@ export const EMBEDDED_MODELS: Record<EmbeddedModelId, EmbeddedModelInfo> = {
     category: "chat",
     sizeNote: "best quality, needs a capable machine",
   },
+  "llama-3.1-8b": {
+    uri: "hf:bartowski/Meta-Llama-3.1-8B-Instruct-GGUF:Q4_K_M",
+    name: "Llama 3.1 8B Instruct",
+    quant: "Q4_K_M",
+    category: "chat",
+    sizeNote: "~5GB download, step up from 3.2 3B, more capable general chat",
+  },
+  "mistral-nemo-12b": {
+    uri: "hf:bartowski/Mistral-Nemo-Instruct-2407-GGUF:Q4_K_M",
+    name: "Mistral Nemo 12B Instruct",
+    quant: "Q4_K_M",
+    category: "chat",
+    sizeNote: "~7.5GB download, larger Mistral option, strong multilingual chat",
+  },
   "qwen-14b": {
     uri: "hf:bartowski/Qwen2.5-14B-Instruct-GGUF:Q4_K_M",
     name: "Qwen2.5 14B Instruct",
@@ -91,6 +132,13 @@ export const EMBEDDED_MODELS: Record<EmbeddedModelId, EmbeddedModelInfo> = {
     quant: "Q4_K_M",
     category: "reasoning",
     sizeNote: "~9GB download, reasoning-distilled — best for research/analysis",
+  },
+  "deepseek-r1-distill-llama-8b": {
+    uri: "hf:bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF:Q4_K_M",
+    name: "DeepSeek-R1-Distill-Llama 8B",
+    quant: "Q4_K_M",
+    category: "reasoning",
+    sizeNote: "~5GB download, reasoning-distilled, fits more hardware than the 14B option",
   },
   "qwen-32b": {
     uri: "hf:bartowski/Qwen2.5-32B-Instruct-GGUF:Q4_K_M",
