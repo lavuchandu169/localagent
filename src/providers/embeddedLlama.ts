@@ -261,6 +261,16 @@ export function describeGpuStatus(gpu: "metal" | "cuda" | "vulkan" | false, gpuL
  * per-event-cycle UI write causes on a high-frequency stream). */
 export const PERF_SAMPLE_INTERVAL_MS = 300;
 
+/** The actual context window this provider ever creates (see loadChat's
+ * createContext call below) — also passed to loadModel's gpuLayers.fitContext
+ * so "auto" GPU-layer offloading sizes its VRAM math against this real cap
+ * instead of defaulting to a context sized for the model's full trained
+ * window (which can be far larger, e.g. 128K), which otherwise leaves
+ * VRAM headroom unused and fewer layers offloaded than the hardware could
+ * actually support. Kept as one constant so loadModel and createContext
+ * can never silently drift apart. */
+export const EMBEDDED_CONTEXT_SIZE = 8192;
+
 export interface PerfSample {
   tokensPerSecond: number;
   contextUsedTokens: number;
@@ -357,7 +367,12 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     });
     const llama = await getLlama();
     this.llama = llama;
-    const model = await llama.loadModel({ modelPath });
+    // gpuLayers defaults to "auto", which sizes its VRAM-fitting math against
+    // an "auto" contextSize (up to the model's full trained window) unless
+    // told otherwise — fitContext tells it the real cap this provider
+    // applies a few lines below, so layer offloading isn't computed against
+    // headroom for a context that will never actually be created.
+    const model = await llama.loadModel({ modelPath, gpuLayers: { fitContext: { contextSize: EMBEDDED_CONTEXT_SIZE } } });
     this.model = model;
     this.gpuStatus = describeGpuStatus(llama.gpu, model.gpuLayers);
     // contextSize defaults to "auto", which on a model with a large trained
@@ -367,7 +382,7 @@ export class EmbeddedLlamaProvider implements ModelProvider {
     // resulting memory pressure, not anything about prompt size. Coding-agent
     // turns don't need anywhere near that; capping it keeps the KV cache
     // proportional to what a few files plus conversation history actually need.
-    const context = await model.createContext({ contextSize: { max: 8192 } });
+    const context = await model.createContext({ contextSize: { max: EMBEDDED_CONTEXT_SIZE } });
     this.context = context;
     const sequence = context.getSequence();
     this.sequence = sequence;
