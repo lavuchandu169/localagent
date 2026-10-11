@@ -86,7 +86,54 @@ console.log("\nbuildAuthenticatedGitPushArgv (Critical #1/#2, Important #2 from 
   check("keeps the original push arguments as their own argv elements", argv.slice(-3).join(" ") === "push origin main");
   check("never embeds the raw token as a literal in any argv element (Important #2: no shell string to embed it in at all)", !argv.some((a) => a.includes("gho_thetoken")));
   check("passes the token only via the returned env map", env.LOCALAGENT_GH_TOKEN === "gho_thetoken");
+  check(
+    "disables hook lookup for this invocation (security-review finding: a repo-committed pre-push hook would otherwise see LOCALAGENT_GH_TOKEN in its own environment)",
+    argv.some((a) => a.startsWith("core.hooksPath="))
+  );
 }
+
+console.log("\nbuildAuthenticatedGitPushArgv's core.hooksPath override really does stop a real pre-push hook from ever running or seeing the token (security-review finding, verified against a real git push, not just argv shape):");
+await (async () => {
+  const remotePath = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-push-hook-remote-"));
+  const repoPath = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-push-hook-repo-"));
+  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-push-hook-home-"));
+  const hookLogPath = path.join(homeDir, "hook-ran.log");
+  const env = { ...process.env, HOME: homeDir, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" };
+  try {
+    spawnSync("git", ["init", "-q", "--bare"], { cwd: remotePath, env });
+    // -b main: the test must not depend on whatever init.defaultBranch this
+    // machine happens to have configured (older git defaults to "master").
+    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: repoPath, env });
+    spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: repoPath, env });
+    spawnSync("git", ["config", "user.name", "Test"], { cwd: repoPath, env });
+    spawnSync("git", ["remote", "add", "origin", remotePath], { cwd: repoPath, env });
+    await fs.writeFile(path.join(repoPath, "a.txt"), "hello\n");
+    spawnSync("git", ["add", "a.txt"], { cwd: repoPath, env });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoPath, env });
+    // A real hooks directory wired up the way husky/simple-git-hooks does it
+    // automatically on `npm install` — exactly the mainstream, non-exotic
+    // setup the security-review finding described.
+    const hooksDir = path.join(repoPath, ".githooks");
+    await fs.mkdir(hooksDir);
+    const hookPath = path.join(hooksDir, "pre-push");
+    await fs.writeFile(hookPath, `#!/bin/sh\necho "token=$LOCALAGENT_GH_TOKEN" > "${hookLogPath}"\nexit 1\n`, { mode: 0o755 });
+    spawnSync("git", ["config", "core.hooksPath", hooksDir], { cwd: repoPath, env });
+
+    const { argv, env: tokenEnv } = buildAuthenticatedGitPushArgv("git push origin main", "gho_realtoken");
+    const result = spawnSync(argv[0]!, argv.slice(1), { cwd: repoPath, env: { ...env, ...tokenEnv } });
+
+    check("the push itself still succeeds (the fix doesn't break legitimate pushes)", result.status === 0);
+    const hookLogExists = await fs
+      .access(hookLogPath)
+      .then(() => true)
+      .catch(() => false);
+    check("the committed pre-push hook never ran at all (proves it, rather than merely asserting the token wasn't logged)", !hookLogExists);
+  } finally {
+    await fs.rm(remotePath, { recursive: true, force: true });
+    await fs.rm(repoPath, { recursive: true, force: true });
+    await fs.rm(homeDir, { recursive: true, force: true });
+  }
+})();
 
 async function withTempGitRepo<T>(remoteUrl: string | null, fn: (repoPath: string, homeDir: string) => Promise<T>): Promise<T> {
   const repoPath = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-github-push-test-"));
