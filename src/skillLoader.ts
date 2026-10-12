@@ -156,6 +156,13 @@ export async function discoverSkillsIn(root: string, source: "builtin" | "user",
   } catch {
     return [];
   }
+  // Final-review finding I3: raw readdir order reflects filesystem
+  // internals (hash/creation order on APFS/ext4), not lexical order —
+  // without sorting, "which skills win under MAX_SKILLS_PER_TASK" could
+  // differ between machines or checkouts even for the identical set of
+  // skill directories, undermining the "predictable, reason-about-able"
+  // matching the design spec promises.
+  entries.sort((a, b) => a.name.localeCompare(b.name));
   const results: SkillMetadata[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;

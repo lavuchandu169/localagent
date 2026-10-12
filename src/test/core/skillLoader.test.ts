@@ -195,6 +195,28 @@ await (async () => {
   }
 })();
 
+console.log(
+  "\ndiscoverSkillsIn returns skills sorted by id (final-review finding I3: raw readdir order is filesystem-dependent, not lexical, which would make 'which 3 win under the cap' nondeterministic):"
+);
+await (async () => {
+  const tmpRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "localagent-skills-sort-test-"));
+  try {
+    // Created out of lexical order on purpose.
+    for (const id of ["zebra-skill", "apple-skill", "mango-skill"]) {
+      const dir = path.join(tmpRoot, id);
+      await fsPromises.mkdir(dir, { recursive: true });
+      await fsPromises.writeFile(path.join(dir, "SKILL.md"), `---\nname: ${id}\ndescription: d\ntriggers: [${id}]\n---\nbody`);
+    }
+    const found = await discoverSkillsIn(tmpRoot, "user", false);
+    check(
+      "results come back sorted by id, regardless of creation order",
+      JSON.stringify(found.map((s) => s.id)) === JSON.stringify(["apple-skill", "mango-skill", "zebra-skill"])
+    );
+  } finally {
+    await fsPromises.rm(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
 console.log("\ndiscoverBuiltinSkills (against the real shipped content):");
 {
   const builtin = await discoverBuiltinSkills();

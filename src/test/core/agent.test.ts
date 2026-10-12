@@ -332,24 +332,32 @@ await (async () => {
   try {
     {
       const script: ChatResponse[] = [{ turn: { type: "final", content: "Here's how to debug it." } }];
+      const provider = new MockProvider(script);
       const session = new AgentSession({
         workspaceRoot,
         model: "mock",
-        provider: new MockProvider(script),
+        provider,
         tools: defaultToolRegistry(),
         permissionMode: "PLAN",
       });
 
       const events: string[] = [];
       let loadCall: ToolCall | undefined;
+      let decision: string | undefined;
       for await (const event of session.run("why is this test flaky, it only fails sometimes")) {
         events.push(event.type);
         if (event.type === "tool.start" && event.call.name === "load_skill") loadCall = event.call;
+        if (event.type === "permission.request" && event.call.name === "load_skill") decision = event.decision;
       }
 
       check(
         "a task matching the real built-in debug-flaky-test skill auto-loads it before the model's first turn",
         loadCall?.arguments.id === "debug-flaky-test" && events.indexOf("tool.start") < events.indexOf("status")
+      );
+      check("a built-in skill needs no approval — its permission decision is ALLOW, not ASK (security review finding C1)", decision === "ALLOW");
+      check(
+        "the skill's body actually reaches the provider as a tool message in the conversation history, not just as an event (final-review finding I2)",
+        provider.receivedRequests[0]?.messages.some((m) => m.role === "tool" && m.name === "load_skill" && m.content.includes("Shared mutable state between tests")) === true
       );
     }
 
@@ -398,14 +406,16 @@ await (async () => {
       check("a later task in the SAME session never re-loads a skill already loaded earlier", loadsInSecondTask === 0);
     }
 
+    console.log(
+      "\n  Security-review finding C1: user-authored skills live inside the workspace, which a cloned/compromised repo could plant — they must ASK before injecting, not auto-ALLOW like a built-in skill:"
+    );
     {
-      // A user-authored skill overriding a built-in skill's id must win.
-      const skillDir = path.join(workspaceRoot, ".localagent", "skills", "debug-flaky-test");
+      // A user-authored skill, with NO onApprovalNeeded configured —
+      // mirrors every other ASK call site's documented fallback
+      // (`{ approved: false }`) when nothing is wired up.
+      const skillDir = path.join(workspaceRoot, ".localagent", "skills", "unapproved-skill");
       await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(
-        path.join(skillDir, "SKILL.md"),
-        `---\nname: My Override\ndescription: a project-specific override\ntriggers: [flaky]\n---\nOverridden project-specific body.`
-      );
+      await fs.writeFile(skillDir + "/SKILL.md", `---\nname: Unapproved\ndescription: d\ntriggers: [unapprovedtrigger]\n---\nShould never be injected.`);
 
       const script: ChatResponse[] = [{ turn: { type: "final", content: "ok" } }];
       const session = new AgentSession({
@@ -414,25 +424,116 @@ await (async () => {
         provider: new MockProvider(script),
         tools: defaultToolRegistry(),
         permissionMode: "PLAN",
+        // onApprovalNeeded deliberately omitted.
+      });
+
+      const events: string[] = [];
+      let decision: string | undefined;
+      for await (const event of session.run("unapprovedtrigger shows up here")) {
+        events.push(event.type);
+        if (event.type === "permission.request" && event.call.name === "load_skill") decision = event.decision;
+      }
+      check("a user-authored skill's permission decision is ASK, not auto-ALLOW", decision === "ASK");
+      check("with no onApprovalNeeded wired up (the default-reject fallback), the skill is never actually injected", !events.includes("tool.result"));
+
+      let askedAgain = false;
+      for await (const event of session.run("unapprovedtrigger comes up again")) {
+        if (event.type === "permission.request" && event.call.name === "load_skill") askedAgain = true;
+      }
+      check("a rejected skill is not asked about again later in the same session", !askedAgain);
+
+      await fs.rm(skillDir, { recursive: true, force: true });
+    }
+
+    {
+      // Same skill, this time with onApprovalNeeded approving it.
+      const skillDir = path.join(workspaceRoot, ".localagent", "skills", "approved-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        skillDir + "/SKILL.md",
+        `---\nname: Approved\ndescription: d\ntriggers: [approvedtrigger]\n---\nShould be injected once approved.`
+      );
+
+      const script: ChatResponse[] = [{ turn: { type: "final", content: "ok" } }];
+      const provider = new MockProvider(script);
+      const approvalRequests: ToolCall[] = [];
+      const session = new AgentSession({
+        workspaceRoot,
+        model: "mock",
+        provider,
+        tools: defaultToolRegistry(),
+        permissionMode: "PLAN",
+        onApprovalNeeded: async (call) => {
+          approvalRequests.push(call);
+          return { approved: true };
+        },
+      });
+
+      let loadedId: unknown;
+      for await (const event of session.run("approvedtrigger shows up here")) {
+        if (event.type === "tool.result" && event.call.name === "load_skill") loadedId = event.call.arguments.id;
+      }
+      check("once approved via onApprovalNeeded, the user-authored skill IS injected", loadedId === "approved-skill");
+      check(
+        "the approval request carries the full body, triggers, and source so a human can actually judge it before approving",
+        approvalRequests[0]?.arguments.body === "Should be injected once approved." &&
+          JSON.stringify(approvalRequests[0]?.arguments.triggers) === JSON.stringify(["approvedtrigger"]) &&
+          approvalRequests[0]?.arguments.source === "user"
+      );
+      check(
+        "the approval request names whether this skill overrides a built-in one (false here — no such built-in skill exists)",
+        approvalRequests[0]?.arguments.overridesBuiltin === false
+      );
+
+      await fs.rm(skillDir, { recursive: true, force: true });
+    }
+
+    {
+      // A user-authored skill overriding a built-in skill's id must win —
+      // approved via onApprovalNeeded, same as any other user skill.
+      const skillDir = path.join(workspaceRoot, ".localagent", "skills", "debug-flaky-test");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: My Override\ndescription: a project-specific override\ntriggers: [flaky]\n---\nOverridden project-specific body.`
+      );
+
+      const script: ChatResponse[] = [{ turn: { type: "final", content: "ok" } }];
+      const approvalRequests: ToolCall[] = [];
+      const session = new AgentSession({
+        workspaceRoot,
+        model: "mock",
+        provider: new MockProvider(script),
+        tools: defaultToolRegistry(),
+        permissionMode: "PLAN",
+        onApprovalNeeded: async (call) => {
+          approvalRequests.push(call);
+          return { approved: true };
+        },
       });
 
       let injectedBody = "";
+      let loadSkillResultCount = 0;
       for await (const event of session.run("this flaky test needs fixing")) {
         if (event.type === "tool.result" && event.call.name === "load_skill") {
           injectedBody = JSON.stringify(event.result);
+          loadSkillResultCount++;
         }
       }
       check(
         "a user-authored skill sharing a built-in skill's id wins (the override body is injected, not the built-in one)",
         injectedBody.includes("Overridden project-specific body.") && !injectedBody.includes("Shared mutable state between tests")
       );
+      check("exactly one load_skill result fires — not both the override AND the built-in it replaces", loadSkillResultCount === 1);
+      check("the approval request flags that this skill overrides a built-in one of the same id", approvalRequests[0]?.arguments.overridesBuiltin === true);
 
       await fs.rm(path.join(workspaceRoot, ".localagent"), { recursive: true, force: true });
     }
 
     {
       // A task matching more than MAX_SKILLS_PER_TASK skills injects only
-      // the cap, not all of them.
+      // the cap, not all of them — and now that discovery sorts by id
+      // (final-review finding I3), it's deterministic WHICH 3 win.
       const skillsDir = path.join(workspaceRoot, ".localagent", "skills");
       for (let i = 1; i <= 4; i++) {
         const dir = path.join(skillsDir, `many-${i}`);
@@ -447,13 +548,28 @@ await (async () => {
         provider: new MockProvider(script),
         tools: defaultToolRegistry(),
         permissionMode: "PLAN",
+        onApprovalNeeded: async () => ({ approved: true }),
       });
 
-      let loadCount = 0;
-      for await (const event of session.run("manytrigger shows up here")) {
-        if (event.type === "tool.start" && event.call.name === "load_skill") loadCount++;
+      const loadedIds: unknown[] = [];
+      const originalWarn = console.warn;
+      const warnings: string[] = [];
+      console.warn = (msg: string) => warnings.push(msg);
+      try {
+        for await (const event of session.run("manytrigger shows up here")) {
+          if (event.type === "tool.start" && event.call.name === "load_skill") loadedIds.push(event.call.arguments.id);
+        }
+      } finally {
+        console.warn = originalWarn;
       }
-      check("a task matching more skills than the cap only injects up to MAX_SKILLS_PER_TASK of them", loadCount === 3);
+      check(
+        "a task matching more skills than the cap only injects up to MAX_SKILLS_PER_TASK of them, specifically the first 3 in sorted order",
+        JSON.stringify(loadedIds) === JSON.stringify(["many-1", "many-2", "many-3"])
+      );
+      check(
+        "a warning is actually logged naming the skipped skill (Review Focus #3, final-review finding I2)",
+        warnings.some((w) => w.includes("many-4"))
+      );
 
       await fs.rm(skillsDir, { recursive: true, force: true });
     }
@@ -475,6 +591,7 @@ await (async () => {
         provider: new MockProvider(script),
         tools: defaultToolRegistry(),
         permissionMode: "PLAN",
+        onApprovalNeeded: async () => ({ approved: true }),
       });
 
       let loadedId: unknown;
@@ -484,6 +601,41 @@ await (async () => {
       check("a malformed sibling skill doesn't block a valid skill from loading", loadedId === "good-skill");
 
       await fs.rm(skillsDir, { recursive: true, force: true });
+    }
+
+    console.log("\n  Final-review finding I1: a skill body longer than the cap is truncated consistently, with a warning, not silently cut into invalid JSON:");
+    {
+      const bigBody = "x".repeat(7000);
+      const skillDir = path.join(workspaceRoot, ".localagent", "skills", "big-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(skillDir + "/SKILL.md", `---\nname: Big\ndescription: d\ntriggers: [bigtrigger]\n---\n${bigBody}`);
+
+      const script: ChatResponse[] = [{ turn: { type: "final", content: "ok" } }];
+      const originalWarn = console.warn;
+      const warnings: string[] = [];
+      console.warn = (msg: string) => warnings.push(msg);
+      let resultJson: any;
+      try {
+        const session = new AgentSession({
+          workspaceRoot,
+          model: "mock",
+          provider: new MockProvider(script),
+          tools: defaultToolRegistry(),
+          permissionMode: "PLAN",
+          onApprovalNeeded: async () => ({ approved: true }),
+        });
+        for await (const event of session.run("bigtrigger shows up here")) {
+          if (event.type === "tool.result" && event.call.name === "load_skill") resultJson = event.result;
+        }
+      } finally {
+        console.warn = originalWarn;
+      }
+      check("the yielded result is valid (parseable) JSON, not a mid-string cut", typeof resultJson === "object" && resultJson !== null);
+      check("the body is truncated well under the original 7000 chars", (resultJson?.output?.body?.length ?? 0) < 7000);
+      check("the result honestly flags that it was truncated", resultJson?.output?.truncated === true);
+      check("a warning is logged naming the truncated skill", warnings.some((w) => w.includes("big-skill")));
+
+      await fs.rm(skillDir, { recursive: true, force: true });
     }
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });

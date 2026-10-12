@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   ChatResponse,
   ModelProvider,
+  PermissionDecision,
   PermissionMode,
   PermissionResponse,
   ProposedPlan,
@@ -487,6 +488,14 @@ export class AgentSession {
     }
   }
 
+  /** Final-review finding I1: the old `.slice(0, 6000)` truncated the
+   * JSON.stringify'd RESULT, which could cut mid-string and hand the
+   * model invalid JSON while the yielded event still showed the whole
+   * body — UI and model disagreeing about what actually loaded. Capping
+   * the body itself, before it goes into either the event or the
+   * message, keeps both in sync and keeps the JSON always valid. */
+  private static readonly MAX_SKILL_BODY_CHARS = 6000;
+
   /**
    * Mirrors autoReadNamedFiles' own shape and call site: runs once per
    * task, before the model's first turn, so a matching skill's guidance
@@ -494,9 +503,30 @@ export class AgentSession {
    * and ask for it. Discovery happens fresh every call (user skills can
    * change between tasks; built-in skills are cached inside
    * discoverBuiltinSkills itself) — see skillLoader.ts.
+   *
+   * Security-review finding C1: a built-in skill ships with the app and
+   * can't be planted by a repo, so it auto-loads with no approval. A
+   * user-authored skill lives INSIDE the workspace — a cloned or
+   * compromised repo could already contain a `.localagent/skills/`
+   * file the human never wrote, crafted with a common trigger word so
+   * it fires on an ordinary task and feeds the model attacker-chosen
+   * "guidance" that looks exactly as authoritative as a real skill (it
+   * can even silently override a built-in skill's id — see the override
+   * check below). That's a materially different risk than the model
+   * merely reading a file's content: a skill is specifically designed
+   * to carry imperative authority over the model's behavior, injected
+   * before the model's own first turn, with no selection step the user
+   * controls. So a user-sourced skill ASKs — the same onApprovalNeeded
+   * gate every other consequential action already goes through — with
+   * the skill's full (untruncated) body, its triggers, and whether it
+   * overrides a built-in skill, all in the call so the approval UI can
+   * actually show what's about to be injected. A rejection is recorded
+   * in loadedSkillIds too, so the user is never asked about the same
+   * skill twice in one session.
    */
   private async *autoLoadSkills(task: string): AsyncGenerator<AgentEvent> {
     const [builtin, user] = await Promise.all([discoverBuiltinSkills(), discoverUserSkills(this.opts.workspaceRoot)]);
+    const builtinIds = new Set(builtin.map((s) => s.id));
 
     // A user-authored skill overrides a built-in skill sharing its id —
     // lets a project customize a built-in skill's guidance without
@@ -514,21 +544,62 @@ export class AgentSession {
     }
 
     for (const skill of toLoad) {
-      this.loadedSkillIds.add(skill.id);
+      const isUserSourced = skill.source === "user";
+      const call: ToolCall = {
+        id: `skill_${skill.id}`,
+        name: "load_skill",
+        arguments: isUserSourced
+          ? {
+              id: skill.id,
+              name: skill.name,
+              description: skill.description,
+              triggers: skill.triggers,
+              body: skill.body,
+              source: skill.source,
+              overridesBuiltin: builtinIds.has(skill.id),
+            }
+          : { id: skill.id },
+      };
 
-      const call: ToolCall = { id: `skill_${skill.id}`, name: "load_skill", arguments: { id: skill.id } };
-      const result = { ok: true, output: { id: skill.id, name: skill.name, body: skill.body } };
+      const decision: PermissionDecision = isUserSourced ? "ASK" : "ALLOW";
+      yield { type: "permission.request", call, decision };
+      this.messages.push({ role: "assistant", content: "", tool_calls: [call] });
 
-      yield { type: "permission.request", call, decision: "ALLOW" };
+      if (decision === "ASK") {
+        const response = this.opts.onApprovalNeeded ? await this.opts.onApprovalNeeded(call) : { approved: false };
+        // Recorded regardless of outcome — a rejected skill isn't asked
+        // about again this session either.
+        this.loadedSkillIds.add(skill.id);
+        if (!response.approved) {
+          this.messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            name: "load_skill",
+            content: JSON.stringify({ ok: false, error: "User rejected loading this project-authored skill." }),
+          });
+          continue;
+        }
+      } else {
+        this.loadedSkillIds.add(skill.id);
+      }
+
+      const truncated = skill.body.length > AgentSession.MAX_SKILL_BODY_CHARS;
+      const body = truncated ? skill.body.slice(0, AgentSession.MAX_SKILL_BODY_CHARS) : skill.body;
+      if (truncated) {
+        console.warn(
+          `[skills] "${skill.id}"'s body was truncated to ${AgentSession.MAX_SKILL_BODY_CHARS} characters (was ${skill.body.length}) — the model only sees the truncated version.`
+        );
+      }
+      const result = { ok: true, output: { id: skill.id, name: skill.name, body, source: skill.source, truncated } };
+
       yield { type: "tool.start", call };
       yield { type: "tool.result", call, result };
 
-      this.messages.push({ role: "assistant", content: "", tool_calls: [call] });
       this.messages.push({
         role: "tool",
         tool_call_id: call.id,
         name: "load_skill",
-        content: JSON.stringify(result).slice(0, 6000),
+        content: JSON.stringify(result),
       });
     }
   }
