@@ -1,3 +1,7 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 /**
  * Parses one SKILL.md file's raw text into its frontmatter fields plus
  * body. Hand-rolled rather than a YAML library, deliberately — the
@@ -89,4 +93,91 @@ export function matchSkills(task: string, skills: SkillMetadata[], alreadyLoaded
     if (alreadyLoaded.has(skill.id)) return false;
     return skill.triggers.some((trigger) => lowerTask.includes(trigger.toLowerCase()));
   });
+}
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const BUILTIN_SKILLS_ROOT = path.join(__dirname, "skills", "builtin");
+
+/** Skill directory names must be this shape — matches this app's other
+ * id-like identifiers (e.g. EmbeddedModelId's own values). Guards
+ * against a stray non-skill directory (an editor swap folder, a `.git`
+ * if someone ever points this at a weird root) being misread as a
+ * skill with a confusing id. */
+const SKILL_ID_PATTERN = /^[a-z0-9-]+$/;
+
+async function readSkillDirectory(dir: string, source: "builtin" | "user", inlineReferences: boolean): Promise<SkillMetadata | null> {
+  const id = path.basename(dir);
+  if (!SKILL_ID_PATTERN.test(id)) {
+    console.warn(`[skills] skipping "${id}": skill directory names must match ${SKILL_ID_PATTERN}`);
+    return null;
+  }
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(dir, "SKILL.md"), "utf8");
+  } catch (err: any) {
+    console.warn(`[skills] skipping "${id}": could not read SKILL.md (${err.message})`);
+    return null;
+  }
+  const parsed = parseSkillFrontmatter(raw);
+  if (!parsed.ok) {
+    console.warn(`[skills] skipping "${id}": ${parsed.error}`);
+    return null;
+  }
+
+  let body = parsed.body;
+  if (inlineReferences) {
+    const referencesDir = path.join(dir, "references");
+    try {
+      const files = (await fs.readdir(referencesDir)).filter((f) => f.endsWith(".md")).sort();
+      for (const file of files) {
+        const refContent = await fs.readFile(path.join(referencesDir, file), "utf8");
+        body += `\n\n---\n# ${file}\n\n${refContent.trim()}`;
+      }
+    } catch {
+      // No references/ directory at all — fine, most skills won't have one.
+    }
+  }
+
+  return { id, name: parsed.name, description: parsed.description, triggers: parsed.triggers, body, source };
+}
+
+/**
+ * Lists every immediate subdirectory of `root`, treats each as one
+ * candidate skill, and parses it. Never throws: a missing root (the
+ * overwhelmingly common case for `.localagent/skills` — most projects
+ * won't have one) just means no skills, not an error. A malformed or
+ * unreadable individual skill is skipped with a logged warning, never
+ * blocking its siblings.
+ */
+export async function discoverSkillsIn(root: string, source: "builtin" | "user", inlineReferences: boolean): Promise<SkillMetadata[]> {
+  let entries;
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const results: SkillMetadata[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const metadata = await readSkillDirectory(path.join(root, entry.name), source, inlineReferences);
+    if (metadata) results.push(metadata);
+  }
+  return results;
+}
+
+let builtinSkillsCache: Promise<SkillMetadata[]> | null = null;
+
+/** Built-in skills are bundled with the app and can't change at
+ * runtime, so this is computed once per process and reused — unlike
+ * discoverUserSkills, which deliberately re-reads fresh every call. */
+export function discoverBuiltinSkills(): Promise<SkillMetadata[]> {
+  if (!builtinSkillsCache) builtinSkillsCache = discoverSkillsIn(BUILTIN_SKILLS_ROOT, "builtin", true);
+  return builtinSkillsCache;
+}
+
+/** Deliberately not cached — re-read fresh on every call so a skill
+ * file the user just added or edited is picked up on the very next
+ * task, with no restart and no cache-invalidation logic needed. */
+export function discoverUserSkills(workspaceRoot: string): Promise<SkillMetadata[]> {
+  return discoverSkillsIn(path.join(workspaceRoot, ".localagent", "skills"), "user", false);
 }

@@ -1,4 +1,15 @@
-import { parseSkillFrontmatter, matchSkills, MAX_SKILLS_PER_TASK, type SkillMetadata } from "../../skillLoader.js";
+import { promises as fsPromises } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  parseSkillFrontmatter,
+  matchSkills,
+  MAX_SKILLS_PER_TASK,
+  discoverSkillsIn,
+  discoverBuiltinSkills,
+  discoverUserSkills,
+  type SkillMetadata,
+} from "../../skillLoader.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -134,6 +145,90 @@ console.log("\nmatchSkills:");
 
 console.log(`\nMAX_SKILLS_PER_TASK is a small, sane fixed cap (sanity check, not a design decision this test makes):`);
 check("MAX_SKILLS_PER_TASK is 3", MAX_SKILLS_PER_TASK === 3);
+
+console.log("\ndiscoverSkillsIn (against disposable temp directories):");
+await (async () => {
+  const tmpRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "localagent-skills-test-"));
+  try {
+    // A valid skill with a references/ file.
+    const validDir = path.join(tmpRoot, "valid-skill");
+    await fsPromises.mkdir(path.join(validDir, "references"), { recursive: true });
+    await fsPromises.writeFile(
+      path.join(validDir, "SKILL.md"),
+      `---\nname: Valid Skill\ndescription: a real one\ntriggers: [valid]\n---\nMain body.`
+    );
+    await fsPromises.writeFile(path.join(validDir, "references", "extra.md"), "Extra reference content.");
+
+    // A malformed skill (missing required field) sitting right alongside it.
+    const brokenDir = path.join(tmpRoot, "broken-skill");
+    await fsPromises.mkdir(brokenDir, { recursive: true });
+    await fsPromises.writeFile(path.join(brokenDir, "SKILL.md"), `---\nname: Broken\n---\nno description or triggers`);
+
+    // A directory whose name doesn't match the allowed id pattern.
+    const badIdDir = path.join(tmpRoot, "Not_A_Valid_Id!");
+    await fsPromises.mkdir(badIdDir, { recursive: true });
+    await fsPromises.writeFile(path.join(badIdDir, "SKILL.md"), `---\nname: x\ndescription: y\ntriggers: [z]\n---\nbody`);
+
+    // A stray non-directory file sitting directly in the root.
+    // Named to PASS the SKILL_ID_PATTERN check (no dot, all lowercase/hyphen)
+    // deliberately — a stray file whose name would ALSO fail the id-pattern
+    // check doesn't independently prove the isDirectory() filter does
+    // anything (mutation-tested: confirmed live that a dotted name like
+    // "stray-file.txt" lets a broken isDirectory() check slip through
+    // undetected, since the id-pattern check happens to reject it too).
+    await fsPromises.writeFile(path.join(tmpRoot, "stray-not-a-directory"), "not a skill directory");
+
+    const withReferences = await discoverSkillsIn(tmpRoot, "user", true);
+    check("discovers exactly the one valid skill (broken, bad-id, and stray-file are all skipped)", withReferences.length === 1);
+    check("the discovered skill has the right id (from the directory name)", withReferences[0]?.id === "valid-skill");
+    check("inlineReferences=true appends the references/ file's content into body", withReferences[0]?.body.includes("Extra reference content.") === true);
+
+    const withoutReferences = await discoverSkillsIn(tmpRoot, "user", false);
+    check(
+      "inlineReferences=false leaves references/ content OUT of body",
+      withoutReferences[0]?.body.includes("Main body.") === true && withoutReferences[0]?.body.includes("Extra reference content.") !== true
+    );
+
+    check("a nonexistent root directory returns an empty list, not an error", (await discoverSkillsIn(path.join(tmpRoot, "does-not-exist"), "user", false)).length === 0);
+  } finally {
+    await fsPromises.rm(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+console.log("\ndiscoverBuiltinSkills (against the real shipped content):");
+{
+  const builtin = await discoverBuiltinSkills();
+  const flaky = builtin.find((s) => s.id === "debug-flaky-test");
+  check("finds the real shipped debug-flaky-test skill", flaky !== undefined);
+  check("its source is 'builtin'", flaky?.source === "builtin");
+  check("its triggers include 'flaky'", flaky?.triggers.includes("flaky") === true);
+  check("its body eagerly inlines the references/common-causes.md content", flaky?.body.includes("Shared mutable state between tests") === true);
+}
+
+console.log("\ndiscoverUserSkills (against a disposable temp workspace):");
+await (async () => {
+  const workspaceRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "localagent-skills-workspace-test-"));
+  try {
+    const skillDir = path.join(workspaceRoot, ".localagent", "skills", "my-project-skill");
+    await fsPromises.mkdir(skillDir, { recursive: true });
+    await fsPromises.writeFile(path.join(skillDir, "SKILL.md"), `---\nname: Mine\ndescription: project-specific\ntriggers: [mykeyword]\n---\nProject body.`);
+
+    const found = await discoverUserSkills(workspaceRoot);
+    check("finds the user-authored skill under .localagent/skills", found.length === 1 && found[0]?.id === "my-project-skill");
+    check("its source is 'user'", found[0]?.source === "user");
+  } finally {
+    await fsPromises.rm(workspaceRoot, { recursive: true, force: true });
+  }
+})();
+await (async () => {
+  const workspaceRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "localagent-skills-no-dir-test-"));
+  try {
+    const found = await discoverUserSkills(workspaceRoot);
+    check("a workspace with no .localagent/skills directory at all (the common case) returns an empty list, no error", found.length === 0);
+  } finally {
+    await fsPromises.rm(workspaceRoot, { recursive: true, force: true });
+  }
+})();
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
