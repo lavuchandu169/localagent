@@ -49,3 +49,44 @@ export function parseSkillFrontmatter(
 
   return { ok: true, name, description, triggers, body: body.trim() };
 }
+
+export interface SkillMetadata {
+  id: string;
+  name: string;
+  description: string;
+  triggers: string[];
+  body: string;
+  /** Where this skill was discovered from — "builtin" skills eagerly
+   * inline their references/ files into `body` at discovery time;
+   * "user" skills don't (the model reads them later, lazily, via its
+   * own existing read_file tool, since they live inside the workspace
+   * already). See the design spec's "Reference-file access" section. */
+  source: "builtin" | "user";
+}
+
+/** The most skills a single task will ever have injected, regardless of
+ * how many actually match — matching more doesn't mean injecting more;
+ * see agent.ts's autoLoadSkills for the cap-and-warn behavior this
+ * constant gates. Deliberately small and fixed: a task matching many
+ * skills is more likely an overly-generic trigger word than a genuine
+ * need for that much injected context at once. */
+export const MAX_SKILLS_PER_TASK = 3;
+
+/**
+ * Deterministic, keyword-only matching — no model/LLM call, no
+ * semantic fuzziness. Case-insensitive substring match against the
+ * task text, same matching shape extractFilenameCandidates already
+ * uses for filenames: simple enough that a skill author (or a weak
+ * local model reading the injected result) can reason about exactly
+ * when a skill fires, with no surprises. Returns every match, in
+ * `skills`' own order, uncapped — capping is the caller's job (it needs
+ * to log what got skipped, a side effect this pure function shouldn't
+ * have).
+ */
+export function matchSkills(task: string, skills: SkillMetadata[], alreadyLoaded: ReadonlySet<string>): SkillMetadata[] {
+  const lowerTask = task.toLowerCase();
+  return skills.filter((skill) => {
+    if (alreadyLoaded.has(skill.id)) return false;
+    return skill.triggers.some((trigger) => lowerTask.includes(trigger.toLowerCase()));
+  });
+}
