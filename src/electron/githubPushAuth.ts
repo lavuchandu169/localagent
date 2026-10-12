@@ -1,5 +1,6 @@
 // src/electron/githubPushAuth.ts
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -90,9 +91,25 @@ const CREDENTIAL_HELPER_SCRIPT = `!f() { echo username=x-access-token; echo \"pa
  * fresh os.tmpdir()-based path (rather than a hardcoded "/dev/null") is
  * used so this works identically on Windows, where /dev/null isn't a
  * real path in the same way.
+ *
+ * Second security-review finding on this same function: an earlier
+ * version built this path from `${process.pid}-${Date.now()}` without
+ * actually creating it — predictable, and on a shared multi-user
+ * machine an attacker who can guess or watch for that path could
+ * pre-create it themselves and populate it with their OWN "pre-push"
+ * script, turning "disable hooks" into "run an attacker-chosen hook
+ * with the token in its environment" (CWE-377, the exact insecure-
+ * temp-path class this review flagged). fs.mkdtempSync creates a real,
+ * empty directory ATOMICALLY with a cryptographically-random suffix —
+ * no separate check-then-create step for an attacker to race, and
+ * nothing to guess. The directory is deliberately never cleaned up
+ * afterward (this function has no hook into when the later spawned git
+ * process exits to do that safely) — an acceptable trade-off since it
+ * stays genuinely empty for its entire life, posing no risk beyond
+ * trivial, harmless tmpdir clutter.
  */
 function noHooksPath(): string {
-  return path.join(os.tmpdir(), `localagent-no-hooks-${process.pid}-${Date.now()}`);
+  return fs.mkdtempSync(path.join(os.tmpdir(), "localagent-no-hooks-"));
 }
 
 /**
@@ -155,9 +172,30 @@ export function buildAuthenticatedGitPushArgv(command: string, token: string): {
   return { argv, env: { LOCALAGENT_GH_TOKEN: token } };
 }
 
+/**
+ * Security-review finding (validation-differential): `git remote get-url
+ * <name>` (no --push) reports the FETCH url — a remote can have a
+ * separate, different push destination via a plain `remote.<name>.pushurl`
+ * (an everyday git feature, no attacker needed: read-only https fetch +
+ * authenticated ssh/different push is a common setup) or via a
+ * `url.<rewrite>.pushInsteadOf` rule (settable by a malicious npm
+ * postinstall script — the exact same threat class already accepted for
+ * the hooks fix above: no separate compromise needed beyond `npm install`
+ * on an untrusted repo). Verified live: with a pushInsteadOf rule in
+ * place, plain `get-url` still printed the original https://github.com
+ * URL while an actual push silently went to a completely different host
+ * (and transport — ssh, reviving the "--exec/--receive-pack only matter
+ * over ssh, and this path is https-only" assumption the flag-allowlisting
+ * decision above rests on). `--push` resolves pushurl/pushInsteadOf the
+ * same way a real push would, with no network access (confirmed live) —
+ * so this now validates the URL git will ACTUALLY push to, not one it
+ * might not use at all. Confirmed live this doesn't change the result for
+ * the common case (no pushurl/rewrite configured): --push and plain
+ * get-url return the identical URL.
+ */
 async function getConfiguredRemoteUrl(workspaceRoot: string, remoteName: string, env: NodeJS.ProcessEnv): Promise<string | null> {
   return new Promise((resolve) => {
-    const proc = spawn("git", ["remote", "get-url", remoteName], { cwd: workspaceRoot, env });
+    const proc = spawn("git", ["remote", "get-url", "--push", remoteName], { cwd: workspaceRoot, env });
     let stdout = "";
     proc.stdout.on("data", (d) => (stdout += d.toString()));
     proc.on("close", (code) => resolve(code === 0 ? stdout.trim() : null));

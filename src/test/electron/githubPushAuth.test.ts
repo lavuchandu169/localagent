@@ -8,6 +8,7 @@ import {
 } from "../../electron/githubPushAuth.js";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -90,6 +91,19 @@ console.log("\nbuildAuthenticatedGitPushArgv (Critical #1/#2, Important #2 from 
     "disables hook lookup for this invocation (security-review finding: a repo-committed pre-push hook would otherwise see LOCALAGENT_GH_TOKEN in its own environment)",
     argv.some((a) => a.startsWith("core.hooksPath="))
   );
+}
+
+console.log(
+  "\nbuildAuthenticatedGitPushArgv's core.hooksPath value (2nd security-review finding, insecure-temp-path/CWE-377): a real, atomically-created, unpredictable directory, not a guessable pid+timestamp string an attacker could pre-create and plant a hook in:"
+);
+{
+  const hooksPathFor = (argv: string[]) => argv.find((a) => a.startsWith("core.hooksPath="))!.slice("core.hooksPath=".length);
+  const first = hooksPathFor(buildAuthenticatedGitPushArgv("git push", "gho_a").argv);
+  const second = hooksPathFor(buildAuthenticatedGitPushArgv("git push", "gho_b").argv);
+  check("the path actually exists as a real directory on disk (atomically created, not merely a computed string)", fsSync.statSync(first).isDirectory());
+  check("two separate calls never reuse the same path (no fixed/predictable scheme an attacker could pre-create ahead of time)", first !== second);
+  await fs.rm(first, { recursive: true, force: true });
+  await fs.rm(second, { recursive: true, force: true });
 }
 
 console.log("\nbuildAuthenticatedGitPushArgv's core.hooksPath override really does stop a real pre-push hook from ever running or seeing the token (security-review finding, verified against a real git push, not just argv shape):");
@@ -330,6 +344,51 @@ await withTempGitRepo("https://github.com/owner/repo.git", async (repoPath, home
 await withTempGitRepo("https://github.com/owner/repo.git", async (repoPath, homeDir) => {
   const result = await prepareGitPushCommand("git push", repoPath, async () => null, sandboxedEnv(homeDir));
   check("no existing credential AND no connected account still blocks with the clear error", result.kind === "blocked");
+});
+
+console.log(
+  "\nprepareGitPushCommand validates the REAL push destination, not just the fetch url (security-review finding, validation-differential — verified live that plain `git remote get-url` reports the fetch url unchanged even when the actual push goes somewhere completely different):"
+);
+await withTempGitRepo("https://gitlab.com/owner/repo.git", async (repoPath, homeDir) => {
+  // An everyday, non-malicious setup: a read-only gitlab.com fetch url with
+  // a SEPARATE github.com push destination (remote.<name>.pushurl) — no
+  // attacker needed at all to hit this gap.
+  spawnSync("git", ["remote", "set-url", "--push", "origin", "https://github.com/owner/repo.git"], { cwd: repoPath, env: sandboxedEnv(homeDir) });
+  const result = await prepareGitPushCommand("git push", repoPath, async () => "gho_thetoken", sandboxedEnv(homeDir));
+  check(
+    "a remote whose real push destination is github.com IS authenticated, even though its fetch url is a different host entirely",
+    result.kind === "authenticated"
+  );
+});
+await withTempGitRepo("https://github.com/owner/repo.git", async (repoPath, homeDir) => {
+  // The dangerous direction: fetch url LOOKS like it needs this app's
+  // help, but the real push destination is somewhere else. The old
+  // (fetch-url-only) check would have injected LOCALAGENT_GH_TOKEN into a
+  // push that was never actually going to github.com at all.
+  spawnSync("git", ["remote", "set-url", "--push", "origin", "https://gitlab.com/owner/repo.git"], { cwd: repoPath, env: sandboxedEnv(homeDir) });
+  const result = await prepareGitPushCommand("git push", repoPath, async () => "gho_thetoken", sandboxedEnv(homeDir));
+  check(
+    "a remote whose real push destination is NOT github.com is left unchanged, even though its fetch url is github.com (the token is never injected into a push that isn't actually going to github.com)",
+    result.kind === "unchanged"
+  );
+});
+await withTempGitRepo("https://github.com/owner/repo.git", async (repoPath, homeDir) => {
+  // The exact attack the finding described: a local `url.*.pushInsteadOf`
+  // rule (settable by a malicious npm postinstall script with zero user
+  // action beyond `npm install`) silently redirects the push to a
+  // completely different host/transport. Verified live before this fix
+  // existed: plain `git remote get-url` still reported the original
+  // https://github.com url while the real push went to the rewritten ssh
+  // target.
+  spawnSync("git", ["config", "url.ssh://attacker-controlled-host/.pushInsteadOf", "https://github.com/"], {
+    cwd: repoPath,
+    env: sandboxedEnv(homeDir),
+  });
+  const result = await prepareGitPushCommand("git push", repoPath, async () => "gho_thetoken", sandboxedEnv(homeDir));
+  check(
+    "a pushInsteadOf rewrite away from github.com is detected and the token is never injected",
+    result.kind === "unchanged"
+  );
 });
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
