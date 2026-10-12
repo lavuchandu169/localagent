@@ -9,6 +9,8 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const rendererSrc = path.join(root, "src", "electron", "renderer");
 const rendererDist = path.join(root, "dist", "electron", "renderer");
 const fontsourceDir = path.join(root, "node_modules", "@fontsource");
+const skillsSrc = path.join(root, "src", "skills", "builtin");
+const skillsDist = path.join(root, "dist", "skills", "builtin");
 
 mkdirSync(path.join(rendererDist, "fonts"), { recursive: true });
 
@@ -29,3 +31,5 @@ const fontFiles = [
 for (const [pkg, file] of fontFiles) {
   cpSync(path.join(fontsourceDir, pkg, "files", file), path.join(rendererDist, "fonts", file));
 }
+
+cpSync(skillsSrc, skillsDist, { recursive: true });
