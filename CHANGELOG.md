@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.144 — 2026-10-12
+
+- Fix push-URL validation differential and insecure temp-path in push auth
+
 ## v0.1.0-beta.143 — 2026-10-11
 
 - Disable git hooks during authenticated push to stop token exfiltration
