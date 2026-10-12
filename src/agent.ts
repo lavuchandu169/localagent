@@ -17,6 +17,7 @@ import { ProviderChatError } from "./types.js";
 import { ToolRegistry } from "./toolRegistry.js";
 import { PermissionEngine } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
+import { discoverBuiltinSkills, discoverUserSkills, matchSkills, MAX_SKILLS_PER_TASK, type SkillMetadata } from "./skillLoader.js";
 import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
 import { createCheckpoint } from "./checkpoints.js";
@@ -175,6 +176,10 @@ export class AgentSession {
   private abortController: AbortController | null = null;
   /** Paths read_file has been attempted on this session, success or not — evidence the model actually looked before writing. */
   private readPaths = new Set<string>();
+  /** Skill ids already injected this session — mirrors readPaths' own
+   * session-lifetime (not per-task) semantics, so the same skill is never
+   * re-injected on a later task in the same session. */
+  private loadedSkillIds = new Set<string>();
   /** The most recent task's checkpoint (see createCheckpoint) — one per task, not a deep undo stack. Overwritten the next time a task actually makes its first non-read tool call; a task that never writes anything leaves the previous task's checkpoint as the current "revert" target. A task that DOES attempt one but the attempt fails clears this to null instead of leaving the previous task's hash in place — otherwise "revert this task" would silently discard that earlier task's work too (final-review finding: agent core High #2). */
   private checkpointHash: string | null = null;
   /** Reported once, right after the first successful provider call —
@@ -483,6 +488,52 @@ export class AgentSession {
   }
 
   /**
+   * Mirrors autoReadNamedFiles' own shape and call site: runs once per
+   * task, before the model's first turn, so a matching skill's guidance
+   * is already in context rather than depending on the model to notice
+   * and ask for it. Discovery happens fresh every call (user skills can
+   * change between tasks; built-in skills are cached inside
+   * discoverBuiltinSkills itself) — see skillLoader.ts.
+   */
+  private async *autoLoadSkills(task: string): AsyncGenerator<AgentEvent> {
+    const [builtin, user] = await Promise.all([discoverBuiltinSkills(), discoverUserSkills(this.opts.workspaceRoot)]);
+
+    // A user-authored skill overrides a built-in skill sharing its id —
+    // lets a project customize a built-in skill's guidance without
+    // forking the app. Insert built-in first, then user, so user's
+    // Map.set() for the same id wins.
+    const byId = new Map<string, SkillMetadata>();
+    for (const skill of builtin) byId.set(skill.id, skill);
+    for (const skill of user) byId.set(skill.id, skill);
+
+    const matches = matchSkills(task, [...byId.values()], this.loadedSkillIds);
+    const toLoad = matches.slice(0, MAX_SKILLS_PER_TASK);
+    if (matches.length > MAX_SKILLS_PER_TASK) {
+      const skipped = matches.slice(MAX_SKILLS_PER_TASK).map((s) => s.id).join(", ");
+      console.warn(`[skills] ${matches.length - MAX_SKILLS_PER_TASK} matched skill(s) skipped this task (cap is ${MAX_SKILLS_PER_TASK}): ${skipped}`);
+    }
+
+    for (const skill of toLoad) {
+      this.loadedSkillIds.add(skill.id);
+
+      const call: ToolCall = { id: `skill_${skill.id}`, name: "load_skill", arguments: { id: skill.id } };
+      const result = { ok: true, output: { id: skill.id, name: skill.name, body: skill.body } };
+
+      yield { type: "permission.request", call, decision: "ALLOW" };
+      yield { type: "tool.start", call };
+      yield { type: "tool.result", call, result };
+
+      this.messages.push({ role: "assistant", content: "", tool_calls: [call] });
+      this.messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        name: "load_skill",
+        content: JSON.stringify(result).slice(0, 6000),
+      });
+    }
+  }
+
+  /**
    * Runtime-enforced verification, same principle as autoReadNamedFiles and
    * the corrective nudge above: don't just trust a "done" claim after a
    * write succeeded — actually run the project's own test command, if one
@@ -585,6 +636,7 @@ export class AgentSession {
     this.stopRequested = false;
     this.abortController = new AbortController();
     yield* this.autoReadNamedFiles(task);
+    yield* this.autoLoadSkills(task);
     const maxTurns = this.opts.maxTurns ?? 25;
 
     while (!this.cancelled && !this.stopRequested) {

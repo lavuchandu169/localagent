@@ -326,6 +326,170 @@ await (async () => {
   }
 })();
 
+console.log("\nAuto-load matching skills before the first turn:");
+await (async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-skills-test-"));
+  try {
+    {
+      const script: ChatResponse[] = [{ turn: { type: "final", content: "Here's how to debug it." } }];
+      const session = new AgentSession({
+        workspaceRoot,
+        model: "mock",
+        provider: new MockProvider(script),
+        tools: defaultToolRegistry(),
+        permissionMode: "PLAN",
+      });
+
+      const events: string[] = [];
+      let loadCall: ToolCall | undefined;
+      for await (const event of session.run("why is this test flaky, it only fails sometimes")) {
+        events.push(event.type);
+        if (event.type === "tool.start" && event.call.name === "load_skill") loadCall = event.call;
+      }
+
+      check(
+        "a task matching the real built-in debug-flaky-test skill auto-loads it before the model's first turn",
+        loadCall?.arguments.id === "debug-flaky-test" && events.indexOf("tool.start") < events.indexOf("status")
+      );
+    }
+
+    {
+      const script: ChatResponse[] = [{ turn: { type: "final", content: "Added the login button." } }];
+      const session = new AgentSession({
+        workspaceRoot,
+        model: "mock",
+        provider: new MockProvider(script),
+        tools: defaultToolRegistry(),
+        permissionMode: "PLAN",
+      });
+
+      let sawLoadSkill = false;
+      for await (const event of session.run("add a login button to the homepage")) {
+        if (event.type === "tool.start" && event.call.name === "load_skill") sawLoadSkill = true;
+      }
+      check("a task matching no skill's triggers loads nothing", !sawLoadSkill);
+    }
+
+    {
+      // Same session, two separate tasks: the second must not re-load a
+      // skill the first task already loaded.
+      const script: ChatResponse[] = [
+        { turn: { type: "final", content: "First answer." } },
+        { turn: { type: "final", content: "Second answer." } },
+      ];
+      const session = new AgentSession({
+        workspaceRoot,
+        model: "mock",
+        provider: new MockProvider(script),
+        tools: defaultToolRegistry(),
+        permissionMode: "PLAN",
+      });
+
+      let loadsInFirstTask = 0;
+      for await (const event of session.run("this test is flaky")) {
+        if (event.type === "tool.start" && event.call.name === "load_skill") loadsInFirstTask++;
+      }
+      check("the first task loads the matching skill exactly once", loadsInFirstTask === 1);
+
+      let loadsInSecondTask = 0;
+      for await (const event of session.run("this other test is also flaky")) {
+        if (event.type === "tool.start" && event.call.name === "load_skill") loadsInSecondTask++;
+      }
+      check("a later task in the SAME session never re-loads a skill already loaded earlier", loadsInSecondTask === 0);
+    }
+
+    {
+      // A user-authored skill overriding a built-in skill's id must win.
+      const skillDir = path.join(workspaceRoot, ".localagent", "skills", "debug-flaky-test");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: My Override\ndescription: a project-specific override\ntriggers: [flaky]\n---\nOverridden project-specific body.`
+      );
+
+      const script: ChatResponse[] = [{ turn: { type: "final", content: "ok" } }];
+      const session = new AgentSession({
+        workspaceRoot,
+        model: "mock",
+        provider: new MockProvider(script),
+        tools: defaultToolRegistry(),
+        permissionMode: "PLAN",
+      });
+
+      let injectedBody = "";
+      for await (const event of session.run("this flaky test needs fixing")) {
+        if (event.type === "tool.result" && event.call.name === "load_skill") {
+          injectedBody = JSON.stringify(event.result);
+        }
+      }
+      check(
+        "a user-authored skill sharing a built-in skill's id wins (the override body is injected, not the built-in one)",
+        injectedBody.includes("Overridden project-specific body.") && !injectedBody.includes("Shared mutable state between tests")
+      );
+
+      await fs.rm(path.join(workspaceRoot, ".localagent"), { recursive: true, force: true });
+    }
+
+    {
+      // A task matching more than MAX_SKILLS_PER_TASK skills injects only
+      // the cap, not all of them.
+      const skillsDir = path.join(workspaceRoot, ".localagent", "skills");
+      for (let i = 1; i <= 4; i++) {
+        const dir = path.join(skillsDir, `many-${i}`);
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(path.join(dir, "SKILL.md"), `---\nname: Many ${i}\ndescription: d\ntriggers: [manytrigger]\n---\nBody ${i}.`);
+      }
+
+      const script: ChatResponse[] = [{ turn: { type: "final", content: "ok" } }];
+      const session = new AgentSession({
+        workspaceRoot,
+        model: "mock",
+        provider: new MockProvider(script),
+        tools: defaultToolRegistry(),
+        permissionMode: "PLAN",
+      });
+
+      let loadCount = 0;
+      for await (const event of session.run("manytrigger shows up here")) {
+        if (event.type === "tool.start" && event.call.name === "load_skill") loadCount++;
+      }
+      check("a task matching more skills than the cap only injects up to MAX_SKILLS_PER_TASK of them", loadCount === 3);
+
+      await fs.rm(skillsDir, { recursive: true, force: true });
+    }
+
+    {
+      // One malformed skill alongside a valid one: the valid one still loads.
+      const skillsDir = path.join(workspaceRoot, ".localagent", "skills");
+      const goodDir = path.join(skillsDir, "good-skill");
+      await fs.mkdir(goodDir, { recursive: true });
+      await fs.writeFile(path.join(goodDir, "SKILL.md"), `---\nname: Good\ndescription: d\ntriggers: [gizmo]\n---\nGood body.`);
+      const badDir = path.join(skillsDir, "bad-skill");
+      await fs.mkdir(badDir, { recursive: true });
+      await fs.writeFile(path.join(badDir, "SKILL.md"), `---\nname: Bad\n---\nmissing fields`);
+
+      const script: ChatResponse[] = [{ turn: { type: "final", content: "ok" } }];
+      const session = new AgentSession({
+        workspaceRoot,
+        model: "mock",
+        provider: new MockProvider(script),
+        tools: defaultToolRegistry(),
+        permissionMode: "PLAN",
+      });
+
+      let loadedId: unknown;
+      for await (const event of session.run("show me the gizmo")) {
+        if (event.type === "tool.start" && event.call.name === "load_skill") loadedId = event.call.arguments.id;
+      }
+      check("a malformed sibling skill doesn't block a valid skill from loading", loadedId === "good-skill");
+
+      await fs.rm(skillsDir, { recursive: true, force: true });
+    }
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+})();
+
 console.log("\nResumable message history:");
 await (async () => {
   const __filename = fileURLToPath(import.meta.url);
