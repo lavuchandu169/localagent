@@ -103,14 +103,63 @@ body
   const raw = `---
 name: x
 description: y
-triggers: [ a ,  b  ]
+triggers: [ abc ,  defg  ]
 ---
 body
 `;
   const result = parseSkillFrontmatter(raw);
   check(
     "whitespace around unquoted trigger entries is trimmed",
-    result.ok === true && JSON.stringify(result.triggers) === JSON.stringify(["a", "b"])
+    result.ok === true && JSON.stringify(result.triggers) === JSON.stringify(["abc", "defg"])
+  );
+}
+{
+  // A UTF-8 BOM (some Windows editors add one) must not make an
+  // otherwise-valid file look like it has no frontmatter at all. Built
+  // via String.fromCharCode rather than a literal character in this
+  // source file, so the BOM exists only in the runtime string under
+  // test, not as a raw byte sitting in this .ts file.
+  const raw = `${String.fromCharCode(0xfeff)}---
+name: x
+description: y
+triggers: [abc]
+---
+body
+`;
+  const result = parseSkillFrontmatter(raw);
+  check("a leading UTF-8 BOM doesn't break frontmatter detection", result.ok === true && result.name === "x");
+}
+{
+  // A quoted trigger containing a comma must not get split into two
+  // triggers at that internal comma.
+  const raw = `---
+name: x
+description: y
+triggers: ["fails, sometimes", flaky]
+---
+body
+`;
+  const result = parseSkillFrontmatter(raw);
+  check(
+    "a comma inside a quoted trigger is preserved, not split into a separate trigger",
+    result.ok === true && JSON.stringify(result.triggers) === JSON.stringify(["fails, sometimes", "flaky"])
+  );
+}
+{
+  // A very short trigger (e.g. a single letter) would match almost every
+  // task — an easy accident for an honest skill author, not just a
+  // theoretical abuse case.
+  const raw = `---
+name: x
+description: y
+triggers: [ab, validlength]
+---
+body
+`;
+  const result = parseSkillFrontmatter(raw);
+  check(
+    "a trigger shorter than the minimum length fails with a clear error naming it",
+    result.ok === false && result.error.includes("ab") && result.error.includes("short")
   );
 }
 

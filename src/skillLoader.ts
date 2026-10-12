@@ -2,6 +2,43 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+/** A trigger shorter than this is dropped into the "fails outright"
+ * bucket (deferred-minor finding): a 1-2 character trigger matches
+ * almost every task as a plain substring, which is an easy accident for
+ * an honest skill author to make, not just a theoretical abuse case —
+ * rejecting it outright at parse time makes the problem visible
+ * immediately instead of silently over-firing. */
+const MIN_TRIGGER_LENGTH = 3;
+
+/** Splits a bracketed trigger-list's inner text on commas, except for
+ * commas that appear INSIDE a quoted entry (deferred-minor finding: the
+ * previous plain `.split(",")` incorrectly split a trigger like
+ * `"fails, sometimes"` into two separate triggers at the comma that was
+ * part of its own quoted text). Tracks quote state char-by-char rather
+ * than using a regex, since the quote character itself (' or ") can
+ * differ per entry and nesting isn't a concern for this narrow schema. */
+function splitTriggerList(inner: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quoteChar: string | null = null;
+  for (const ch of inner) {
+    if (quoteChar) {
+      current += ch;
+      if (ch === quoteChar) quoteChar = null;
+    } else if (ch === '"' || ch === "'") {
+      quoteChar = ch;
+      current += ch;
+    } else if (ch === ",") {
+      tokens.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  tokens.push(current);
+  return tokens;
+}
+
 /**
  * Parses one SKILL.md file's raw text into its frontmatter fields plus
  * body. Hand-rolled rather than a YAML library, deliberately — the
@@ -14,7 +51,13 @@ import { fileURLToPath } from "node:url";
 export function parseSkillFrontmatter(
   raw: string
 ): { ok: true; name: string; description: string; triggers: string[]; body: string } | { ok: false; error: string } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
+  // Deferred-minor finding: a leading UTF-8 BOM (some Windows editors
+  // add one automatically) would otherwise make an entirely valid file
+  // look like it has no frontmatter block at all, since a BOM character
+  // immediately followed by three dashes doesn't match a regex anchored
+  // on a literal "---" at position 0.
+  const withoutBom = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(withoutBom);
   if (!match) {
     return { ok: false, error: "missing --- frontmatter block" };
   }
@@ -43,12 +86,18 @@ export function parseSkillFrontmatter(
   if (!bracketMatch) {
     return { ok: false, error: `triggers must be a bracketed list, e.g. [a, b]: got "${triggersRaw}"` };
   }
-  const triggers = bracketMatch[1]!
-    .split(",")
+  const triggers = splitTriggerList(bracketMatch[1]!)
     .map((t) => t.trim().replace(/^["']|["']$/g, "").trim())
     .filter((t) => t.length > 0);
   if (triggers.length === 0) {
     return { ok: false, error: "triggers must be a non-empty list" };
+  }
+  const tooShort = triggers.find((t) => t.length < MIN_TRIGGER_LENGTH);
+  if (tooShort) {
+    return {
+      ok: false,
+      error: `trigger "${tooShort}" is too short (minimum ${MIN_TRIGGER_LENGTH} characters) — a very short trigger matches almost every task`,
+    };
   }
 
   return { ok: true, name, description, triggers, body: body.trim() };
