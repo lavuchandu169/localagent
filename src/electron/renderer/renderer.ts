@@ -48,6 +48,7 @@ import { formatPerfBadge } from "./perfBadge.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import { renderDiff } from "./diffView.js";
+import { renderMarkdown } from "./markdownToDom.js";
 import {
   initChangesPanel,
   isChangesPanelOpen,
@@ -1196,6 +1197,22 @@ function logLine(text: string, className: string): void {
   scrollEventLogToBottom();
 }
 
+/** Renders an assistant message's complete text as real markdown
+ * (headers, bold/italic, inline code, fenced code blocks with a copy
+ * button, lists, links) into `container`, replacing whatever plain text
+ * is already there. Links never navigate the window directly — routed
+ * through window.agent.openExternal, same as every other external link
+ * in this renderer (freellmapiPanel.ts's own signup-link handler). */
+function renderAssistantMarkdown(container: HTMLElement, text: string): void {
+  container.replaceChildren(
+    renderMarkdown(text, {
+      onLinkClick: (url) => {
+        window.agent.openExternal(url);
+      },
+    })
+  );
+}
+
 function toolCard(call: ToolCall): HTMLElement {
   emptyState.hidden = true;
   const card = document.createElement("div");
@@ -1460,10 +1477,24 @@ function renderEvent(event: AgentEvent): void {
       break;
     }
     case "text":
-      // Already fully rendered incrementally via text.delta — just stop
-      // tracking it as "live" rather than logging a second, duplicate line.
-      if (streamingTextEl) streamingTextEl = null;
-      else logLine(event.text, "log-text");
+      // The streaming case already built up the complete text as plain
+      // text via text.delta (one DOM node, string-appended) — now that
+      // it's complete, do the one real markdown parse-and-render pass,
+      // replacing the plain text with real DOM nodes. The non-streaming
+      // fallback (no deltas ever arrived) renders markdown directly
+      // into a fresh line instead of calling logLine, which would have
+      // set plain .textContent.
+      if (streamingTextEl) {
+        renderAssistantMarkdown(streamingTextEl, streamingTextEl.textContent ?? "");
+        streamingTextEl = null;
+      } else {
+        emptyState.hidden = true;
+        const line = document.createElement("div");
+        line.className = "log-text";
+        eventLog.appendChild(line);
+        renderAssistantMarkdown(line, event.text);
+        scrollEventLogToBottom();
+      }
       break;
     case "task.sent":
       // Renderer-only synthetic event — see its own doc comment in
