@@ -43,6 +43,10 @@ check(
   "tells the model a general-knowledge/explanatory question about a topic doesn't imply creating a file either — the exact gap that let a small local model respond to \"tell me about plastic decomposition\"/\"tell me about programming\" by inventing an unrequested .md file instead of just answering (real bug report)",
   DEFAULT_SYSTEM_PROMPT.includes("Discussing or explaining a topic is never, on its own, a request to create a document")
 );
+check(
+  "tells the model to say so explicitly when every real attempt at something failed, and to label a from-memory fallback as a guess — the exact gap that let a small model, after two failed run_command attempts to search the web, silently answer from training data formatted as if it were real search results, with nothing telling the user that's what happened (real bug report)",
+  DEFAULT_SYSTEM_PROMPT.includes("never present it in a way that could be mistaken for a verified result")
+);
 
 console.log("\nCommand risk classification:");
 check("rm is DESTRUCTIVE", classifyCommand("rm -rf foo") === "DESTRUCTIVE");
