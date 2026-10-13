@@ -11,7 +11,7 @@ import { defaultToolRegistry, ToolRegistry } from "../../toolRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
 import type { MockScriptEntry } from "../../providers/mockProvider.js";
 import { toLlamaHistory, toLlamaFunctions, fromLlamaResult } from "../../providers/embeddedLlama.js";
-import type { AgentEvent, ChatRequest, ChatResponse, HealthCheckResult, ModelProvider, PermissionResponse, Tool, ToolCall } from "../../types.js";
+import type { AgentEvent, ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelProvider, PermissionResponse, Tool, ToolCall } from "../../types.js";
 import { ProviderChatError } from "../../types.js";
 import { groupDiffIntoSegments } from "../../diffUtil.js";
 import { computeFileDiff } from "../../diffCompute.js";
@@ -637,8 +637,127 @@ await (async () => {
 
       await fs.rm(skillDir, { recursive: true, force: true });
     }
+
+    console.log(
+      "\n  Deferred-minor finding M6: a cancellation mid-injection (the consumer stops pulling events before the skill is actually shown) must not permanently mark the skill 'loaded':"
+    );
+    {
+      const script: ChatResponse[] = [
+        { turn: { type: "final", content: "First." } },
+        { turn: { type: "final", content: "Second." } },
+      ];
+      const session = new AgentSession({
+        workspaceRoot,
+        model: "mock",
+        provider: new MockProvider(script),
+        tools: defaultToolRegistry(),
+        permissionMode: "PLAN",
+      });
+
+      // Stop consuming right after tool.start fires, before tool.result
+      // and the final messages.push — breaking a for-await-of loop calls
+      // .return() on the generator, so it suspends exactly there and
+      // never reaches whatever code sits after the next yield. tool.start
+      // (not permission.request) is the right point: in the pre-fix code,
+      // loadedSkillIds.add() already ran by the time tool.start is
+      // yielded, so breaking any earlier wouldn't exercise the bug at all.
+      for await (const event of session.run("why is this test flaky, it only fails sometimes")) {
+        if (event.type === "tool.start" && event.call.name === "load_skill") break;
+      }
+
+      let loadedOnRetry = false;
+      for await (const event of session.run("this test is flaky again")) {
+        if (event.type === "tool.start" && event.call.name === "load_skill") loadedOnRetry = true;
+      }
+      check(
+        "a skill whose injection was interrupted before completion is retried on the next task, not permanently suppressed as already-loaded",
+        loadedOnRetry
+      );
+    }
+
+    console.log("\n  Deferred-minor finding M5: a resumed session seeds loadedSkillIds from its own prior history:");
+    {
+      const priorMessages: ChatMessage[] = [
+        { role: "system", content: "sys" },
+        { role: "user", content: "this test is flaky" },
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "skill_debug-flaky-test", name: "load_skill", arguments: { id: "debug-flaky-test" } }],
+        },
+        {
+          role: "tool",
+          tool_call_id: "skill_debug-flaky-test",
+          name: "load_skill",
+          content: JSON.stringify({ ok: true, output: { id: "debug-flaky-test", name: "x", body: "y", source: "builtin", truncated: false } }),
+        },
+        { role: "assistant", content: "ok" },
+      ];
+      const script: ChatResponse[] = [{ turn: { type: "final", content: "Second answer." } }];
+      const session = new AgentSession({
+        workspaceRoot,
+        model: "mock",
+        provider: new MockProvider(script),
+        tools: defaultToolRegistry(),
+        permissionMode: "PLAN",
+        initialMessages: priorMessages,
+      });
+
+      let sawLoadSkill = false;
+      for await (const event of session.run("this test is flaky again")) {
+        if (event.type === "tool.start" && event.call.name === "load_skill") sawLoadSkill = true;
+      }
+      check(
+        "a session resumed via initialMessages doesn't re-inject a skill its own prior history already shows was loaded",
+        !sawLoadSkill
+      );
+    }
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+})();
+
+console.log("\nDeferred-minor finding M5: switching workspaces resets loadedSkillIds, so a same-id skill in a DIFFERENT workspace isn't wrongly suppressed:");
+await (async () => {
+  const workspaceA = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-skills-wsA-"));
+  const workspaceB = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-skills-wsB-"));
+  try {
+    for (const ws of [workspaceA, workspaceB]) {
+      const dir = path.join(ws, ".localagent", "skills", "shared-id-skill");
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "SKILL.md"), `---\nname: Shared\ndescription: d\ntriggers: [sharedidtrigger]\n---\nbody`);
+    }
+    const script: ChatResponse[] = [
+      { turn: { type: "final", content: "First." } },
+      { turn: { type: "final", content: "Second." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: workspaceA,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+      onApprovalNeeded: async () => ({ approved: true }),
+    });
+
+    let loadedInA = false;
+    for await (const event of session.run("sharedidtrigger shows up here")) {
+      if (event.type === "tool.start" && event.call.name === "load_skill") loadedInA = true;
+    }
+    check("the skill loads in workspace A", loadedInA);
+
+    session.setWorkspaceRoot(workspaceB);
+    let loadedInB = false;
+    for await (const event of session.run("sharedidtrigger shows up here too")) {
+      if (event.type === "tool.start" && event.call.name === "load_skill") loadedInB = true;
+    }
+    check(
+      "switching to a different workspace resets loadedSkillIds, so the same id's skill in workspace B still loads, rather than being wrongly suppressed as already-loaded",
+      loadedInB
+    );
+  } finally {
+    await fs.rm(workspaceA, { recursive: true, force: true });
+    await fs.rm(workspaceB, { recursive: true, force: true });
   }
 })();
 

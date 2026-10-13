@@ -292,6 +292,21 @@ export class AgentSession {
     this.originalFallbackProviders = opts.fallbackProviders;
     if (opts.initialMessages && opts.initialMessages.length > 0) {
       this.messages = [...opts.initialMessages];
+      // Deferred-minor finding M5: without this, a session resumed after
+      // an app restart has an empty loadedSkillIds regardless of what
+      // its own prior history shows — the first matching task after
+      // resume would re-inject a skill already loaded before the
+      // restart. Scanning the seeded history for the same synthetic
+      // load_skill tool-call shape autoLoadSkills itself produces keeps
+      // this in sync with that shape without a separate stored list.
+      for (const m of this.messages) {
+        if (m.role !== "assistant" || !m.tool_calls) continue;
+        for (const call of m.tool_calls) {
+          if (call.name === "load_skill" && typeof call.arguments.id === "string") {
+            this.loadedSkillIds.add(call.arguments.id);
+          }
+        }
+      }
     } else {
       this.messages.push({ role: "system", content: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT });
     }
@@ -327,6 +342,13 @@ export class AgentSession {
     // (unknown revision / not a git repo at all). The old checkpoint is
     // simply inapplicable here, not something to silently keep offering.
     this.checkpointHash = null;
+    // Deferred-minor finding M5: loadedSkillIds tracks what's been
+    // injected for THIS workspace's own skills — carrying it across a
+    // workspace switch would wrongly suppress a different project's
+    // user-authored skill that happens to share an id with one already
+    // loaded from the PREVIOUS workspace, even though it's genuinely
+    // different content the user has never seen or approved here.
+    this.loadedSkillIds.clear();
   }
 
   /** The workspace a checkpoint hash (see getCheckpointHash) needs to be reverted against — reads the same live opts.workspaceRoot setWorkspaceRoot mutates, so this is never stale even after a mid-session workspace edit. */
@@ -567,10 +589,12 @@ export class AgentSession {
 
       if (decision === "ASK") {
         const response = this.opts.onApprovalNeeded ? await this.opts.onApprovalNeeded(call) : { approved: false };
-        // Recorded regardless of outcome — a rejected skill isn't asked
-        // about again this session either.
-        this.loadedSkillIds.add(skill.id);
         if (!response.approved) {
+          // Recorded immediately — a rejected skill isn't asked about
+          // again this session either, and there are no further yields
+          // for this skill after this point for a cancellation to land
+          // between.
+          this.loadedSkillIds.add(skill.id);
           this.messages.push({
             role: "tool",
             tool_call_id: call.id,
@@ -579,8 +603,6 @@ export class AgentSession {
           });
           continue;
         }
-      } else {
-        this.loadedSkillIds.add(skill.id);
       }
 
       const truncated = skill.body.length > AgentSession.MAX_SKILL_BODY_CHARS;
@@ -601,6 +623,12 @@ export class AgentSession {
         name: "load_skill",
         content: JSON.stringify(result),
       });
+      // Deferred-minor finding M6: marked loaded only here, AFTER the
+      // skill has actually been shown (both yields fired, message
+      // pushed) — not earlier, where a cancellation landing between
+      // here and the final yield could mark a skill "loaded" that the
+      // model never actually saw, permanently suppressing a real retry.
+      this.loadedSkillIds.add(skill.id);
     }
   }
 
