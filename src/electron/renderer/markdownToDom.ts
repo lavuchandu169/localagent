@@ -142,14 +142,29 @@ function renderInline(text: string, options: MarkdownRenderOptions): DocumentFra
       el.textContent = italic;
       fragment.appendChild(el);
     } else if (linkText !== undefined && linkUrl !== undefined) {
-      const a = document.createElement("a");
-      a.textContent = linkText;
-      a.href = linkUrl;
-      a.addEventListener("click", (event) => {
-        event.preventDefault();
-        options.onLinkClick(linkUrl);
-      });
-      fragment.appendChild(a);
+      // Only http/https ever become a real <a> — same allowlist main.ts's
+      // openExternal IPC handler enforces (externalUrl.ts), applied here
+      // too so an unsafe scheme (javascript:, file:, a custom app's own
+      // registered URI scheme) never even reaches a real href, rather than
+      // relying solely on that second layer to catch it.
+      let isSafe = false;
+      try {
+        isSafe = ["http:", "https:"].includes(new URL(linkUrl).protocol);
+      } catch {
+        isSafe = false;
+      }
+      if (isSafe) {
+        const a = document.createElement("a");
+        a.textContent = linkText;
+        a.href = linkUrl;
+        a.addEventListener("click", (event) => {
+          event.preventDefault();
+          options.onLinkClick(linkUrl);
+        });
+        fragment.appendChild(a);
+      } else {
+        fragment.appendChild(document.createTextNode(linkText));
+      }
     }
     lastIndex = match.index! + match[0].length;
   }

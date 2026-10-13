@@ -82,6 +82,23 @@ console.log("\nrenderMarkdown — links:");
   check("clicking it calls onLinkClick with the real URL instead of letting the window navigate", clickedUrl === "https://example.com/docs");
   check("the click's default action (real in-window navigation) is prevented", defaultPrevented);
 }
+{
+  const container = render("see [click me](javascript:evil) for more");
+  check("a javascript: scheme link never becomes a real <a> element", container.querySelector("a") === null);
+  check("its text is still shown, just as plain literal text", container.textContent === "see click me for more");
+}
+{
+  const container = render("[local file](file:///etc/passwd)");
+  check("a file: scheme link never becomes a real <a> element", container.querySelector("a") === null);
+}
+{
+  const container = render("[bad](not a url)");
+  check("a target that doesn't even parse as a URL never becomes a real <a> element", container.querySelector("a") === null);
+}
+{
+  const container = render("[secure](HTTPS://Example.com)");
+  check("scheme matching is case-insensitive — HTTPS still becomes a real link", container.querySelector("a") !== null);
+}
 
 console.log("\nrenderMarkdown — lists:");
 {
