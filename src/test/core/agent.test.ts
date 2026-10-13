@@ -761,6 +761,37 @@ await (async () => {
   }
 })();
 
+console.log(
+  "\nDeferred-minor finding M7: a MODEL-issued load_skill call (imitating the synthetic ones it saw in its own history) resolves gracefully, not as an Unknown tool:"
+);
+await (async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-agent-model-load-skill-test-"));
+  try {
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "load_skill", arguments: {} }] } },
+      { turn: { type: "final", content: "done" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+
+    let toolResultContent: string | undefined;
+    for await (const event of session.run("some ordinary task")) {
+      if (event.type === "tool.result" && event.call.id === "c1") toolResultContent = JSON.stringify(event.result);
+    }
+    check(
+      "a model-issued load_skill call succeeds instead of hitting 'Unknown tool: load_skill'",
+      toolResultContent !== undefined && !toolResultContent.includes("Unknown tool") && toolResultContent.includes('"ok":true')
+    );
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+})();
+
 console.log("\nResumable message history:");
 await (async () => {
   const __filename = fileURLToPath(import.meta.url);

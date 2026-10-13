@@ -5,6 +5,7 @@ import { grepTool } from "./tools/grep.js";
 import { editFileTool } from "./tools/editFile.js";
 import { deleteFileTool } from "./tools/deleteFile.js";
 import { runCommandTool } from "./tools/runCommand.js";
+import { loadSkillTool } from "./tools/loadSkill.js";
 
 export class ToolRegistry {
   private fixedTools = new Map<string, Tool>();
@@ -52,5 +53,8 @@ export class ToolRegistry {
 }
 
 export function defaultToolRegistry(getExtraTools: () => Tool[] = () => []): ToolRegistry {
-  return new ToolRegistry([readFileTool, listDirectoryTool, grepTool, editFileTool, deleteFileTool, runCommandTool], getExtraTools);
+  return new ToolRegistry(
+    [readFileTool, listDirectoryTool, grepTool, editFileTool, deleteFileTool, runCommandTool, loadSkillTool],
+    getExtraTools
+  );
 }
