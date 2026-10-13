@@ -1,7 +1,7 @@
 // Copies the electron files tsc doesn't compile (static HTML/CSS, the
 // hand-written CommonJS preload) next to the compiled main.ts/renderer.ts
 // output, so everything Electron loads lives together under dist/electron/.
-import { cpSync, mkdirSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,4 +32,12 @@ for (const [pkg, file] of fontFiles) {
   cpSync(path.join(fontsourceDir, pkg, "files", file), path.join(rendererDist, "fonts", file));
 }
 
+// Deferred-minor finding M9: cpSync merges into an existing destination
+// rather than replacing it, so a built-in skill renamed or removed from
+// src/skills/builtin would linger in dist/skills/builtin (and keep
+// being served by the cached discoverBuiltinSkills()) on any non-clean
+// dev build. Clearing the destination first makes dist/ always reflect
+// exactly the current src/ content, matching what a clean CI build
+// already gets for free.
+rmSync(skillsDist, { recursive: true, force: true });
 cpSync(skillsSrc, skillsDist, { recursive: true });
