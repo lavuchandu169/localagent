@@ -18,6 +18,19 @@ interface CommandResult {
 }
 
 const MAX_OUTPUT = 8000;
+
+/** Live bug report: a model passed `timeoutMs: 3000000000000000` clearly
+ * intending "don't time out" — but Node's setTimeout treats any delay
+ * above ~2147483647 (TIMEOUT_MAX, ~24.8 days) as 1, so the command was
+ * killed almost instantly instead of being given more time, the exact
+ * opposite of what the model asked for. The resulting failure then
+ * surfaced as the generic, misleading "error: unknown" (a killed
+ * process has no real error message), with nothing pointing at the
+ * actual cause. Clamping down to a generous-but-bounded max keeps a
+ * legitimately long-running command (e.g. a real test suite) well
+ * covered while making an overflow silently do the opposite of its
+ * request impossible. */
+const MAX_TIMEOUT_MS = 600_000; // 10 minutes
 // Security audit finding: unbounded-stdout-stderr-accumulation. A
 // fast-producing runaway command (cat /dev/zero, a recursive find/cat, an
 // accidental infinite build loop) previously grew stdout/stderr without
@@ -89,7 +102,7 @@ export const runCommandTool: Tool<Input, CommandResult> = {
     type: "object",
     properties: {
       command: { type: "string" },
-      timeoutMs: { type: "number", description: "Optional timeout, default 30000ms" },
+      timeoutMs: { type: "number", description: "Optional timeout, default 30000ms, capped at 600000ms (10 minutes)" },
     },
     required: ["command"],
   },
@@ -125,7 +138,7 @@ export const runCommandTool: Tool<Input, CommandResult> = {
       // the identical tree-escape problem this whole function exists to
       // close, just on a different trigger (wall-clock instead of output
       // volume). escalateToKill below is shared between both triggers.
-      const timeoutMs = input.timeoutMs ?? 30000;
+      const timeoutMs = Math.min(input.timeoutMs ?? 30000, MAX_TIMEOUT_MS);
       const wallClockTimer = setTimeout(() => escalateToKill(), timeoutMs);
 
       // SIGTERM first, SIGKILL only if the tree is still alive 2s later —

@@ -99,6 +99,15 @@ async function main() {
     check("the exit code reflects death by signal (non-zero/null), not a clean exit", result.ok === false && (exitCode === null || exitCode !== 0));
   }
 
+  console.log(
+    "\nrunCommandTool: an absurdly large timeoutMs no longer silently kills the command almost instantly (live bug report — the model passed timeoutMs: 3000000000000000 intending 'don't time out', but Node's setTimeout treats any delay above ~2147483647ms as 1ms, so the command got killed before it could do anything, and the resulting error was reported as the misleading generic 'error: unknown'):"
+  );
+  {
+    const result = await runCommandTool.execute({ command: "echo done", timeoutMs: 3000000000000000 }, ctx);
+    check("a trivially fast command still succeeds instead of being killed by the overflowed timeout", result.ok === true);
+    check("stdout has the real output, not an empty/killed result", (result.output as any)?.stdout.trim() === "done");
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
