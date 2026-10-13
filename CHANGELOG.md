@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.145 — 2026-10-13
+
+- Register an inert load_skill tool to mitigate model imitation (M7)
+
 ## v0.1.0-beta.144 — 2026-10-12
 
 - Fix push-URL validation differential and insecure temp-path in push auth
