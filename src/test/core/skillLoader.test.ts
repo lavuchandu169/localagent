@@ -266,6 +266,68 @@ await (async () => {
   }
 })();
 
+console.log("\ndiscoverSkillsIn skips a symlinked skill directory, with a warning naming it (deferred-minor finding M3):");
+await (async () => {
+  const tmpRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "localagent-skills-symlink-test-"));
+  const realSkillDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "localagent-skills-symlink-target-"));
+  try {
+    await fsPromises.writeFile(path.join(realSkillDir, "SKILL.md"), `---\nname: Real\ndescription: d\ntriggers: [symlinktrigger]\n---\nbody`);
+    const linkPath = path.join(tmpRoot, "symlinked-skill");
+    await fsPromises.symlink(realSkillDir, linkPath, "dir");
+
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (msg: string) => warnings.push(msg);
+    let found: SkillMetadata[];
+    try {
+      found = await discoverSkillsIn(tmpRoot, "user", false);
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    check("a symlinked skill directory is not followed/included", found.length === 0);
+    check("a warning is logged naming the skipped symlink", warnings.some((w) => w.includes("symlinked-skill")));
+  } finally {
+    await fsPromises.rm(tmpRoot, { recursive: true, force: true });
+    await fsPromises.rm(realSkillDir, { recursive: true, force: true });
+  }
+})();
+
+console.log(
+  "\ndiscoverSkillsIn stays silent for a missing root (the common case) but warns for any OTHER readdir error (deferred-minor finding M4):"
+);
+await (async () => {
+  const tmpRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "localagent-skills-readdir-err-test-"));
+  try {
+    const originalWarn = console.warn;
+    const missingWarnings: string[] = [];
+    console.warn = (msg: string) => missingWarnings.push(msg);
+    try {
+      await discoverSkillsIn(path.join(tmpRoot, "does-not-exist"), "user", false);
+    } finally {
+      console.warn = originalWarn;
+    }
+    check("a missing root directory (ENOENT) logs no warning at all — the common case for every project without one", missingWarnings.length === 0);
+
+    // A regular FILE where a directory is expected fails readdir with
+    // ENOTDIR, not ENOENT — the "something is actually wrong" case.
+    const notADir = path.join(tmpRoot, "not-a-directory");
+    await fsPromises.writeFile(notADir, "I am a file, not a directory");
+    const otherWarnings: string[] = [];
+    console.warn = (msg: string) => otherWarnings.push(msg);
+    let result: SkillMetadata[];
+    try {
+      result = await discoverSkillsIn(notADir, "user", false);
+    } finally {
+      console.warn = originalWarn;
+    }
+    check("a non-ENOENT readdir error still returns an empty list rather than throwing", result.length === 0);
+    check("...but a non-ENOENT readdir error IS logged, unlike a plain missing directory", otherWarnings.some((w) => w.includes(notADir)));
+  } finally {
+    await fsPromises.rm(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
 console.log("\ndiscoverBuiltinSkills (against the real shipped content):");
 {
   const builtin = await discoverBuiltinSkills();

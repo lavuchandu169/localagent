@@ -202,7 +202,16 @@ export async function discoverSkillsIn(root: string, source: "builtin" | "user",
   let entries;
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
-  } catch {
+  } catch (err: any) {
+    // Deferred-minor finding M4: a missing root (the overwhelmingly
+    // common case — most projects have no .localagent/skills at all)
+    // must stay silent, but any OTHER readdir failure (a permissions
+    // error, the path existing as a file instead of a directory) was
+    // previously swallowed exactly the same way, with no trace at all
+    // that something was actually wrong versus just "nothing here yet."
+    if (err?.code !== "ENOENT") {
+      console.warn(`[skills] could not list "${root}": ${err?.message ?? err}`);
+    }
     return [];
   }
   // Final-review finding I3: raw readdir order reflects filesystem
@@ -214,6 +223,20 @@ export async function discoverSkillsIn(root: string, source: "builtin" | "user",
   entries.sort((a, b) => a.name.localeCompare(b.name));
   const results: SkillMetadata[] = [];
   for (const entry of entries) {
+    // Deferred-minor finding M3: a symlinked skill directory was already
+    // excluded (isDirectory() on a Dirent is false for a symlink, even
+    // one pointing at a real directory, unless the symlink is followed
+    // first) but silently — no trace that a skill the user set up (e.g.
+    // `ln -s ~/dotfiles/skills/foo .localagent/skills/foo`) was actually
+    // seen and skipped, versus never having been there at all. Resolving
+    // it was deliberately NOT done here (a symlink could point outside
+    // the workspace — same containment question flagged for user-skill
+    // reads generally; see the design spec/final-review notes) — this
+    // only makes the skip visible, it doesn't change what's followed.
+    if (entry.isSymbolicLink()) {
+      console.warn(`[skills] skipping "${entry.name}": symlinked skill directories are not supported`);
+      continue;
+    }
     if (!entry.isDirectory()) continue;
     const metadata = await readSkillDirectory(path.join(root, entry.name), source, inlineReferences);
     if (metadata) results.push(metadata);
