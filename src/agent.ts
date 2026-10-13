@@ -19,6 +19,7 @@ import { ToolRegistry } from "./toolRegistry.js";
 import { PermissionEngine } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
 import { discoverBuiltinSkills, discoverUserSkills, matchSkills, MAX_SKILLS_PER_TASK, type SkillMetadata } from "./skillLoader.js";
+import { LOAD_SKILL_FALLBACK_MESSAGE } from "./tools/loadSkill.js";
 import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
 import { createCheckpoint } from "./checkpoints.js";
@@ -977,6 +978,30 @@ export class AgentSession {
         const call = resolution.call;
         const tool = this.opts.tools.get(call.name);
         if (!tool) {
+          // Live-tested regression (see loadSkill.ts's doc comment): a
+          // model imitating the auto-injected load_skill pattern it just
+          // saw in its OWN history gets a graceful, VISIBLE answer here
+          // — unlike a genuine unknown-tool hallucination (silent, no
+          // events, below), this case is worth showing: if a model does
+          // end up calling it, the user should be able to see that
+          // happened and what it got back, not have it vanish into the
+          // message history with no trace. load_skill is deliberately
+          // never registered in the tool registry, so a model never
+          // sees it as an option to choose on a task where no skill
+          // matched at all (the actual cause of the regression this
+          // replaced).
+          if (call.name === "load_skill") {
+            const result = { ok: true, output: { message: LOAD_SKILL_FALLBACK_MESSAGE } };
+            yield { type: "tool.start", call };
+            yield { type: "tool.result", call, result };
+            this.messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              name: call.name,
+              content: JSON.stringify(result),
+            });
+            continue;
+          }
           this.messages.push({
             role: "tool",
             tool_call_id: call.id,

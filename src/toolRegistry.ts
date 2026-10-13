@@ -5,7 +5,6 @@ import { grepTool } from "./tools/grep.js";
 import { editFileTool } from "./tools/editFile.js";
 import { deleteFileTool } from "./tools/deleteFile.js";
 import { runCommandTool } from "./tools/runCommand.js";
-import { loadSkillTool } from "./tools/loadSkill.js";
 
 export class ToolRegistry {
   private fixedTools = new Map<string, Tool>();
@@ -53,8 +52,13 @@ export class ToolRegistry {
 }
 
 export function defaultToolRegistry(getExtraTools: () => Tool[] = () => []): ToolRegistry {
-  return new ToolRegistry(
-    [readFileTool, listDirectoryTool, grepTool, editFileTool, deleteFileTool, runCommandTool, loadSkillTool],
-    getExtraTools
-  );
+  // Deliberately NOT registered here: a "load_skill" tool. Live-tested
+  // regression (see toolRegistry.test.ts and tools/loadSkill.ts) — a 3B
+  // model offered "load_skill" as an always-available real option
+  // called it proactively on an ordinary task, then parroted its
+  // fallback message back as its whole answer instead of addressing the
+  // task. A model only ever encounters the name "load_skill" now via
+  // agent.ts's own dispatch-level fallback (its "unknown tool" branch),
+  // never as a listed, choosable tool.
+  return new ToolRegistry([readFileTool, listDirectoryTool, grepTool, editFileTool, deleteFileTool, runCommandTool], getExtraTools);
 }
