@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.146 — 2026-10-13
+
+- Tell the model to flag a from-memory fallback, not present it as verified
+
 ## v0.1.0-beta.145 — 2026-10-13
 
 - Register an inert load_skill tool to mitigate model imitation (M7)
