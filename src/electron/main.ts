@@ -315,6 +315,10 @@ app.whenReady().then(async () => {
     updateManager?.openDownloadedFile();
   });
 
+  ipcMain.handle("agent:check-for-updates", () => {
+    updateManager?.checkForUpdates();
+  });
+
   ipcMain.handle("agent:list-mcp-servers", () => {
     return mcpConnections.map((c) => ({
       id: c.config.id,

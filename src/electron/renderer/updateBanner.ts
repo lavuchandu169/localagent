@@ -68,6 +68,13 @@ export function initUpdateBanner(): void {
   });
 
   window.agent.onUpdateStatus((status) => {
+    // "checking"/"not-available" only ever fire for a manual check (the
+    // Settings "Check for Updates" button) — this dismissible banner has
+    // nothing useful to show for either (there's no version, and no
+    // action to offer), so they're handled entirely by the Settings
+    // panel's own status text instead; this banner just ignores them.
+    if (status.state === "checking" || status.state === "not-available") return;
+
     lastUpdateStatus = status;
     // "downloading" carries no version of its own — the most recently known
     // version (from this same run's last "ready"/"fallback") is the best

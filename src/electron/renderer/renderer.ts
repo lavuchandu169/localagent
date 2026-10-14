@@ -194,6 +194,7 @@ interface AgentBridge {
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   installUpdate(): Promise<void>;
   openUpdateFile(): Promise<void>;
+  checkForUpdates(): Promise<void>;
   listMcpServers(): Promise<{ id: string; name: string; command: string; args: string[]; status: McpServerStatus }[]>;
   addMcpServer(
     input: { name: string; command: string; args: string[]; env: Record<string, string> }
@@ -1095,6 +1096,39 @@ settingsClose.addEventListener("click", closeSettingsPanel);
 settingsCloseX.addEventListener("click", closeSettingsPanel);
 settingsPanel.addEventListener("click", (e) => {
   if (e.target === settingsPanel) closeSettingsPanel();
+});
+
+// "Check for Updates" (Settings panel) — the manual counterpart to the
+// silent automatic/periodic check updateManager.ts already runs. Feedback
+// comes back through the SAME onUpdateStatus feed updateBanner.ts listens
+// to; "checking"/"not-available" are only ever broadcast for a manual
+// check (never the silent background one), so this listener owns exactly
+// those two, while "downloading"/"ready"/"fallback" (a real update found)
+// get a short status line here too, in addition to the banner it also
+// opens for them.
+const settingsCheckUpdatesBtn = byId<HTMLButtonElement>("settings-check-updates");
+const settingsUpdateCheckStatus = byId<HTMLSpanElement>("settings-update-check-status");
+settingsCheckUpdatesBtn.addEventListener("click", () => {
+  settingsCheckUpdatesBtn.disabled = true;
+  settingsUpdateCheckStatus.textContent = "Checking…";
+  void window.agent.checkForUpdates();
+});
+window.agent.onUpdateStatus((status) => {
+  if (status.state === "checking") {
+    settingsCheckUpdatesBtn.disabled = true;
+    settingsUpdateCheckStatus.textContent = "Checking…";
+    return;
+  }
+  settingsCheckUpdatesBtn.disabled = false;
+  if (status.state === "not-available") {
+    settingsUpdateCheckStatus.textContent = "You're on the latest version.";
+  } else if (status.state === "downloading") {
+    settingsUpdateCheckStatus.textContent = `Downloading update… (${status.percent}%)`;
+  } else if (status.state === "ready") {
+    settingsUpdateCheckStatus.textContent = `Update v${status.version} ready — restart to install.`;
+  } else if (status.state === "fallback") {
+    settingsUpdateCheckStatus.textContent = `Update v${status.version} available.`;
+  }
 });
 
 const commandPaletteDeps: CommandPaletteDeps = {

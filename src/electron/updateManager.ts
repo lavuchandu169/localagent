@@ -2,6 +2,7 @@ export interface AutoUpdaterLike {
   allowPrerelease: boolean;
   autoDownload: boolean;
   on(event: "update-available", listener: (info: { version: string }) => void): unknown;
+  on(event: "update-not-available", listener: () => void): unknown;
   on(event: "download-progress", listener: (progress: { percent: number }) => void): unknown;
   on(event: "update-downloaded", listener: (info: { version: string; downloadedFile?: string }) => void): unknown;
   on(event: "error", listener: (err: Error) => void): unknown;
@@ -10,6 +11,13 @@ export interface AutoUpdaterLike {
 }
 
 export type UpdateStatus =
+  /** Only ever broadcast for a manually-triggered check (the Settings
+   * "Check for Updates" button) — the periodic background check (every
+   * checkIntervalMs) stays silent unless it actually finds something, same
+   * as before this status existed, so it doesn't pop the banner open on
+   * every check that finds nothing. */
+  | { state: "checking" }
+  | { state: "not-available" }
   | { state: "downloading"; percent: number }
   | { state: "ready"; version: string }
   /** canOpenDownloadedFile is true only when a real download completed (update-downloaded fired with a real downloadedFile path) before whatever failed — the common case on an unsigned Mac build, where the download itself succeeds but Squirrel.Mac's in-place apply step doesn't. */
@@ -56,6 +64,19 @@ export interface UpdateManager {
    * listener in main.ts.
    */
   isInstalling: () => boolean;
+  /**
+   * Manually triggers a check — the Settings "Check for Updates" button's
+   * handler. Broadcasts "checking" immediately (synchronously, before the
+   * real check even resolves) so the UI gets instant feedback, then either
+   * the existing "update-available"/"error" handlers take over (a real
+   * update, or a real failure), or — if neither fires — "not-available"
+   * once the check itself resolves with nothing found. The periodic
+   * background check (every checkIntervalMs) does NOT go through this path
+   * and stays exactly as silent-unless-it-finds-something as before this
+   * feature existed; only a manual check ever broadcasts "checking" or
+   * "not-available".
+   */
+  checkForUpdates: () => void;
 }
 
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
@@ -88,11 +109,24 @@ export function wireAutoUpdater(deps: UpdateManagerDeps): UpdateManager {
   let currentlyKnownUpdateVersion = "";
   /** The real path electron-updater downloaded the update artifact to, once a download has actually completed for the CURRENT currentlyKnownUpdateVersion — reset on every fresh update-available so a stale path from a superseded version's failed attempt never leaks into a newer version's fallback state. */
   let downloadedFilePath: string | undefined;
+  /** True only between a manual checkForUpdates() call and its outcome —
+   * gates "update-not-available" and the no-known-version branch of
+   * "error" below, so the periodic background check (which calls
+   * autoUpdater.checkForUpdates() the same way) stays exactly as silent
+   * when nothing is found as it was before this feature existed. */
+  let manualCheckInProgress = false;
 
   autoUpdater.on("update-available", (info) => {
+    manualCheckInProgress = false;
     currentlyKnownUpdateVersion = info.version;
     downloadedFilePath = undefined;
     broadcast({ state: "downloading", percent: 0 });
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    if (!manualCheckInProgress) return;
+    manualCheckInProgress = false;
+    broadcast({ state: "not-available" });
   });
 
   autoUpdater.on("download-progress", (progress) => {
@@ -117,7 +151,17 @@ export function wireAutoUpdater(deps: UpdateManagerDeps): UpdateManager {
     // disable the periodic re-check — reset both flags unconditionally.
     updateReadyToInstall = false;
     installingForUpdate = false;
-    if (!currentlyKnownUpdateVersion) return;
+    if (!currentlyKnownUpdateVersion) {
+      // No version to show in a real "fallback" state (nothing has ever
+      // been found yet) — only worth telling the user anything at all if
+      // they're actively waiting on a manual check right now; a silent
+      // background check failing is exactly as quiet as it always was.
+      if (manualCheckInProgress) {
+        manualCheckInProgress = false;
+        broadcast({ state: "not-available" });
+      }
+      return;
+    }
     broadcast({ state: "fallback", version: currentlyKnownUpdateVersion, canOpenDownloadedFile: downloadedFilePath !== undefined });
   });
 
@@ -156,5 +200,18 @@ export function wireAutoUpdater(deps: UpdateManagerDeps): UpdateManager {
       });
     },
     isInstalling: () => installingForUpdate,
+    checkForUpdates: () => {
+      // Already mid-check (manual or the ever-running initial/periodic
+      // one) — let it finish rather than racing a second concurrent call
+      // into the same flag.
+      if (manualCheckInProgress) return;
+      manualCheckInProgress = true;
+      broadcast({ state: "checking" });
+      autoUpdater.checkForUpdates().catch((err) => {
+        console.warn("[autoUpdater] manual checkForUpdates() threw:", err);
+        manualCheckInProgress = false;
+        broadcast({ state: "not-available" });
+      });
+    },
   };
 }

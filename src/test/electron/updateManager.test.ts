@@ -339,6 +339,126 @@ console.log("\nwireAutoUpdater — opening the downloaded file when the in-place
   check("openDownloadedFile() stays a no-op after the stale path was reset", calls.length === 0);
 }
 
+console.log("\nwireAutoUpdater — manual checkForUpdates() (Settings \"Check for Updates\" button):");
+{
+  const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
+  const statuses: UpdateStatus[] = [];
+
+  const manager = wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: (s) => statuses.push(s),
+    onBeforeQuit: () => {},
+    openPath,
+    setIntervalFn: () => 0,
+  });
+  statuses.length = 0; // drop the broadcast-free initial automatic check's own side effects (there are none, but clears the slate explicitly)
+
+  manager.checkForUpdates();
+  check("calling checkForUpdates() broadcasts 'checking' immediately, before the real check resolves", JSON.stringify(statuses[0]) === JSON.stringify({ state: "checking" }));
+
+  fakeUpdater.emit("update-not-available");
+  check("update-not-available after a manual check broadcasts 'not-available'", JSON.stringify(statuses[1]) === JSON.stringify({ state: "not-available" }));
+
+  // A second manual check must work again — the flag from the first one
+  // was correctly cleared once its outcome arrived, not left stuck "true".
+  manager.checkForUpdates();
+  check("a later manual check can run again after a previous one finished", JSON.stringify(statuses[2]) === JSON.stringify({ state: "checking" }));
+}
+{
+  // The critical regression this feature must NOT cause: the existing
+  // automatic initial/periodic check also calls autoUpdater.checkForUpdates()
+  // and can also receive update-not-available — that must stay exactly as
+  // silent as it always was. Only a MANUAL check ever broadcasts anything
+  // for "nothing found".
+  const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
+  const statuses: UpdateStatus[] = [];
+
+  wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: (s) => statuses.push(s),
+    onBeforeQuit: () => {},
+    openPath,
+    setIntervalFn: () => 0,
+  });
+
+  // No manager.checkForUpdates() call here — this update-not-available is
+  // standing in for the automatic initial check's own outcome.
+  fakeUpdater.emit("update-not-available");
+  check("update-not-available with no manual check in progress broadcasts nothing (background checks stay silent)", statuses.length === 0);
+}
+{
+  // A second concurrent call while one is already in flight must not
+  // double-broadcast "checking" or call the real checkForUpdates() again.
+  const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
+  const statuses: UpdateStatus[] = [];
+
+  const manager = wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: (s) => statuses.push(s),
+    onBeforeQuit: () => {},
+    openPath,
+    setIntervalFn: () => 0,
+  });
+
+  const callsBefore = fakeUpdater.checkForUpdatesCallCount();
+  manager.checkForUpdates();
+  const callsAfterFirst = fakeUpdater.checkForUpdatesCallCount();
+  manager.checkForUpdates();
+  check("a second checkForUpdates() call while one is already in progress doesn't call the real check again", fakeUpdater.checkForUpdatesCallCount() === callsAfterFirst);
+  check("the real check WAS called exactly once for the first call", callsAfterFirst === callsBefore + 1);
+  check("only one 'checking' status was ever broadcast, not two", statuses.filter((s) => s.state === "checking").length === 1);
+}
+{
+  // A real update found during a manual check behaves exactly like the
+  // automatic path — normal downloading/ready progression, no separate
+  // "checking"-specific handling needed once update-available fires.
+  const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
+  const statuses: UpdateStatus[] = [];
+
+  const manager = wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: (s) => statuses.push(s),
+    onBeforeQuit: () => {},
+    openPath,
+    setIntervalFn: () => 0,
+  });
+
+  manager.checkForUpdates();
+  fakeUpdater.emit("update-available", { version: "9.9.9" });
+  check(
+    "a manual check that finds a real update still broadcasts 'checking' then 'downloading', not 'not-available'",
+    JSON.stringify(statuses) === JSON.stringify([{ state: "checking" }, { state: "downloading", percent: 0 }])
+  );
+}
+{
+  // An error during a manual check, with no previously-known update
+  // version (so the existing "fallback" state has nothing to show), must
+  // still give the button SOME feedback rather than leaving it stuck on
+  // "Checking…" forever.
+  const fakeUpdater = createFakeAutoUpdater();
+  const { openPath } = createFakeOpenPath();
+  const statuses: UpdateStatus[] = [];
+
+  const manager = wireAutoUpdater({
+    autoUpdater: fakeUpdater,
+    broadcast: (s) => statuses.push(s),
+    onBeforeQuit: () => {},
+    openPath,
+    setIntervalFn: () => 0,
+  });
+
+  manager.checkForUpdates();
+  fakeUpdater.emit("error", new Error("offline"));
+  check(
+    "an error during a manual check with no known version broadcasts 'not-available' instead of leaving the button stuck",
+    JSON.stringify(statuses) === JSON.stringify([{ state: "checking" }, { state: "not-available" }])
+  );
+}
+
 console.log("\nwireAutoUpdater — periodic re-check:");
 {
   const fakeUpdater = createFakeAutoUpdater();

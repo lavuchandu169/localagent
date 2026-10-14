@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld("agent", {
   },
   installUpdate: () => ipcRenderer.invoke("agent:install-update"),
   openUpdateFile: () => ipcRenderer.invoke("agent:open-update-file"),
+  checkForUpdates: () => ipcRenderer.invoke("agent:check-for-updates"),
   listMcpServers: () => ipcRenderer.invoke("agent:list-mcp-servers"),
   addMcpServer: (input) => ipcRenderer.invoke("agent:add-mcp-server", input),
   testMcpServer: (input) => ipcRenderer.invoke("agent:test-mcp-server", input),
