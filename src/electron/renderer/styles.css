@@ -2063,7 +2063,8 @@ label .hint-text {
 .log-text h6,
 .log-text p,
 .log-text ul,
-.log-text ol {
+.log-text ol,
+.log-text table {
   white-space: normal;
   margin: 0.5em 0;
 }
@@ -2072,7 +2073,8 @@ label .hint-text {
 .log-text h3:first-child,
 .log-text p:first-child,
 .log-text ul:first-child,
-.log-text ol:first-child {
+.log-text ol:first-child,
+.log-text table:first-child {
   margin-top: 0;
 }
 .log-text h1 {
@@ -2103,6 +2105,20 @@ label .hint-text {
   color: var(--accent);
   text-decoration: underline;
   cursor: pointer;
+}
+.log-text table {
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.log-text th,
+.log-text td {
+  border: 1px solid var(--border);
+  padding: 0.3em 0.6em;
+  text-align: left;
+}
+.log-text th {
+  background: var(--bg-raised);
+  font-weight: 600;
 }
 .markdown-code-block {
   margin: 0.5em 0;

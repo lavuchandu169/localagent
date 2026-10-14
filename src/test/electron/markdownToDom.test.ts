@@ -171,15 +171,73 @@ console.log("\nrenderMarkdown — paragraphs and mixed content:");
   );
 }
 
+console.log("\nrenderMarkdown — tables:");
+{
+  const container = render("| a | b |\n| - | - |\n| 1 | 2 |");
+  const table = container.querySelector("table");
+  check("a GFM-style pipe table becomes a real <table> element", table !== null);
+  const headerCells = table ? [...table.querySelectorAll("thead th")].map((el) => el.textContent) : [];
+  check("the header row's cells are real <th> elements with the right text, in order", JSON.stringify(headerCells) === JSON.stringify(["a", "b"]));
+  const bodyRows = table ? [...table.querySelectorAll("tbody tr")].map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent)) : [];
+  check("the body row's cells are real <td> elements with the right text, in order", JSON.stringify(bodyRows) === JSON.stringify([["1", "2"]]));
+}
+{
+  // A live-reported regression: before table support existed, a model's
+  // own markdown table got silently squashed into one unreadable line by
+  // the paragraph-joining logic — worse than not supporting tables at
+  // all. Multiple body rows must each stay a distinct real <tr>.
+  const container = render(
+    "Here's a comparison:\n| Algorithm | Best | Worst |\n|---|---|---|\n| Bubble Sort | O(n) | O(n^2) |\n| Merge Sort | O(n log n) | O(n log n) |"
+  );
+  const table = container.querySelector("table");
+  check("a table preceded by an intro paragraph still becomes a real <table>, not one squashed line", table !== null);
+  check("the intro text stays a separate paragraph, not joined into the table", container.querySelector("p")?.textContent === "Here's a comparison:");
+  const bodyRows = table ? [...table.querySelectorAll("tbody tr")] : [];
+  check("each data row is its own real <tr>, not joined into a single line", bodyRows.length === 2);
+}
+{
+  // Column alignment markers (:--- left, ---: right, :---: center) — GFM's
+  // own syntax for this, applied as a real text-align style per column.
+  const container = render("| Name | Qty | Price |\n|:---|---|---:|\n| Widget | 3 | $5 |");
+  const cells = [...container.querySelectorAll<HTMLElement>("thead th")];
+  check("a left-aligned column (':---') carries left text-align", cells[0]?.style.textAlign === "left");
+  check("a column with no alignment marker ('---') has none set", cells[1]?.style.textAlign === "");
+  check("a right-aligned column ('---:') carries right text-align", cells[2]?.style.textAlign === "right");
+  const bodyCells = [...container.querySelectorAll<HTMLElement>("tbody td")];
+  check("the body row's own cells carry the same column alignment as the header", bodyCells[0]?.style.textAlign === "left" && bodyCells[2]?.style.textAlign === "right");
+}
+{
+  // Inline formatting must still work inside table cells, same as any
+  // other block — reuses renderInline rather than a separate code path.
+  const container = render("| Name | Link |\n|---|---|\n| **Bold** | [docs](https://example.com) |");
+  check("bold text inside a table cell becomes a real <strong> element", container.querySelector("tbody td strong")?.textContent === "Bold");
+  const link = container.querySelector("tbody td a");
+  check("a link inside a table cell becomes a real, safe <a> element", link !== null && link.getAttribute("href") === "https://example.com");
+}
+{
+  // Outer pipes are optional in GFM — a table with no leading/trailing "|"
+  // on each row must still be recognized and parsed the same way.
+  const container = render("a | b\n---|---\n1 | 2");
+  const table = container.querySelector("table");
+  check("a table without outer pipes on its rows is still recognized", table !== null);
+  check(
+    "its cells are parsed the same as the piped form",
+    [...(table?.querySelectorAll("thead th") ?? [])].map((el) => el.textContent).join(",") === "a,b"
+  );
+}
+
 console.log("\nrenderMarkdown — graceful fallback and edge cases:");
 {
   const container = render("");
   check("empty input never throws and produces no visible block elements", container.children.length === 0);
 }
 {
-  const container = render("| a | b |\n| - | - |\n| 1 | 2 |");
-  check("unsupported syntax (a table) never throws — just shows as plain text, not parsed into a table", container.querySelector("table") === null);
-  check("the literal text is still visible somewhere, not silently dropped", container.textContent?.includes("a") === true);
+  // No delimiter row (just a line with "|" in it, and an ordinary next
+  // line) — this is NOT a table, just a paragraph that happens to
+  // contain a "|" character; must never be misdetected as one.
+  const container = render("a | b\njust a normal next line, not a delimiter row");
+  check("a lone line with a pipe but no delimiter row underneath is never misdetected as a table", container.querySelector("table") === null);
+  check("it's still shown as plain readable text, not silently dropped", container.textContent?.includes("a | b") === true);
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

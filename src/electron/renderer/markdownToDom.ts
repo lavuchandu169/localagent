@@ -1,12 +1,12 @@
 /**
  * Parses a small, deliberately limited markdown subset into real DOM
  * nodes — headers, bold/italic, inline code, fenced code blocks, lists,
- * and links — never via innerHTML. This app's CSP (main.ts) and the
- * project's own repeated documented norm (mcpServersPanel.ts,
+ * tables, and links — never via innerHTML. This app's CSP (main.ts) and
+ * the project's own repeated documented norm (mcpServersPanel.ts,
  * renderer.ts, onboarding.ts's own tiny code-span parser) are explicit:
  * untrusted/model-generated text must never be parsed as HTML. Anything
- * outside this subset (tables, blockquotes, images, nested inline
- * formatting) just renders as plain text — never throws, never breaks.
+ * outside this subset (blockquotes, images, nested inline formatting)
+ * just renders as plain text — never throws, never breaks.
  */
 
 export interface MarkdownRenderOptions {
@@ -19,16 +19,57 @@ export interface MarkdownRenderOptions {
   writeToClipboard?: (text: string) => Promise<void>;
 }
 
+type Alignment = "left" | "center" | "right" | null;
+
 type Block =
   | { type: "heading"; level: number; content: string }
   | { type: "code"; lang: string; content: string }
   | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "table"; header: string[]; alignments: Alignment[]; rows: string[][] }
   | { type: "paragraph"; content: string };
 
 const HEADING_RE = /^(#{1,6})\s+(.*)$/;
 const FENCE_RE = /^```(\S*)\s*$/;
 const UL_ITEM_RE = /^[-*]\s+(.*)$/;
 const OL_ITEM_RE = /^\d+\.\s+(.*)$/;
+// A GFM-style table needs a header row followed immediately by a
+// delimiter row of dash/colon groups, one per column (e.g. `|---|:--:|`
+// or without the outer pipes) — the delimiter row is what distinguishes
+// a real table from a paragraph that merely happens to contain a "|".
+const TABLE_DELIMITER_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+/** Splits one table row line into its raw (untrimmed-formatting, still
+ * inline-markdown) cell strings — drops a single leading/trailing `|`
+ * (outer pipes are optional in GFM) but doesn't handle a `|` escaped
+ * inside a cell's own content, consistent with this module's "small,
+ * deliberately limited" scope. */
+function splitTableRow(line: string): string[] {
+  let trimmed = line.trim();
+  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+/** Whether `lines[i]` begins a table — the same look-ahead (current line
+ * has a "|", next line is a valid delimiter row) used both to start
+ * parsing one, and to stop a paragraph from swallowing it: without the
+ * second use, a paragraph immediately followed by a table (no blank line
+ * between them, both completely valid) would consume the table's own
+ * lines as more paragraph text and join them with spaces — reproducing
+ * the exact "table squashed into one line" regression this feature
+ * exists to fix, just one line later than intro text. */
+function isTableStart(lines: string[], i: number): boolean {
+  return i + 1 < lines.length && lines[i]!.includes("|") && TABLE_DELIMITER_RE.test(lines[i + 1]!);
+}
+
+function delimiterCellToAlignment(cell: string): Alignment {
+  const left = cell.startsWith(":");
+  const right = cell.endsWith(":");
+  if (left && right) return "center";
+  if (right) return "right";
+  if (left) return "left";
+  return null;
+}
 
 function splitIntoBlocks(text: string): Block[] {
   const lines = text.split(/\r?\n/);
@@ -95,13 +136,30 @@ function splitIntoBlocks(text: string): Block[] {
       continue;
     }
 
+    // Table: the current line plus the NEXT line (a delimiter row) are
+    // what commit to treating this as a table rather than a paragraph
+    // that merely contains a "|" — ordinary prose is never immediately
+    // followed by a dash/colon delimiter row like this.
+    if (isTableStart(lines, i)) {
+      const header = splitTableRow(line);
+      const alignments = splitTableRow(lines[i + 1]!).map(delimiterCellToAlignment);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i]!.trim() !== "" && lines[i]!.includes("|")) {
+        rows.push(splitTableRow(lines[i]!));
+        i++;
+      }
+      blocks.push({ type: "table", header, alignments, rows });
+      continue;
+    }
+
     // Paragraph: consume consecutive plain lines until a blank line or
     // the start of a different block type.
     const paragraphLines = [line];
     i++;
     while (i < lines.length) {
       const next = lines[i]!;
-      if (next.trim() === "" || FENCE_RE.test(next) || HEADING_RE.test(next) || UL_ITEM_RE.test(next) || OL_ITEM_RE.test(next)) break;
+      if (next.trim() === "" || FENCE_RE.test(next) || HEADING_RE.test(next) || UL_ITEM_RE.test(next) || OL_ITEM_RE.test(next) || isTableStart(lines, i)) break;
       paragraphLines.push(next);
       i++;
     }
@@ -240,6 +298,10 @@ export function renderMarkdown(text: string, options: MarkdownRenderOptions): Do
         fragment.appendChild(el);
         break;
       }
+      case "table": {
+        fragment.appendChild(renderTable(block, options));
+        break;
+      }
       case "paragraph": {
         const el = document.createElement("p");
         el.appendChild(renderInline(block.content, options));
@@ -249,4 +311,36 @@ export function renderMarkdown(text: string, options: MarkdownRenderOptions): Do
     }
   }
   return fragment;
+}
+
+function renderTable(block: { header: string[]; alignments: Alignment[]; rows: string[][] }, options: MarkdownRenderOptions): HTMLElement {
+  const table = document.createElement("table");
+
+  const thead = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  block.header.forEach((cell, i) => {
+    const th = document.createElement("th");
+    const alignment = block.alignments[i];
+    if (alignment) th.style.textAlign = alignment;
+    th.appendChild(renderInline(cell, options));
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const row of block.rows) {
+    const tr = document.createElement("tr");
+    row.forEach((cell, i) => {
+      const td = document.createElement("td");
+      const alignment = block.alignments[i];
+      if (alignment) td.style.textAlign = alignment;
+      td.appendChild(renderInline(cell, options));
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+
+  return table;
 }
