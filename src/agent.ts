@@ -116,19 +116,33 @@ Rules:
 
 /**
  * A rough "this task asks for a file to end up different than it is now"
- * signal — deliberately generous (false positives just cost one harmless
- * extra nudge turn; false negatives bring back the exact bug this exists to
- * catch), used only to gate the corrective nudge below. Originally covered
+ * signal, used only to gate the corrective nudge below. Originally covered
  * only literal creation verbs (create/build/add/...); a real report showed
  * a modification-phrased task ("change the X route from GET to POST") hit
  * the exact same code-in-prose failure and slipped through uncaught, so
  * this also covers changing/fixing/refactoring existing code — not just
  * building something new.
+ *
+ * The verb match alone is NOT generous-but-harmless the way it first looked
+ * — a live report showed a plain "write me a python code for binary search"
+ * (no file named anywhere) matching "write" and getting nudged toward
+ * edit_file for a request that was only ever asking for code shown in chat,
+ * burning all 3 nudge attempts and then failing the task outright with
+ * "nothing was changed" for a question that was answered correctly on the
+ * very first turn. Same distinction this app's own system prompt (rule 11)
+ * already draws for plain prose vs. a real file request: only treat this as
+ * a file task when the task text actually names one or clearly implies one
+ * (a dotted filename token, or the word "file"/"files" itself) — a bare
+ * request for code/text with no file ever mentioned never belongs here,
+ * regardless of which verb it happens to use.
  */
 function taskImpliesCreation(task: string): boolean {
-  return /\b(create|write|rewrite|build|design|scaffold|make|generate|implement|add|change|update|modify|fix|patch|refactor|rename|edit|replace|convert|remove|delete|optimi[sz]e|tweak|clean ?up)\b/i.test(
-    task
-  );
+  const hasCreationVerb =
+    /\b(create|write|rewrite|build|design|scaffold|make|generate|implement|add|change|update|modify|fix|patch|refactor|rename|edit|replace|convert|remove|delete|optimi[sz]e|tweak|clean ?up)\b/i.test(
+      task
+    );
+  if (!hasCreationVerb) return false;
+  return /\b[\w-]+\.[a-zA-Z0-9]{1,8}\b/.test(task) || /\bfiles?\b/i.test(task);
 }
 
 /** Whether a response's text contains a real fenced code block — the tell-tale sign the model wrote out file content instead of calling edit_file. Checks both fence styles (``` and ~~~); a model doesn't reliably pick one over the other. */

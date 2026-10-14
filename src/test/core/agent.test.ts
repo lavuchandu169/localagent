@@ -1841,6 +1841,36 @@ await (async () => {
   }
 
   {
+    // A real reported failure, live-tested: "write me a python code for
+    // binary search" matches taskImpliesCreation's verb list ("write") but
+    // never names or implies an actual file — the exact same distinction
+    // this app's own system prompt (rule 11) already draws for prose vs.
+    // file-creation requests. Answering with plain code in chat (like
+    // Claude/ChatGPT would) must never be nudged toward edit_file here.
+    const script: ChatResponse[] = [
+      { turn: { type: "final", content: "Here's binary search:\n```python\ndef binary_search(arr, target):\n    pass\n```" } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "PLAN",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("write me a python code for binary search p/s")) {
+      events.push(event);
+    }
+    check(
+      "a bare 'write me code' request with no file named is never nudged, even though 'write' matches the verb list",
+      !events.some((e) => e.type === "status" && e.message.includes("nudging"))
+    );
+    const doneEvent = events.find((e) => e.type === "done");
+    check("it completes successfully on the first turn, with the code shown in chat", doneEvent?.type === "done" && doneEvent.success === true);
+  }
+
+  {
     // The model DID try to write and was refused (PLAN mode denies WRITE
     // outright) — that's a real policy decision already surfaced to the
     // model, not the "never even tried" failure the nudge exists to catch.
