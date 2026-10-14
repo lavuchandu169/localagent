@@ -128,6 +128,34 @@ function findJsonObjectCandidates(text: string): string[] {
  * JSON.parse has already failed, so a candidate this can't actually fix
  * just fails again exactly as before — no regression versus not trying.
  */
+/**
+ * Rewrites a Python-style triple-quoted string (`"""..."""`) into a single
+ * valid JSON string — recovers a second specific live failure mode from
+ * Qwen2.5-Coder 1.5B: instead of escaping a multi-line `content` value as
+ * `"line1\nline2"`, it wrapped the raw, literal multi-line text in Python's
+ * own triple-quote syntax, which JSON has no equivalent for. Neither a
+ * direct JSON.parse nor repairUnescapedQuotes (which only fixes stray
+ * quote characters, never raw control characters) can recover that on
+ * their own. Finds each `"""..."""` span and re-escapes its exact inner
+ * text — backslashes and quotes first, then literal newlines/carriage
+ * returns/tabs — into one properly quoted JSON string with the same
+ * content. Best-effort only, same spirit as repairUnescapedQuotes: tried
+ * after a direct parse has already failed, so a candidate this can't
+ * actually fix just fails again exactly as before.
+ */
+function repairTripleQuotedStrings(text: string): string {
+  return text.replace(/"""([\s\S]*?)"""/g, (_match, inner: string) => {
+    const escaped = inner
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\r\n/g, "\\n")
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\n")
+      .replace(/\t/g, "\\t");
+    return `"${escaped}"`;
+  });
+}
+
 function repairUnescapedQuotes(text: string): string {
   let result = "";
   for (let i = 0; i < text.length; i++) {
@@ -186,17 +214,22 @@ function tryParseFallbackToolCall(response: string): { name: string; arguments: 
   const candidates = findJsonObjectCandidates(searchText);
   for (let i = candidates.length - 1; i >= 0; i--) {
     const candidate = candidates[i]!;
+    // Tried in order of how much repair each needs: a well-formed
+    // candidate parses on the first attempt; one with only the
+    // triple-quote mistake or only the stray-quote mistake is fixed by
+    // its own repair alone; one with both mistakes together needs both
+    // repairs composed.
+    const attempts = [candidate, repairTripleQuotedStrings(candidate), repairUnescapedQuotes(candidate), repairUnescapedQuotes(repairTripleQuotedStrings(candidate))];
     let parsed: unknown;
-    try {
-      parsed = JSON.parse(candidate);
-    } catch {
+    for (const attempt of attempts) {
       try {
-        parsed = JSON.parse(repairUnescapedQuotes(candidate));
+        parsed = JSON.parse(attempt);
+        break;
       } catch {
-        continue;
+        parsed = undefined;
       }
     }
-    if (isToolCallShape(parsed)) return { ...parsed, rawMatch: fenced ? fenced[0] : candidate };
+    if (parsed !== undefined && isToolCallShape(parsed)) return { ...parsed, rawMatch: fenced ? fenced[0] : candidate };
   }
   return null;
 }

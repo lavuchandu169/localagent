@@ -250,6 +250,35 @@ console.log("\ntryParseFallbackToolCall's own parsing edge cases, via fromLlamaR
   const response = fromLlamaResult(result);
   check("a response with no JSON at all is left as plain final text", response.turn.type === "final" && response.turn.content === result.response);
 }
+{
+  // A real reported failure, live-tested: Qwen2.5-Coder 1.5B wrapped a
+  // multi-line code "content" value in Python-style triple quotes
+  // (`"""..."""`) with raw, literal newlines inside — instead of a single
+  // `"` pair with the newlines properly escaped as `\n`. repairUnescapedQuotes
+  // only ever repairs stray QUOTE characters; it has no way to fix a raw
+  // control character sitting inside what's meant to be a JSON string, so
+  // this candidate failed both the direct parse and the repair pass and
+  // fell all the way through to null — meaning the entire malformed blob
+  // (````json` fence, `"name"/"arguments"` structure and all) got shown to
+  // the user as garbled literal text instead of either a real tool call or
+  // a clean code answer.
+  const result = {
+    response:
+      '```json\n{\n  "name": "edit_file",\n  "arguments": {\n    "path": "binary_search.py",\n    "content": """\ndef binary_search(arr, target):\n    low, high = 0, len(arr) - 1\n    while low <= high:\n        mid = (low + high) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            low = mid + 1\n        else:\n            high = mid - 1\n    return -1\n"""\n  }\n}\n```',
+  };
+  const response = fromLlamaResult(result);
+  check(
+    "a content value wrapped in Python-style triple quotes with raw embedded newlines is still recovered as a real tool call",
+    response.turn.type === "tool_calls" && response.turn.toolCalls[0]?.name === "edit_file"
+  );
+  check(
+    "the recovered content value contains the real code with actual newlines, not escaped literal \\n text",
+    response.turn.type === "tool_calls" &&
+      typeof (response.turn.toolCalls[0]?.arguments as any)?.content === "string" &&
+      ((response.turn.toolCalls[0]?.arguments as any).content as string).includes("\n    low, high = 0, len(arr) - 1\n") &&
+      ((response.turn.toolCalls[0]?.arguments as any).content as string).includes("def binary_search(arr, target):")
+  );
+}
 
 console.log("\nmaybeSamplePerf (local-model live tokens/sec + context-usage throttling):");
 {
