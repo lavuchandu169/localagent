@@ -2321,6 +2321,11 @@ function resetToSetup(): void {
 }
 
 newSessionBtn.addEventListener("click", () => tabStripNew.click());
+// Lives in the persistent activity-bar (unlike newSessionBtn, which is
+// inside the sidebar itself and so disappears when it's collapsed) —
+// same ChatGPT/VS Code convention of keeping "new" reachable regardless
+// of sidebar state. Proxies to the same existing action, not a new one.
+byId<HTMLButtonElement>("new-session-rail-btn").addEventListener("click", () => newSessionBtn.click());
 
 // `triggerEl` is the specific sidebar item that was clicked — previously
 // clicking it gave no feedback at all until the resume finished. It's
