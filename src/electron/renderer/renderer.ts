@@ -49,6 +49,7 @@ import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setA
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import { renderDiff } from "./diffView.js";
 import { renderMarkdown } from "./markdownToDom.js";
+import { loadSidebarCollapsed, saveSidebarCollapsed } from "./sidebarToggle.js";
 import {
   initChangesPanel,
   isChangesPanelOpen,
@@ -391,6 +392,24 @@ themeSelect.addEventListener("change", () => {
   } catch {
     // Best-effort — if this fails, the theme just resets next launch; not worth surfacing an error for.
   }
+});
+
+// Sidebar collapse/expand — purely a display toggle over the existing
+// sessions sidebar (search/list/new-session button all untouched); the
+// activity-bar's own icon stays visible even when the sidebar itself is
+// hidden, so there's always a way back. Same persisted-preference pattern
+// as the theme above.
+const sidebarEl = byId<HTMLElement>("sidebar");
+const sidebarToggleBtn = byId<HTMLButtonElement>("sidebar-toggle");
+function applySidebarCollapsed(collapsed: boolean): void {
+  sidebarEl.hidden = collapsed;
+  sidebarToggleBtn.setAttribute("aria-pressed", String(collapsed));
+}
+applySidebarCollapsed(loadSidebarCollapsed(localStorage));
+sidebarToggleBtn.addEventListener("click", () => {
+  const collapsed = !sidebarEl.hidden;
+  applySidebarCollapsed(collapsed);
+  saveSidebarCollapsed(localStorage, collapsed);
 });
 
 /** Sets both the setup form's workspace text and its collapsed status-bar echo shown once a session is active — kept in one place so the two never drift apart. */
