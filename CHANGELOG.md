@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.147 — 2026-10-14
+
+- Allowlist http/https before rendering a markdown link as a real <a>
+
 ## v0.1.0-beta.146 — 2026-10-13
 
 - Tell the model to flag a from-memory fallback, not present it as verified
