@@ -241,6 +241,17 @@ body {
   background: var(--bg-panel);
   overflow-y: auto;
 }
+/* The sidebar's own `display: flex` above has higher specificity (an ID
+ * selector) than the browser's default `[hidden] { display: none }` UA
+ * rule (a plain attribute selector), so setting `sidebarEl.hidden = true`
+ * (renderer.ts) silently did nothing visually — the attribute was there,
+ * the layout never changed. Live-reported: a real click (and later, a
+ * real Cmd+B) correctly toggled the attribute every time, confirmed via
+ * the DOM, but the sidebar never actually disappeared on screen. This
+ * explicit, higher-specificity override is the fix. */
+#sidebar[hidden] {
+  display: none;
+}
 
 #sidebar-header {
   display: flex;
