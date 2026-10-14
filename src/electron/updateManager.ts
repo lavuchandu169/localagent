@@ -93,15 +93,17 @@ export function wireAutoUpdater(deps: UpdateManagerDeps): UpdateManager {
   const intervalMs = deps.checkIntervalMs ?? FOUR_HOURS_MS;
   const scheduleInterval = deps.setIntervalFn ?? ((cb, ms) => setInterval(cb, ms));
 
-  // Owner decision (2026-10-11): this project is moving to a real
-  // stable/beta distinction (release.yml now only tags a "-beta.N"
-  // version as a GitHub prerelease — a plain "X.Y.Z" cut is a real
-  // release). false means auto-update only ever offers users a stable
-  // release, never a beta — matching every other app's default update
-  // channel behavior. Existing installs get NO further auto-update
-  // until the next stable version is cut; see this change's own PR for
-  // that consequence.
-  autoUpdater.allowPrerelease = false;
+  // Owner decision (2026-10-14), superseding the 2026-10-11 decision
+  // below it replaced: every release this project actually cuts is a
+  // "-beta.N" prerelease (bump-version.mjs always bumps "beta") — a real
+  // stable "X.Y.Z" has never once been tagged. With allowPrerelease
+  // false, that meant NO installed app could ever auto-update at all,
+  // confirmed live: a beta.147 install sat untouched through beta.148
+  // and beta.149 with nothing wrong except this setting. true means a
+  // beta install now auto-updates to a newer beta, same as it would to a
+  // real stable release — this project simply doesn't have a separate
+  // stable channel in practice, so gating on one left every user stuck.
+  autoUpdater.allowPrerelease = true;
   autoUpdater.autoDownload = true;
 
   let updateReadyToInstall = false;
