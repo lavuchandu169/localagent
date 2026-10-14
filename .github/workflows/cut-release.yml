@@ -258,6 +258,24 @@ jobs:
           done
 
           FINAL_STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
+          if [ "$FINAL_STATE" = "OPEN" ]; then
+            # GitHub's own auto-merge (enabled via --auto above) has, more
+            # than once now (v0.1.0-beta.59, v0.1.0-beta.147), simply never
+            # fired even though the PR's merge state was CLEAN/MERGEABLE and
+            # its one required check ("test") had already completed
+            # successfully well inside this loop's 10-minute window — a
+            # platform-side quirk, not a problem with this PR or this repo's
+            # branch protection. Before giving up, try one direct, non-auto
+            # merge: the API call itself re-validates mergeability, so if
+            # the PR genuinely isn't mergeable yet (check still pending or
+            # failed), this just fails harmlessly and falls through to the
+            # same close-and-abort path as before.
+            echo "Auto-merge never fired — attempting a direct merge as a fallback."
+            if gh pr merge "$PR_URL" --squash --delete-branch; then
+              FINAL_STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
+            fi
+          fi
+
           if [ "$FINAL_STATE" != "MERGED" ]; then
             # A still-open PR (and its release/vX branch, left behind
             # because --delete-branch above only fires on an actual merge)
