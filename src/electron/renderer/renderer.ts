@@ -407,10 +407,25 @@ function applySidebarCollapsed(collapsed: boolean): void {
   sidebarToggleBtn.setAttribute("aria-pressed", String(collapsed));
 }
 applySidebarCollapsed(loadSidebarCollapsed(localStorage));
-sidebarToggleBtn.addEventListener("click", () => {
+function toggleSidebar(): void {
   const collapsed = !sidebarEl.hidden;
   applySidebarCollapsed(collapsed);
   saveSidebarCollapsed(localStorage, collapsed);
+}
+sidebarToggleBtn.addEventListener("click", toggleSidebar);
+// A keyboard shortcut for the same toggle — same Cmd/Ctrl+<key> convention
+// as the command palette's own Cmd/Ctrl+K (commandPalette.ts), and the
+// same key VS Code/Slack use for their own sidebar toggle. A user-reported
+// live issue where a real mouse/trackpad click on the icon sometimes
+// didn't register (not reproducible in testing — synthetic clicks, a real
+// OS-level simulated click with hit-testing, and the exact installed
+// build all worked correctly) makes a second, independent way to trigger
+// this worth having regardless of whatever that turns out to be.
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    toggleSidebar();
+  }
 });
 
 /** Sets both the setup form's workspace text and its collapsed status-bar echo shown once a session is active — kept in one place so the two never drift apart. */
