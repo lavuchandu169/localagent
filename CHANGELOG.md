@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.150 — 2026-10-14
+
+- Allow auto-update between beta releases, not just to a real stable cut
+
 ## v0.1.0-beta.149 — 2026-10-14
 
 - Add a toggle to collapse/expand the existing sessions sidebar
