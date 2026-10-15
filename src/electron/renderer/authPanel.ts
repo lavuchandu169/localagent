@@ -22,6 +22,10 @@ const githubConnectedEl = byId<HTMLDivElement>("github-connected");
 const githubConnectedAsEl = byId<HTMLSpanElement>("github-connected-as");
 const githubDeviceCodeEl = byId<HTMLDivElement>("github-device-code");
 const githubSettingsErrorEl = byId<HTMLDivElement>("github-settings-error");
+const githubClientIdInput = byId<HTMLInputElement>("settings-github-client-id");
+const githubClientIdEnvOverrideEl = byId<HTMLDivElement>("github-client-id-env-override");
+const githubClientIdSavedEl = byId<HTMLDivElement>("github-client-id-saved");
+const githubClientIdSaveBtn = byId<HTMLButtonElement>("settings-github-client-id-save");
 const authSignedOut = byId<HTMLDivElement>("auth-signed-out");
 const authSignedIn = byId<HTMLDivElement>("auth-signed-in");
 const authAvatar = byId<HTMLSpanElement>("auth-avatar");
@@ -52,6 +56,22 @@ export async function refreshGithubStatus(): Promise<void> {
   githubNotConnectedEl.hidden = status.connected;
   githubConnectedEl.hidden = !status.connected;
   if (status.connected) githubConnectedAsEl.textContent = `Connected as @${status.login}`;
+}
+
+/** Re-reads the real stored Client ID every time Settings opens — same
+ * reasoning as every other credential section (correctness audit finding,
+ * GitHub Medium #3, already applied to refreshGithubStatus above): a
+ * value set from another window, or an env var toggled since last open,
+ * must never show stale. Called from renderer.ts's openSettingsPanel. */
+export async function loadGithubClientIdSettings(): Promise<void> {
+  githubSettingsErrorEl.textContent = "";
+  try {
+    const current = await window.agent.getGithubSettings();
+    githubClientIdInput.value = current.clientId;
+    githubClientIdEnvOverrideEl.hidden = !current.envOverride;
+  } catch (err) {
+    githubSettingsErrorEl.textContent = `Could not load GitHub settings: ${errorMessage(err)}`;
+  }
 }
 
 export interface AuthPanelDeps {
@@ -141,6 +161,25 @@ export function initAuthPanel(deps: AuthPanelDeps): void {
     void withBusyLabel(githubDisconnectBtn, "Disconnecting…", async () => {
       await window.agent.githubDisconnect();
       await refreshGithubStatus();
+    });
+  });
+
+  let githubClientIdSavedTimer: ReturnType<typeof setTimeout> | null = null;
+  githubClientIdSaveBtn.addEventListener("click", () => {
+    githubSettingsErrorEl.textContent = "";
+    githubClientIdSavedEl.hidden = true;
+    void withBusyLabel(githubClientIdSaveBtn, "Saving…", async () => {
+      try {
+        await window.agent.saveGithubSettings({ clientId: githubClientIdInput.value.trim() });
+        if (githubClientIdSavedTimer) clearTimeout(githubClientIdSavedTimer);
+        githubClientIdSavedEl.hidden = false;
+        githubClientIdSavedTimer = setTimeout(() => {
+          githubClientIdSavedEl.hidden = true;
+          githubClientIdSavedTimer = null;
+        }, 2500);
+      } catch (err) {
+        githubSettingsErrorEl.textContent = errorMessage(err);
+      }
     });
   });
 

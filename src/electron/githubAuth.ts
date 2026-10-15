@@ -186,7 +186,7 @@ export async function connectGithub(
   onDeviceCode?: (code: DeviceCodeResponse) => void
 ): Promise<ConnectResult> {
   if (!clientId) {
-    return { error: "GITHUB_OAUTH_CLIENT_ID is not set — add it in Settings, or wait for an official release build." };
+    return { error: "No GitHub OAuth Client ID configured — add one in Settings (gear icon → GitHub)." };
   }
   try {
     const deviceCode = await requestDeviceCode(clientId);

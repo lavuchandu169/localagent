@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld("agent", {
   githubConnect: () => ipcRenderer.invoke("agent:github-connect"),
   githubStatus: () => ipcRenderer.invoke("agent:github-status"),
   githubDisconnect: () => ipcRenderer.invoke("agent:github-disconnect"),
+  getGithubSettings: () => ipcRenderer.invoke("agent:get-github-settings"),
+  saveGithubSettings: (settings) => ipcRenderer.invoke("agent:save-github-settings", settings),
   onGithubDeviceCode: (callback) => {
     const listener = (_event, code) => callback(code);
     ipcRenderer.on("agent:github-device-code", listener);

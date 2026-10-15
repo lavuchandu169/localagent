@@ -33,7 +33,7 @@ import { reconcileSessions, DriveScopeError } from "../cloudSync.js";
 import { loadEnvFile } from "./loadEnvFile.js";
 import { isSecureStorageAvailable, electronStorageCrypto } from "./secureStorage.js";
 import { connectGithub, loadStoredGithubIdentity, clearStoredGithubIdentity, getGithubAccessToken } from "./githubAuth.js";
-import { resolveGithubClientId } from "./githubSettings.js";
+import { loadGithubSettings, saveGithubSettings, resolveGithubClientId } from "./githubSettings.js";
 import { createGithubCreateRepoTool, createGithubCreatePrTool } from "./githubTools.js";
 import { appendErrorLog } from "./errorLog.js";
 import { readAttachment, type PickedAttachment } from "./attachments.js";
@@ -671,6 +671,16 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("agent:github-disconnect", async () => {
     await clearStoredGithubIdentity(githubAuthFilePath);
+  });
+  ipcMain.handle("agent:get-github-settings", async () => {
+    const settings = await loadGithubSettings(githubSettingsFilePath, storageCrypto);
+    return {
+      clientId: settings.clientId ?? "",
+      envOverride: !!process.env.GITHUB_OAUTH_CLIENT_ID,
+    };
+  });
+  ipcMain.handle("agent:save-github-settings", async (_event, input: { clientId: string }) => {
+    await saveGithubSettings(githubSettingsFilePath, { clientId: input.clientId || null }, storageCrypto);
   });
   ipcMain.handle("agent:get-google-settings", async () => {
     const settings = await loadGoogleSettings(settingsFilePath, storageCrypto);

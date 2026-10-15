@@ -59,7 +59,7 @@ import {
   type ChangesPanelDeps,
 } from "./changesPanel.js";
 import { initCommandPalette, isCommandPaletteOpen, closeCommandPalette, type CommandPaletteDeps } from "./commandPalette.js";
-import { initAuthPanel, renderAuthState, refreshGithubStatus, type AuthPanelDeps } from "./authPanel.js";
+import { initAuthPanel, renderAuthState, refreshGithubStatus, loadGithubClientIdSettings, type AuthPanelDeps } from "./authPanel.js";
 import { initUpdateBanner } from "./updateBanner.js";
 import {
   initOnboarding,
@@ -180,6 +180,8 @@ interface AgentBridge {
   githubConnect(): Promise<{ login: string } | { error: string }>;
   githubStatus(): Promise<{ connected: true; login: string } | { connected: false }>;
   githubDisconnect(): Promise<void>;
+  getGithubSettings(): Promise<{ clientId: string; envOverride: boolean }>;
+  saveGithubSettings(settings: { clientId: string }): Promise<void>;
   onGithubDeviceCode(callback: (code: { userCode: string; verificationUri: string }) => void): () => void;
   signOut(): Promise<void>;
   getAuthStatus(): Promise<AuthStatus>;
@@ -1080,6 +1082,7 @@ async function openSettingsPanel(): Promise<void> {
   } catch (err) {
     console.error("[settings] refreshGithubStatus failed:", err);
   }
+  await loadGithubClientIdSettings();
 
   try {
     await refreshDownloadedModelsList();

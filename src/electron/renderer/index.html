@@ -221,6 +221,14 @@
             <div class="panel-section">
               <h3>GitHub</h3>
               <p>Connect an account so the agent can push commits and open pull requests on your behalf. Uses GitHub's device authorization flow: no password or token to paste.</p>
+              <div class="hint-text">Needs your own OAuth App's Client ID from GitHub. <a href="https://github.com/settings/applications/new" target="_blank" rel="noopener">github.com/settings/applications/new</a> → register a new OAuth App → enable "Device Flow" under its settings → copy the Client ID below.</div>
+              <div id="github-client-id-env-override" class="hint-text" hidden>An environment variable (GITHUB_OAUTH_CLIENT_ID) is currently active and overrides this saved value.</div>
+              <label>
+                Client ID
+                <input id="settings-github-client-id" type="text" placeholder="Iv1.xxxxxxxxxxxxxxxx" />
+              </label>
+              <div id="github-client-id-saved" class="hint-text saved-toast" hidden role="status" aria-live="polite">Saved.</div>
+              <button id="settings-github-client-id-save">Save</button>
               <div id="github-not-connected">
                 <button id="github-connect" type="button">Connect GitHub account</button>
                 <div id="github-device-code" class="hint-text" hidden></div>

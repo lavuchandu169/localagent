@@ -155,6 +155,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID_EMBED }}
           GOOGLE_OAUTH_CLIENT_SECRET_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET_EMBED }}
+          GITHUB_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GITHUB_OAUTH_CLIENT_ID_EMBED }}
 
   build-win:
     needs: create-release
@@ -198,3 +199,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID_EMBED }}
           GOOGLE_OAUTH_CLIENT_SECRET_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET_EMBED }}
+          GITHUB_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GITHUB_OAUTH_CLIENT_ID_EMBED }}
