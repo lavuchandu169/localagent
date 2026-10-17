@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.155 — 2026-10-17
+
+- Enable DRY repeat penalty to stop the embedded model's repetition loops
+
 ## v0.1.0-beta.154 — 2026-10-17
 
 - Fix fail-open state drift in the no-workspace guard
