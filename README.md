@@ -152,6 +152,8 @@ remaining gaps, instead of burying them.
   signed-out. Signed in, it turns on **automatic backup to a hidden
   folder in your Google Drive**, so history survives a reinstall or a
   move to a new machine, filtered per-account like any multi-user app.
+  (Currently hidden from the UI — see the note at the top of
+  [Google sign-in and cloud backup](#google-sign-in-and-cloud-backup).)
 - **Auto-updates** — a new version downloads itself in the background and
   offers a one-click restart, with a manual-download fallback if that
   can't complete (expected pre-code-signing).
@@ -355,13 +357,19 @@ This beta's macOS build is Apple Silicon (arm64) only — Intel Mac
 
 Google sign-in and Drive backup work in the packaged installers out of the
 box — official `.dmg`/`.exe` downloads ship with a working Client ID
-built in, so sign-in just works with no setup. If you'd rather use your
-own Google Cloud project (your own quota, your own consent screen), open
-the app's Settings panel (the gear icon next to the "?" About button) and
-paste in your own Client ID — the same credentials a from-source
-developer would put in `.env` (see below for how to create one).
+built in. The UI to reach it is currently hidden (see the note under
+[Google sign-in and cloud backup](#google-sign-in-and-cloud-backup)
+below); the embedded credentials and the rest of this paragraph describe
+how the feature works once that's reversed. If you'd rather use your
+own Google Cloud project (your own quota, your own consent screen), the
+`.env` route below still works regardless of the UI's current state.
 
 ### Google sign-in and cloud backup
+
+> **Currently hidden from the UI.** The "Sign in with Google" button and
+> the Settings panel's Google Sign-in section are temporarily hidden —
+> everything below describes how the feature works under the hood, which
+> is unchanged, but there's no visible button to reach it from right now.
 
 Optional, and it gates nothing — chat, tasks, and session history all work
 fully signed-out. Signing in additionally turns on automatic backup of your
