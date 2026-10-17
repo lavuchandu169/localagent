@@ -1775,6 +1775,80 @@ await (async () => {
   await fs.rm(repo, { recursive: true, force: true });
 })();
 
+console.log("\nsetWorkspaceRoot never promotes hasWorkspace on a redundant same-path call (security-review finding: fail-open state drift):");
+await (async () => {
+  // The exact scenario the finding describes: a session starts with no real
+  // workspace (hasWorkspace: false, the os.homedir() fallback). The
+  // renderer's "Edit settings…" flow then applies a COMPLETELY unrelated
+  // change (e.g. permission mode) but — per the I1 doc comment above —
+  // always passes the session's CURRENT workspaceRoot through to
+  // updateLiveSessionSettings regardless, which forwards it to
+  // setWorkspaceRoot(path, true). If that unconditionally flips
+  // hasWorkspace to true, a session that never had a real workspace
+  // silently loses the no-workspace guard the moment the user opens
+  // Settings and changes anything else — no folder was ever actually
+  // chosen.
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-hasworkspace-driftguard-"));
+  const realDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-hasworkspace-realpick-"));
+
+  // MockProvider consumes this script sequentially across BOTH run() calls
+  // below, same as every other multi-task test in this file. Each task
+  // needs its own trailing "final" entry too — the agent always calls the
+  // provider once more after a tool-calls turn for the model's follow-up
+  // response, whether or not the tool call was approved.
+  const script: ChatResponse[] = [
+    // Task 1 (after a redundant same-path setWorkspaceRoot call): must
+    // still be refused.
+    { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "index.html", content: "Hello, world!" } }] } },
+    { turn: { type: "final", content: "Understood." } },
+    // Task 2 (after a GENUINE path change): must now be allowed.
+    {
+      turn: {
+        type: "tool_calls",
+        toolCalls: [
+          { id: "r1", name: "read_file", arguments: { path: "x.txt" } },
+          { id: "e2", name: "edit_file", arguments: { path: "x.txt", content: "hi" } },
+        ],
+      },
+    },
+    { turn: { type: "final", content: "Done." } },
+  ];
+  const session = new AgentSession({
+    workspaceRoot: tmpDir,
+    hasWorkspace: false,
+    model: "mock",
+    provider: new MockProvider(script),
+    tools: defaultToolRegistry(),
+    permissionMode: "ACCEPT_EDITS",
+  });
+
+  // Simulates updateLiveSessionSettings's redundant pass-through on an
+  // unrelated edit: same path, hasWorkspace explicitly true (exactly what
+  // sessionRegistry.ts's updateLiveSessionSettings always passes).
+  session.setWorkspaceRoot(tmpDir, true);
+
+  const events: AgentEvent[] = [];
+  for await (const event of session.run("hello")) events.push(event);
+  const permReq = events.find((e) => e.type === "permission.request" && e.call.name === "edit_file");
+  check(
+    "a same-path settings re-send does NOT promote hasWorkspace — the guard still refuses a write",
+    !!permReq && permReq.type === "permission.request" && permReq.decision === "DENY"
+  );
+  const written = await fs.readFile(path.join(tmpDir, "index.html"), "utf-8").catch(() => null);
+  check("nothing got written as a result of the drift", written === null);
+
+  // A GENUINE path change still correctly promotes hasWorkspace (the one
+  // real way a user can leave chat-only mode: actually picking a folder).
+  session.setWorkspaceRoot(realDir, true);
+  const events2: AgentEvent[] = [];
+  for await (const event of session.run("create x.txt")) events2.push(event);
+  const permReq2 = events2.find((e) => e.type === "permission.request" && e.call.name === "edit_file");
+  check("an actual folder pick (a real path change) DOES promote hasWorkspace", !!permReq2 && permReq2.type === "permission.request" && permReq2.decision === "ALLOW");
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
+  await fs.rm(realDir, { recursive: true, force: true });
+})();
+
 console.log("\nCorrective nudge — a 'create X' task answered with code-in-prose instead of a real edit_file call:");
 await (async () => {
   // A throwaway temp dir, not fixture-repo — this scenario actually writes

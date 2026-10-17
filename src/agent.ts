@@ -370,13 +370,21 @@ export class AgentSession {
     // having happened at all.
     const changed = workspaceRoot !== this.opts.workspaceRoot;
     this.opts.workspaceRoot = workspaceRoot;
-    // Every real caller of this method (sessionRegistry.ts's
-    // updateLiveSessionSettings, reached from the renderer's "Edit
-    // settings…" flow) is the user explicitly picking a folder, so the
-    // default here is true — hasWorkspace only ever starts false via the
-    // constructor's own os.homedir() fallback path.
-    this.opts.hasWorkspace = hasWorkspace;
     if (!changed) return;
+    // Security-review finding: hasWorkspace must only ever be promoted on
+    // an ACTUAL path change, gated behind the same `changed` check as the
+    // checkpoint/skill resets below — never unconditionally. Per the I1
+    // comment above, updateLiveSessionSettings calls this on every
+    // settings apply, re-sending the session's CURRENT workspaceRoot even
+    // when the user only changed mode/planFirst and never touched the
+    // workspace field. Setting hasWorkspace = true unconditionally would
+    // let that redundant, unrelated re-send silently promote a session
+    // that never had a real workspace (the os.homedir() fallback) into
+    // one that does — defeating the whole no-workspace guard with no
+    // folder ever actually having been chosen. Gating on `changed` means
+    // the only way hasWorkspace flips to true is the one real way a user
+    // leaves chat-only mode: actually picking a different folder.
+    this.opts.hasWorkspace = hasWorkspace;
     // Correctness audit finding (session Medium #3): a checkpoint hash is
     // a commit inside a SPECIFIC git repo — carrying it over into a
     // different workspace would make a later revert try to check out
