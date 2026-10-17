@@ -465,6 +465,18 @@ export class EmbeddedLlamaProvider implements ModelProvider {
       // own contextSize cap (see loadChat's createContext call) — raising
       // this alone can't exceed whatever room is actually left in context.
       maxTokens: request.maxTokens ?? 4096,
+      // Real bug report: the smallest embedded model (0.5B Q4_K_M), asked a
+      // plain follow-up question, degenerated into the same short sentence
+      // fragment repeating verbatim for 50+ repetitions — slow enough on
+      // CPU to feel infinite long before hitting maxTokens, so the user had
+      // to cancel manually. node-llama-cpp's own repeatPenalty default (1.1
+      // over the last 64 tokens) is too weak to escape a confident
+      // low-entropy loop on a model this small. DRY is the library's
+      // purpose-built fix for exactly this shape of failure — per its own
+      // doc comment, the right parameters make verbatim repetition
+      // "impossible" — and is off unless explicitly enabled. strength: 0.8
+      // is the library's own recommended value.
+      dryRepeatPenalty: { strength: 0.8 },
       signal: request.signal,
     });
     return fromLlamaResult(result);
@@ -494,6 +506,10 @@ export class EmbeddedLlamaProvider implements ModelProvider {
         functions,
         documentFunctionParams: true,
         maxTokens: request.maxTokens ?? 4096,
+        // See chat()'s matching comment above — same real bug report, same
+        // fix, kept identical between the streaming and non-streaming
+        // paths so a repetition loop can't resurface on just one of them.
+        dryRepeatPenalty: { strength: 0.8 },
         signal: request.signal,
         onTextChunk: (text: string) => {
           queue.push({ type: "text", text });

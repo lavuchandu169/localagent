@@ -58,6 +58,45 @@ console.log("\nEmbeddedLlamaProvider.chatStream:");
   check("the terminal done event's tool call matches fromLlamaResult's own parsing", done?.response.turn.type === "tool_calls" && done.response.turn.toolCalls[0]?.name === "read_file");
 }
 
+console.log("\nEmbeddedLlamaProvider enables DRY repeat penalty (real bug report: a plain follow-up question degenerated into the same sentence fragment repeating verbatim 50+ times on the 0.5B model until the user had to cancel manually):");
+{
+  let seenOptions: any = null;
+  const fakeChat = {
+    generateResponse: async (_history: unknown, options: any) => {
+      seenOptions = options;
+      return { response: "hi" };
+    },
+  };
+  const provider = new EmbeddedLlamaProvider({ size: "fake-model" });
+  (provider as any).chatPromise = Promise.resolve(fakeChat);
+
+  await provider.chat({ model: "fake-model", messages: [{ role: "user", content: "hello" }] });
+  check(
+    "chat() enables dryRepeatPenalty at the library's own recommended strength (0.8) — node-llama-cpp's plain repeatPenalty default (1.1 over 64 tokens) is too weak to escape a confident loop on a model this small",
+    JSON.stringify(seenOptions?.dryRepeatPenalty) === JSON.stringify({ strength: 0.8 })
+  );
+}
+{
+  let seenOptions: any = null;
+  const fakeChat = {
+    generateResponse: async (_history: unknown, options: any) => {
+      seenOptions = options;
+      options.onTextChunk?.("hi");
+      return { response: "hi" };
+    },
+  };
+  const provider = new EmbeddedLlamaProvider({ size: "fake-model" });
+  (provider as any).chatPromise = Promise.resolve(fakeChat);
+
+  for await (const _e of provider.chatStream!({ model: "fake-model", messages: [{ role: "user", content: "hello" }] })) {
+    /* drain */
+  }
+  check(
+    "chatStream() enables the same dryRepeatPenalty — a loop must not be able to resurface on just the streaming path",
+    JSON.stringify(seenOptions?.dryRepeatPenalty) === JSON.stringify({ strength: 0.8 })
+  );
+}
+
 {
   // A rejected generateResponse() must propagate to the consumer of
   // chatStream, not hang or silently swallow the failure.
