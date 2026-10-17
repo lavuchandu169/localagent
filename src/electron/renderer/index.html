@@ -18,7 +18,6 @@
           <dt>Custom server</dt>
           <dd>Point it at your own Ollama, LM Studio, or vLLM server instead.</dd>
         </dl>
-        <p class="hint-text">Google sign-in (top right) is entirely optional — everything works fully signed-out. Signing in just adds automatic backup of your session history to your own Google Drive.</p>
         <button id="onboarding-dismiss" class="primary">Get started</button>
       </div>
     </div>
@@ -63,7 +62,7 @@
             <span id="brand-name">localagent</span>
           </div>
           <div id="header-right">
-            <div id="auth-control">
+            <div id="auth-control" hidden>
               <div id="auth-signed-out" class="row">
                 <button id="google-sign-in">Sign in with Google</button>
                 <button id="apple-sign-in" disabled title="Coming soon — needs an Apple Developer account and a registered domain">Sign in with Apple</button>
@@ -193,7 +192,7 @@
               </div>
             </div>
 
-            <div class="panel-section">
+            <div class="panel-section" hidden>
               <h3>Google Sign-in</h3>
               <p>Needs your own OAuth Client ID (and sometimes a Client Secret) from Google Cloud Console. Saved locally, used only to sign in.</p>
               <ol>
