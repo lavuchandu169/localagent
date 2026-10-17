@@ -155,7 +155,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID_EMBED }}
           GOOGLE_OAUTH_CLIENT_SECRET_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET_EMBED }}
-          GITHUB_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GITHUB_OAUTH_CLIENT_ID_EMBED }}
+          # GH_ prefix, not GITHUB_: that prefix is reserved by GitHub Actions
+          # for the automatic GITHUB_TOKEN/context — a custom secret named
+          # GITHUB_OAUTH_CLIENT_ID_EMBED can't even be created (gh secret set
+          # fails with HTTP 422), discovered live. See
+          # generate-embedded-credentials.mjs's matching comment.
+          GH_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GH_OAUTH_CLIENT_ID_EMBED }}
 
   build-win:
     needs: create-release
@@ -199,4 +204,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID_EMBED }}
           GOOGLE_OAUTH_CLIENT_SECRET_EMBED: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET_EMBED }}
-          GITHUB_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GITHUB_OAUTH_CLIENT_ID_EMBED }}
+          GH_OAUTH_CLIENT_ID_EMBED: ${{ secrets.GH_OAUTH_CLIENT_ID_EMBED }}
