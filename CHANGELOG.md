@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.157 — 2026-10-17
+
+- Rename the GitHub embed secret off the reserved GITHUB_ prefix
+
 ## v0.1.0-beta.156 — 2026-10-17
 
 - Note that Google sign-in's UI is currently hidden
