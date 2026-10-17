@@ -4,12 +4,16 @@
 // hand-rolled check()/console.log style as every other test in this
 // project — no framework.
 //
-// Only the deterministic parts are covered: buildSignArgs (pure) and
-// sign()'s no-op-when-unconfigured behavior. Actually downloading
-// CodeSignTool and invoking a real eSigner account isn't testable without
-// live credentials and a Windows host — see the doc comment at the top of
-// sign-windows.mjs.
-import sign, { buildSignArgs } from "./sign-windows.mjs";
+// Only the deterministic parts are covered: buildSignArgs (pure),
+// sha256File (pure given a file on disk), and sign()'s
+// no-op-when-unconfigured behavior. Actually downloading CodeSignTool,
+// verifying it against the real pinned hash, and invoking a real eSigner
+// account isn't testable without live network access and a Windows host —
+// see the doc comment at the top of sign-windows.mjs.
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import sign, { buildSignArgs, sha256File } from "./sign-windows.mjs";
 
 let failures = 0;
 function check(name, cond) {
@@ -43,6 +47,21 @@ console.log("buildSignArgs:");
   check(
     "includes -output_dir_path, which also avoids CodeSignTool's interactive overwrite prompt",
     args.includes("-output_dir_path=C:\\temp\\out")
+  );
+}
+
+console.log("\nsha256File:");
+{
+  // A known vector (SHA-256 of the ASCII string "localagent\n") rather than
+  // an arbitrary fixture, so the expected hash is independently verifiable
+  // (e.g. `printf 'localagent\n' | shasum -a 256`) instead of just trusting
+  // whatever this script happens to compute.
+  const tmpFile = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "sha256-test-")), "fixture.txt");
+  await fs.writeFile(tmpFile, "localagent\n", "utf-8");
+  const hash = await sha256File(tmpFile);
+  check(
+    "computes the correct SHA-256 for a known file — this is the integrity check that refuses to extract/run a tampered CodeSignTool download",
+    hash === "0473ae8e72cc6bfc047506fed47305f12433b2ae2846bba237342e0e1c2a1abe"
   );
 }
 
