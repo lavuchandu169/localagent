@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.154 — 2026-10-17
+
+- Fix fail-open state drift in the no-workspace guard
+
 ## v0.1.0-beta.153 — 2026-10-17
 
 - Refuse file edits and commands when no workspace is selected
