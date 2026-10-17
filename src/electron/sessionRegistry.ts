@@ -246,6 +246,7 @@ export async function startSession(
   const sessionId = deps.resume?.sessionId ?? crypto.randomUUID();
   const pendingApprovals = new Map<string, (response: PermissionResponse) => void>();
   const pendingPlanApproval: { resolve: ((approved: boolean) => void) | null } = { resolve: null };
+  const hasWorkspace = config.workspaceRoot !== undefined;
   const workspaceRoot = config.workspaceRoot ?? os.homedir();
 
   // Starting a session under an id that's already live (a resume of a
@@ -292,6 +293,7 @@ export async function startSession(
 
   const session = new AgentSession({
     workspaceRoot,
+    hasWorkspace,
     model:
       config.provider.kind === "openai-compatible"
         ? config.provider.model
@@ -380,7 +382,12 @@ export function updateLiveSessionSettings(
 ): boolean {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return false;
-  if (updates.workspaceRoot !== undefined) entry.session.setWorkspaceRoot(updates.workspaceRoot);
+  // Reaching this from the renderer's "Edit settings…" flow always means
+  // the user explicitly picked a folder — hasWorkspace is true here even
+  // though setWorkspaceRoot defaults to true anyway, to make that explicit
+  // at the one call site that can flip a session from no-workspace into a
+  // real one.
+  if (updates.workspaceRoot !== undefined) entry.session.setWorkspaceRoot(updates.workspaceRoot, true);
   if (updates.mode !== undefined) entry.session.setPermissionMode(updates.mode);
   if (updates.planFirst !== undefined) entry.session.setPlanFirst(updates.planFirst);
   return true;

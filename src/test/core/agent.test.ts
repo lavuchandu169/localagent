@@ -2863,6 +2863,144 @@ await (async () => {
   }
 })();
 
+console.log("\nNo workspace selected — chat-only guard (real bug report: a plain \"hello\" with no folder chosen got an edit_file call proposed and approved into the home directory):");
+{
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-no-workspace-test-"));
+
+  {
+    // The exact reported shape: the model's very first turn is a tool call
+    // that writes a file, even though the task itself (a greeting) implies
+    // nothing of the kind — ACCEPT_EDITS is used so the test is maximally
+    // strict: even a mode that would normally auto-ALLOW a write must still
+    // refuse it when hasWorkspace is false.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "index.html", content: "Hello, world!" } }] } },
+      { turn: { type: "final", content: "Done." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      hasWorkspace: false,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("hello their!")) events.push(event);
+
+    check("an edit_file call is never actually started/executed", !events.some((e) => e.type === "tool.start" && e.call.name === "edit_file"));
+    const permReq = events.find((e) => e.type === "permission.request" && e.call.name === "edit_file");
+    check("the call is reported DENIED rather than silently dropped", !!permReq && permReq.type === "permission.request" && permReq.decision === "DENY");
+    check("no diff is computed/shown for a path that was never really chosen", !!permReq && permReq.type === "permission.request" && !("diff" in permReq));
+    const writtenContent = await fs.readFile(path.join(tmpDir, "index.html"), "utf-8").catch(() => null);
+    check("nothing was actually written to disk", writtenContent === null);
+    const toolReply = session.getMessages().find((m) => m.role === "tool" && m.tool_call_id === "e1");
+    check(
+      "the model is told explicitly why, so it can explain to the user",
+      !!toolReply && toolReply.role === "tool" && JSON.parse(toolReply.content).error.includes("No workspace is open")
+    );
+    const doneEvents = events.filter((e) => e.type === "done");
+    check("the task still completes normally instead of hanging/crashing", doneEvents.length === 1 && doneEvents[0]?.type === "done" && doneEvents[0].success === true);
+  }
+
+  {
+    // EXECUTE-permission tools (run_command) are covered by the same
+    // guard, not just WRITE — a hallucinated shell command is at least as
+    // dangerous as a hallucinated file write.
+    const script: ChatResponse[] = [{ turn: { type: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: { command: "echo hi" } }] } }];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      hasWorkspace: false,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("hi")) events.push(event);
+    check("run_command is refused the same way edit_file is", !events.some((e) => e.type === "tool.start" && e.call.name === "run_command"));
+  }
+
+  {
+    // READ tools must keep working with no workspace selected — the
+    // guard is about preventing writes/execution into an unchosen
+    // location, not about disabling the agent entirely. The real app's
+    // own demo footage relies on a plain list_directory answering fine
+    // with no folder chosen.
+    const script: ChatResponse[] = [
+      { turn: { type: "tool_calls", toolCalls: [{ id: "l1", name: "list_directory", arguments: {} }] } },
+      { turn: { type: "final", content: "Here's what's there." } },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      hasWorkspace: false,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("what's in my directory")) events.push(event);
+    check("a READ tool (list_directory) still runs normally with no workspace selected", events.some((e) => e.type === "tool.result" && e.call.name === "list_directory" && e.result.ok));
+  }
+
+  {
+    // Regression safety: every existing caller omits hasWorkspace entirely
+    // (a real chosen workspace) — the exact same read-then-edit shape (the
+    // nudge test above's own pattern, so edit_file is grounded in a prior
+    // read_file and isn't downgraded to ASK by the unrelated
+    // "never auto-apply an ungrounded rewrite" check) must behave exactly
+    // as before (auto-ALLOW in ACCEPT_EDITS, file actually written),
+    // proving this guard is additive, not a behavior change for sessions
+    // that do have a real workspace.
+    const script: ChatResponse[] = [
+      {
+        turn: {
+          type: "tool_calls",
+          toolCalls: [
+            { id: "r2", name: "read_file", arguments: { path: "hello.txt" } },
+            { id: "e2", name: "edit_file", arguments: { path: "hello.txt", content: "hi" } },
+          ],
+        },
+      },
+    ];
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      model: "mock",
+      provider: new MockProvider(script),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+    const events: AgentEvent[] = [];
+    for await (const event of session.run("create hello.txt")) events.push(event);
+    const permReq = events.find((e) => e.type === "permission.request" && e.call.name === "edit_file");
+    check("with a real workspace (hasWorkspace omitted), the same call is still auto-ALLOWED as before", !!permReq && permReq.type === "permission.request" && permReq.decision === "ALLOW");
+    const writtenContent = await fs.readFile(path.join(tmpDir, "hello.txt"), "utf-8").catch(() => null);
+    check("and the file is actually written, unaffected by the new guard", writtenContent === "hi");
+  }
+
+  {
+    // The system prompt itself carries the chat-only note when there's no
+    // real workspace, as defense-in-depth for models that do follow prose
+    // instructions (the guard above is what protects against ones that
+    // don't).
+    const session = new AgentSession({
+      workspaceRoot: tmpDir,
+      hasWorkspace: false,
+      model: "mock",
+      provider: new MockProvider([{ turn: { type: "final", content: "hi" } }]),
+      tools: defaultToolRegistry(),
+      permissionMode: "ACCEPT_EDITS",
+    });
+    const systemMessage = session.getMessages()[0];
+    check(
+      "the system prompt tells the model it's chat-only with no workspace open",
+      !!systemMessage && systemMessage.role === "system" && systemMessage.content.includes("chat-only") && systemMessage.content.includes("do not call edit_file")
+    );
+  }
+}
+
 console.log("\nAgent loop (scripted debug-fix scenario):");
 {
   const __filename = fileURLToPath(import.meta.url);

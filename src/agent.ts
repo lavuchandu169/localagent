@@ -30,6 +30,21 @@ import { applyOldStringReplace } from "./editResolution.js";
 
 export interface AgentSessionOptions {
   workspaceRoot: string;
+  /**
+   * False when workspaceRoot is only a fallback (sessionRegistry.ts's
+   * startSession falls back to os.homedir() when the user never picked a
+   * folder) rather than a folder the user actually chose. Undefined/true
+   * behaves exactly like every existing caller/test today. When false, any
+   * non-READ tool call (edit_file, delete_file, run_command — see the main
+   * dispatch loop below) is refused outright instead of being proposed for
+   * approval: a real bug report showed the model proposing — and a diff
+   * actually rendering for — an edit_file call into the user's home
+   * directory after a plain "hello" with no workspace ever selected.
+   * Prompt-only guidance can't be relied on alone, since the failure was
+   * seen on a small embedded model (see tryParseFallbackToolCall in
+   * embeddedLlama.ts) that doesn't reliably follow it.
+   */
+  hasWorkspace?: boolean;
   model: string;
   provider: ModelProvider;
   tools: ToolRegistry;
@@ -324,7 +339,12 @@ export class AgentSession {
         }
       }
     } else {
-      this.messages.push({ role: "system", content: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT });
+      const basePrompt = opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+      const prompt =
+        opts.hasWorkspace === false
+          ? `${basePrompt}\n\nNo workspace folder is open right now, so this is chat-only: do not call edit_file, delete_file, or run_command — answer in conversation instead. If the user wants file edits or commands run, tell them to choose a workspace first (top of the composer).`
+          : basePrompt;
+      this.messages.push({ role: "system", content: prompt });
     }
     if (opts.initialCheckpointHash) this.checkpointHash = opts.initialCheckpointHash;
   }
@@ -340,7 +360,7 @@ export class AgentSession {
    * between tasks (never call it mid-run() — the effect on a tool call
    * already in flight is undefined).
    */
-  setWorkspaceRoot(workspaceRoot: string): void {
+  setWorkspaceRoot(workspaceRoot: string, hasWorkspace = true): void {
     // Final-review finding I1: renderer.ts's applySessionEdits ("Edit
     // settings…") always passes the CURRENT workspaceRoot through to this
     // call, even when the user only changed mode/planFirst and never
@@ -350,6 +370,12 @@ export class AgentSession {
     // having happened at all.
     const changed = workspaceRoot !== this.opts.workspaceRoot;
     this.opts.workspaceRoot = workspaceRoot;
+    // Every real caller of this method (sessionRegistry.ts's
+    // updateLiveSessionSettings, reached from the renderer's "Edit
+    // settings…" flow) is the user explicitly picking a folder, so the
+    // default here is true — hasWorkspace only ever starts false via the
+    // constructor's own os.homedir() fallback path.
+    this.opts.hasWorkspace = hasWorkspace;
     if (!changed) return;
     // Correctness audit finding (session Medium #3): a checkpoint hash is
     // a commit inside a SPECIFIC git repo — carrying it over into a
@@ -667,6 +693,11 @@ export class AgentSession {
    * total no-op in both cases, identical to today's behavior.
    */
   private async *autoVerifyAfterEdit(): AsyncGenerator<AgentEvent, boolean> {
+    // Mirrors the main dispatch loop's hasWorkspace guard: this only ever
+    // runs after a successful WRITE, which the dispatch loop guard already
+    // prevents with no real workspace — kept explicit rather than relying
+    // on that invariant alone.
+    if (this.opts.hasWorkspace === false) return false;
     const command = await detectVerifyCommand(this.opts.workspaceRoot);
     if (!command) return false;
     const tool = this.opts.tools.get("run_command");
@@ -1022,6 +1053,26 @@ export class AgentSession {
             tool_call_id: call.id,
             name: call.name,
             content: JSON.stringify({ ok: false, error: `Unknown tool: ${call.name}` }),
+          });
+          continue;
+        }
+
+        // No real workspace was ever chosen (see hasWorkspace's doc comment
+        // on AgentSessionOptions) — refuse outright, before any diff is
+        // computed or approval is offered. READ tools (read_file,
+        // list_directory, grep) still work: they're harmless without a
+        // real project root and the demo UI already relies on them
+        // (e.g. list_directory) answering fine with no workspace selected.
+        if (tool.permission !== "READ" && this.opts.hasWorkspace === false) {
+          yield { type: "permission.request", call, decision: "DENY" };
+          this.messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            name: call.name,
+            content: JSON.stringify({
+              ok: false,
+              error: "No workspace is open — choose a folder (top of the composer) before I can edit files or run commands.",
+            }),
           });
           continue;
         }
