@@ -54,8 +54,20 @@ export const editFileTool: Tool<Input, { path: string; bytesWritten: number; cre
     } catch {
       created = true;
     }
-    await fs.mkdir(path.dirname(abs), { recursive: true });
-    await fs.writeFile(abs, input.content, "utf8");
+    // Code-review finding: these two calls had no try/catch, unlike every
+    // sibling tool (read_file, delete_file). A real, unavoidable failure
+    // here — ENOSPC (disk full), EACCES (read-only directory), ENOTDIR —
+    // threw out of this async function with nothing catching it until
+    // sessionRegistry.ts's top-level handler, three layers up, which ends
+    // the WHOLE task on a generic "Unexpected session error" instead of
+    // giving the model a recoverable { ok: false, error } it could read
+    // and work around.
+    try {
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(abs, input.content, "utf8");
+    } catch (err: any) {
+      return { ok: false, output: null, error: `Could not write ${input.path}: ${err.message}` };
+    }
     ctx.log(`${created ? "Created" : "Edited"} ${input.path}`);
     return { ok: true, output: { path: input.path, bytesWritten: Buffer.byteLength(input.content), created } };
   },

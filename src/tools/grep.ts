@@ -145,7 +145,21 @@ export const grepTool: Tool<Input, { matches: string }> = {
     const root = resolved.abs;
     let result = await tryRipgrep(input.pattern, root);
     if (result === null) {
-      result = await jsFallbackGrep(input.pattern, root);
+      // Code-review finding: jsFallbackGrep's `new RegExp(pattern)` had no
+      // try/catch. grep is a READ tool, auto-allowed in every permission
+      // mode including PLAN, so a malformed-but-plausible pattern from the
+      // model (an unterminated group, a bad quantifier range) was
+      // reachable with zero user interaction — and this is the COMMON
+      // path, not a rare one: it's reached whenever rg isn't installed at
+      // all, or when rg's own Rust regex engine rejects the pattern and
+      // falls through by design. Nothing between here and
+      // sessionRegistry.ts's top-level handler caught the resulting
+      // SyntaxError, so one bad pattern ended the whole task.
+      try {
+        result = await jsFallbackGrep(input.pattern, root);
+      } catch (err: any) {
+        return { ok: false, output: null, error: `Invalid regex pattern: ${err.message}` };
+      }
     }
     // Security audit finding H1: grep never redacted secrets in its
     // output, unlike read_file — a pattern matching a real credential's

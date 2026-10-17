@@ -151,6 +151,28 @@ async function main() {
     await fs.rm(bigPath, { force: true });
   }
 
+  console.log("\ngrepTool: an invalid regex pattern returns a clean tool error instead of throwing out of execute() (code-review finding — grep is a READ tool auto-allowed in every mode including PLAN, so a malformed pattern from the model was reachable with zero user interaction, and nothing caught it until sessionRegistry.ts, ending the WHOLE task):");
+  {
+    // No real `rg` binary exists in this environment (confirmed: only a
+    // shell function, which spawn() without shell:true never sees), so
+    // this always reaches jsFallbackGrep's `new RegExp(pattern)` — the
+    // same path a real rg install also falls back to for any pattern its
+    // own Rust regex engine rejects (exit code 2).
+    let threw = false;
+    let result: Awaited<ReturnType<typeof grepTool.execute>> | undefined;
+    try {
+      result = await grepTool.execute({ pattern: "(" }, ctx); // unterminated group — invalid in both regex dialects
+    } catch {
+      threw = true;
+    }
+    check("execute() returns a result instead of throwing out of the async function", !threw);
+    check("the returned result reports ok:false", !!result && result.ok === false);
+    check(
+      "the error message says something concrete, not left undefined",
+      !!result && result.ok === false && typeof result.error === "string" && result.error.length > 0
+    );
+  }
+
   await fs.rm(root, { recursive: true, force: true });
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
