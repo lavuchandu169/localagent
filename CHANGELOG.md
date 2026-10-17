@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.159 — 2026-10-17
+
+- Implement Windows code signing via SSL.com eSigner/CodeSignTool
+
 ## v0.1.0-beta.158 — 2026-10-17
 
 - Update the GitHub Settings hint now that official builds embed a Client ID
