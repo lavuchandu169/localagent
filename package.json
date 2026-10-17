@@ -78,7 +78,10 @@
         }
       ],
       "signtoolOptions": {
-        "sign": "scripts/sign-windows.mjs"
+        "sign": "scripts/sign-windows.mjs",
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
       }
     },
     "publish": {
