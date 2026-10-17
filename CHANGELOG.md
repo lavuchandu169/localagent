@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.153 — 2026-10-17
+
+- Refuse file edits and commands when no workspace is selected
+
 ## v0.1.0-beta.152 — 2026-10-15
 
 - Add a real Settings UI for the GitHub Client ID, and wire its CI embed
