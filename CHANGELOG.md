@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.163 — 2026-10-22
+
+- Replace fetch_url's regex-based IP range checks with node:net's BlockList
+
 ## v0.1.0-beta.162 — 2026-10-22
 
 - Rewrite README.md in Simplified Technical English (ASD-STE100 style)
