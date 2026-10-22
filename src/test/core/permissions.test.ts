@@ -186,5 +186,16 @@ await (async () => {
   await fsPromises.rm(workspaceRoot, { recursive: true, force: true });
 })();
 
+console.log("\nPermissionEngine.evaluate: a tool whose OWN permission is NETWORK (e.g. fetch_url) — not a classifyCommand result — is always ASK, never silently auto-allowed:");
+{
+  const fetchCall: ToolCall = { id: "call_0", name: "fetch_url", arguments: { url: "https://example.com" } };
+  for (const mode of ["DEFAULT", "ACCEPT_EDITS", "AUTO_SAFE"] as const) {
+    const engine = new PermissionEngine(mode);
+    check(`${mode} mode: a NETWORK-permission tool call is ASK`, engine.evaluate(fetchCall, "NETWORK") === "ASK");
+  }
+  const planEngine = new PermissionEngine("PLAN");
+  check("PLAN mode: a NETWORK-permission tool call is DENY, same as any other non-READ tool", planEngine.evaluate(fetchCall, "NETWORK") === "DENY");
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

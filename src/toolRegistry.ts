@@ -5,6 +5,7 @@ import { grepTool } from "./tools/grep.js";
 import { editFileTool } from "./tools/editFile.js";
 import { deleteFileTool } from "./tools/deleteFile.js";
 import { runCommandTool } from "./tools/runCommand.js";
+import { fetchUrlTool } from "./tools/fetchUrl.js";
 
 export class ToolRegistry {
   private fixedTools = new Map<string, Tool>();
@@ -60,5 +61,5 @@ export function defaultToolRegistry(getExtraTools: () => Tool[] = () => []): Too
   // task. A model only ever encounters the name "load_skill" now via
   // agent.ts's own dispatch-level fallback (its "unknown tool" branch),
   // never as a listed, choosable tool.
-  return new ToolRegistry([readFileTool, listDirectoryTool, grepTool, editFileTool, deleteFileTool, runCommandTool], getExtraTools);
+  return new ToolRegistry([readFileTool, listDirectoryTool, grepTool, editFileTool, deleteFileTool, runCommandTool, fetchUrlTool], getExtraTools);
 }
