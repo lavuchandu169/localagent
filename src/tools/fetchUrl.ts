@@ -74,7 +74,8 @@ function isBlockedAddress(address: string): boolean {
   if (h === "::1" || h === "::" || h === "0:0:0:0:0:0:0:1" || h === "0:0:0:0:0:0:0:0") return true;
   if (/^f[cd][0-9a-f]{0,2}:/.test(h)) return true; // IPv6 unique local (fc00::/7)
   if (/^fe80:/.test(h)) return true; // IPv6 link-local
-  const mapped = extractIPv4MappedAddress(h);
+  if (/^fec0:/.test(h)) return true; // deprecated IPv6 site-local (fec0::/10)
+  const mapped = extractEmbeddedIPv4(h);
   if (mapped) return isBlockedIPv4(mapped);
   return false;
 }
@@ -88,23 +89,37 @@ function isBlockedIPv4(ip: string): boolean {
   if (a === 172 && b >= 16 && b <= 31) return true; // RFC1918
   if (a === 192 && b === 168) return true; // RFC1918
   if (a === 169 && b === 254) return true; // link-local, incl. cloud metadata endpoints
-  if (ip === "0.0.0.0") return true;
+  if (a === 0) return true; // 0.0.0.0/8 — "this network"
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 — shared address space (CGNAT)
+  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 — benchmarking
+  if (a >= 224) return true; // 224.0.0.0/4 multicast through 255.255.255.255 reserved
   return false;
 }
 
-/** `::ffff:127.0.0.1` and its compressed-hex form `::ffff:7f00:1` both mean
- * the same IPv4-mapped address; `new URL()` normalizes the former into the
- * latter, so both shapes must be recognized. */
-function extractIPv4MappedAddress(hostname: string): string | null {
-  const m = hostname.match(/^::ffff:([0-9a-f:.]+)$/i);
-  const rest = m?.[1];
-  if (!rest) return null;
-  if (net.isIPv4(rest)) return rest;
-  const hex = rest.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
-  if (!hex || !hex[1] || !hex[2]) return null;
-  const hi = parseInt(hex[1], 16);
-  const lo = parseInt(hex[2], 16);
-  return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+/** Three IPv6 notations embed a literal IPv4 address in their trailing 32
+ * bits, and `new URL()` normalizes each to its shortest hex-compressed
+ * form, so the trailing groups must be decoded (not pattern-matched as
+ * text) to recover the address they actually mean:
+ *  - `::ffff:a.b.c.d` / `::ffff:7f00:1` — IPv4-mapped (RFC4291 2.5.5.2)
+ *  - `64:ff9b::a.b.c.d` / `64:ff9b::7f00:1` — NAT64 (RFC6052)
+ *  - `::a.b.c.d` / `::7f00:1` — deprecated IPv4-compatible (RFC4291 2.5.5.1)
+ * Checked in this order so the two more specific prefixes aren't mistaken
+ * for a bare `::`-compressed address (which the last pattern alone would
+ * never match anyway, since it requires exactly two trailing groups with
+ * nothing else after "::").
+ */
+function extractEmbeddedIPv4(hostname: string): string | null {
+  for (const re of [/^::ffff:([0-9a-f:.]+)$/i, /^64:ff9b::([0-9a-f:.]+)$/i, /^::([0-9a-f]{1,4}:[0-9a-f]{1,4})$/i]) {
+    const rest = hostname.match(re)?.[1];
+    if (!rest) continue;
+    if (net.isIPv4(rest)) return rest;
+    const hex = rest.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (!hex || !hex[1] || !hex[2]) continue;
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+  }
+  return null;
 }
 
 /**

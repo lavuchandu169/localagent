@@ -76,6 +76,14 @@ async function main() {
       "http://2130706433/", // decimal-integer form of 127.0.0.1 — WHATWG URL normalizes this to 127.0.0.1 itself
       "http://[::ffff:127.0.0.1]/", // IPv4-mapped IPv6 literal
       "http://[::ffff:7f00:1]/", // same address, compressed-hex IPv6 form
+      "http://0.1.2.3/", // 0.0.0.0/8 — "this network"
+      "http://100.64.0.1/", // 100.64.0.0/10 — shared address space (CGNAT)
+      "http://198.18.0.1/", // 198.18.0.0/15 — benchmarking
+      "http://224.0.0.1/", // 224.0.0.0/4 — multicast
+      "http://240.0.0.1/", // 240.0.0.0/4 — reserved
+      "http://[fec0::1]/", // fec0::/10 — deprecated IPv6 site-local
+      "http://[64:ff9b::7f00:1]/", // 64:ff9b::/96 NAT64, embedding 127.0.0.1
+      "http://[::7f00:1]/", // ::/96 IPv4-compatible IPv6 (deprecated), embedding 127.0.0.1
     ];
     for (const url of targets) {
       fetchWasCalled = false;
