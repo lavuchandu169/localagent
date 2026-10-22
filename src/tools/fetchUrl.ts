@@ -1,5 +1,5 @@
 import { promises as dns } from "node:dns";
-import net from "node:net";
+import net, { BlockList } from "node:net";
 import type { Tool, ToolContext } from "../types.js";
 
 interface Input {
@@ -68,32 +68,52 @@ function stripTrailingDot(h: string): string {
   return h.endsWith(".") ? h.slice(0, -1) : h;
 }
 
-function isBlockedAddress(address: string): boolean {
-  if (net.isIPv4(address)) return isBlockedIPv4(address);
-  const h = address.toLowerCase();
-  if (h === "::1" || h === "::" || h === "0:0:0:0:0:0:0:1" || h === "0:0:0:0:0:0:0:0") return true;
-  if (/^f[cd][0-9a-f]{0,2}:/.test(h)) return true; // IPv6 unique local (fc00::/7)
-  if (/^fe80:/.test(h)) return true; // IPv6 link-local
-  if (/^fec0:/.test(h)) return true; // deprecated IPv6 site-local (fec0::/10)
-  const mapped = extractEmbeddedIPv4(h);
-  if (mapped) return isBlockedIPv4(mapped);
-  return false;
-}
+/**
+ * All actual range-membership checks go through node:net's own BlockList
+ * rather than hand-written prefix regexes. This replaces a real,
+ * now-twice-repeated bug class: a text prefix like `/^fe80:/` only matches
+ * the single literal "fe80:" opening, but fe80::/10 as a CIDR actually
+ * covers fe80:: through febf:: (any value with the right two leading
+ * bits) — fe90::1 or feb0::1 would have silently sailed past a regex that
+ * narrow. BlockList.check() parses the address into bytes and tests the
+ * real numeric prefix instead, so this bug class can't recur here.
+ *
+ * Deliberately NOT added as entries here: ::ffff:0:0/96 (IPv4-mapped),
+ * 64:ff9b::/96 and 64:ff9b:1::/48 (NAT64), or the deprecated ::/96
+ * (IPv4-compatible). Each of those prefixes is used to carry an arbitrary
+ * IPv4 address inside an IPv6 literal — including entirely public ones —
+ * so blocking the prefix itself would wrongly block every public address
+ * reachable through it. (Confirmed empirically: adding ::ffff:0:0/96 as a
+ * blocked IPv6 subnet made BlockList also report an ordinary public IPv4
+ * address as blocked when checked under the "ipv4" family — Node's
+ * family-aware matching treats the two as the same underlying address.)
+ * Those three prefixes are handled instead by extractEmbeddedIPv4 below,
+ * which decodes the carried address and re-checks THAT against this same
+ * list under the "ipv4" family.
+ */
+const BLOCKED_RANGES = new BlockList();
+BLOCKED_RANGES.addSubnet("127.0.0.0", 8, "ipv4"); // loopback
+BLOCKED_RANGES.addSubnet("10.0.0.0", 8, "ipv4"); // RFC1918
+BLOCKED_RANGES.addSubnet("172.16.0.0", 12, "ipv4"); // RFC1918
+BLOCKED_RANGES.addSubnet("192.168.0.0", 16, "ipv4"); // RFC1918
+BLOCKED_RANGES.addSubnet("169.254.0.0", 16, "ipv4"); // link-local, incl. cloud metadata endpoints
+BLOCKED_RANGES.addSubnet("100.64.0.0", 10, "ipv4"); // shared address space (CGNAT)
+BLOCKED_RANGES.addSubnet("198.18.0.0", 15, "ipv4"); // benchmarking
+BLOCKED_RANGES.addSubnet("224.0.0.0", 4, "ipv4"); // multicast (224.0.0.0/4)
+BLOCKED_RANGES.addSubnet("240.0.0.0", 4, "ipv4"); // reserved, incl. 255.255.255.255 (240.0.0.0/4)
+BLOCKED_RANGES.addSubnet("0.0.0.0", 8, "ipv4"); // "this network"
+BLOCKED_RANGES.addSubnet("::1", 128, "ipv6"); // loopback
+BLOCKED_RANGES.addSubnet("::", 128, "ipv6"); // unspecified
+BLOCKED_RANGES.addSubnet("fc00::", 7, "ipv6"); // unique local
+BLOCKED_RANGES.addSubnet("fe80::", 10, "ipv6"); // link-local
+BLOCKED_RANGES.addSubnet("fec0::", 10, "ipv6"); // deprecated site-local
 
-function isBlockedIPv4(ip: string): boolean {
-  const parts = ip.split(".").map(Number);
-  const a = parts[0] ?? -1;
-  const b = parts[1] ?? -1;
-  if (a === 127) return true; // loopback
-  if (a === 10) return true; // RFC1918
-  if (a === 172 && b >= 16 && b <= 31) return true; // RFC1918
-  if (a === 192 && b === 168) return true; // RFC1918
-  if (a === 169 && b === 254) return true; // link-local, incl. cloud metadata endpoints
-  if (a === 0) return true; // 0.0.0.0/8 — "this network"
-  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 — shared address space (CGNAT)
-  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 — benchmarking
-  if (a >= 224) return true; // 224.0.0.0/4 multicast through 255.255.255.255 reserved
-  return false;
+function isBlockedAddress(address: string): boolean {
+  if (net.isIPv4(address)) return BLOCKED_RANGES.check(address, "ipv4");
+  if (!net.isIPv6(address)) return false; // not a literal IP at all — nothing to range-check
+  const mapped = extractEmbeddedIPv4(address.toLowerCase());
+  if (mapped) return BLOCKED_RANGES.check(mapped, "ipv4");
+  return BLOCKED_RANGES.check(address, "ipv6");
 }
 
 /** Three IPv6 notations embed a literal IPv4 address in their trailing 32
@@ -107,6 +127,12 @@ function isBlockedIPv4(ip: string): boolean {
  * for a bare `::`-compressed address (which the last pattern alone would
  * never match anyway, since it requires exactly two trailing groups with
  * nothing else after "::").
+ *
+ * Not handled: 6to4 (2002::/16), which embeds an IPv4 address in bits
+ * 16-48 rather than the trailing 32 bits, needing different extraction
+ * math entirely. Accepted gap — 6to4 has been disabled by default in
+ * every mainstream OS for close to a decade, and every fetch still only
+ * happens after a human approves the exact URL shown.
  */
 function extractEmbeddedIPv4(hostname: string): string | null {
   for (const re of [/^::ffff:([0-9a-f:.]+)$/i, /^64:ff9b::([0-9a-f:.]+)$/i, /^::([0-9a-f]{1,4}:[0-9a-f]{1,4})$/i]) {

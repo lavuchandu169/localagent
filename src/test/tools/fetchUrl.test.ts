@@ -82,6 +82,10 @@ async function main() {
       "http://224.0.0.1/", // 224.0.0.0/4 — multicast
       "http://240.0.0.1/", // 240.0.0.0/4 — reserved
       "http://[fec0::1]/", // fec0::/10 — deprecated IPv6 site-local
+      "http://[fed0::1]/", // same /10 range, NOT the literal "fec0:" prefix — a text-prefix check misses this
+      "http://[feb0::1]/", // same /10 range, the other boundary a text-prefix check misses
+      "http://[fe90::1]/", // fe80::/10 link-local, NOT the literal "fe80:" prefix — same bug class
+      "http://[::]/", // unspecified address
       "http://[64:ff9b::7f00:1]/", // 64:ff9b::/96 NAT64, embedding 127.0.0.1
       "http://[::7f00:1]/", // ::/96 IPv4-compatible IPv6 (deprecated), embedding 127.0.0.1
     ];
