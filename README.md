@@ -35,6 +35,7 @@ Everything in this document is real. It works today. For the list of gaps, see [
 - [Desktop app](#desktop-app)
   - [Multi-session tabs](#multi-session-tabs)
   - [MCP servers](#mcp-servers)
+  - [Organization](#organization)
   - [Checkpoints, diffs, and file changes](#checkpoints-diffs-and-file-changes)
   - [Custom models: type a path or search Hugging Face](#custom-models-type-a-path-or-search-hugging-face)
   - [Command palette](#command-palette)
@@ -84,6 +85,7 @@ Everything in this document is real. It works today. For the list of gaps, see [
 - **A command palette** (Ctrl+K or Cmd+K). Type to jump to any saved session, or to open a panel. You do not need to search through the sidebar.
 - **Session history.** Every finished task saves itself automatically. A sidebar lists past sessions and searches their full text. Resuming a session restores its full model context. It is not just a read-only transcript.
 - **MCP client support.** Connect local MCP servers: a GitHub server, a Postgres server, or any server that speaks the protocol. Their tools then appear next to the built-in tools.
+- **Organization.** Set up named roles and a backlog of initiatives, then run an initiative as a real session under that role's own model. See [Organization](#organization).
 - **Optional Google sign-in.** It gates nothing: the app works fully when you are signed out. When you sign in, the app turns on automatic backup to a hidden folder in your Google Drive. Your history then survives a reinstall, or a move to a new machine. The backup is filtered per account, the same as in any multi-user app. (This sign-in option is currently hidden from the UI. See the note at the top of [Google sign-in and cloud backup](#google-sign-in-and-cloud-backup).)
 - **Auto-updates.** A new version downloads itself in the background. It then offers a one-click restart. If that cannot finish (expected before code-signing is in place), the app falls back to a manual download.
 
@@ -181,6 +183,24 @@ Open up to 6 sessions at once, in a real tab strip. Each tab keeps running and u
 ### MCP servers
 
 Connect the agent to local MCP servers: a GitHub server, a Postgres server, or any server that speaks the protocol. Do this from the MCP Servers panel (the 🔌 icon). Every tool a connected server offers then appears next to the built-in tools. Every call to a connected server's tool asks for your approval first, in every permission mode, the same as a shell command does.
+
+### Organization
+
+Open the Organization panel with the 🏢 icon. Use it to set up a small group of named roles and a backlog of initiatives for one workspace. It stores this setup at `<workspace>/.localagent/organization.json`.
+
+Set it up in order:
+
+1. Choose a workspace.
+2. State the organization's goal, in your own words.
+3. Add roles. Give each role a title (CEO, CTO, Engineer, Designer, Marketer, or any custom title you want), its responsibilities, and a model. A role's model can be an embedded local model, the free-tier router, or a cloud model with your own key.
+4. Add initiatives. Each initiative is a short task, assigned to one role.
+5. Select "Run as `<role>`" on an initiative.
+
+Running an initiative starts a real session for that role. It is the same agent loop, the same permission engine, the same per-hunk diff approval, and the same checkpoints as any session you start yourself. A role carries no special authority. Every initiative session starts in `DEFAULT` mode, so it asks for your approval before every edit and every command. The panel shows live status as the role works, and it marks the initiative done once the session finishes.
+
+This is a separate feature from the built-in `crew` skill. `crew` is a prompt that teaches one agent to role-play through a small roster inside a single task, with no persistence. Organization starts a real, separate session per role, with its own model and its own backlog that survives between app launches.
+
+**Known limitation.** The panel only shows inline status text for a running initiative, not a full session tab. If a role's task needs your approval for an edit or a command, you cannot currently approve or deny it from this panel.
 
 ### Checkpoints, diffs, and file changes
 
