@@ -960,12 +960,14 @@ initMcpServersPanel(mcpServersPanelDeps);
  * answerable exactly like any other session.
  */
 function openOrganizationSessionTab(params: { sessionId: string; workspaceRoot: string; task: string; title: string }): void {
+  // Already open — e.g. a duplicate onOrganizationSessionStarted, or the
+  // user already switched to it themselves. switchToTab is the exact same
+  // "focus + repaint + replay" sequence every other way of switching tabs
+  // in this app already goes through, so this reuses it rather than
+  // hand-rolling an equivalent one here.
   const already = findTabForSession(tabRegistry, params.sessionId);
   if (already) {
-    focusTab(tabRegistry, already.tabId);
-    renderTabStrip();
-    syncFormFromTab(already);
-    clearAndReplayEventLog(already);
+    switchToTab(already.tabId);
     return;
   }
   const current = activeTab(tabRegistry);
@@ -981,6 +983,10 @@ function openOrganizationSessionTab(params: { sessionId: string; workspaceRoot: 
   renderTabStrip();
   syncFormFromTab(tab);
   clearAndReplayEventLog(tab);
+  // The sidebar's "active"/"open-in-tab" markers are keyed off which tab is
+  // focused and which sessions are open — both just changed, same as
+  // resumeSession's own live-snapshot branch does after opening a tab.
+  void refreshSessionList(sessionSearchInput.value.trim());
 }
 
 const organizationPanelDeps: OrganizationPanelDeps = {
