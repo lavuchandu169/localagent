@@ -1,7 +1,16 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadOrganization, saveOrganization, emptyOrganization, type Organization } from "../../organization.js";
+import {
+  loadOrganization,
+  saveOrganization,
+  emptyOrganization,
+  buildInitiativeTask,
+  findRole,
+  initiativesForRole,
+  updateInitiative,
+  type Organization,
+} from "../../organization.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -113,6 +122,64 @@ async function main() {
     check("save reports ok: false instead of throwing", result.ok === false);
     check("the error is non-empty", result.ok === false && !!result.error);
     await fs.rm(root, { recursive: true, force: true });
+  }
+
+  const sampleOrg: Organization = {
+    goal: "Ship localagent v1.0 and grow real users",
+    roles: [
+      { id: "r-ceo", title: "CEO", responsibilities: "Sets priorities, reviews progress", reportsTo: null, model: "claude-sonnet-5" },
+      { id: "r-eng-1", title: "Engineer", responsibilities: "Implements features", reportsTo: "r-ceo", model: "qwen-coder-7b" },
+    ],
+    initiatives: [
+      { id: "i-1", title: "Add dark-mode toggle", assignedRoleId: "r-eng-1", status: "todo", notes: "" },
+      { id: "i-2", title: "Fix the settings crash", assignedRoleId: "r-eng-1", status: "done", notes: "Fixed in PR #42" },
+      { id: "i-3", title: "Write the Q1 roadmap", assignedRoleId: "r-ceo", status: "in-progress", notes: "Draft started" },
+      { id: "i-4", title: "Unassigned idea", assignedRoleId: null, status: "todo", notes: "" },
+    ],
+  };
+
+  console.log("\nfindRole:");
+  {
+    check("finds a role by id", findRole(sampleOrg, "r-eng-1")?.title === "Engineer");
+    check("returns undefined for an unknown id", findRole(sampleOrg, "no-such-role") === undefined);
+  }
+
+  console.log("\ninitiativesForRole:");
+  {
+    const engInitiatives = initiativesForRole(sampleOrg, "r-eng-1");
+    check("finds exactly the initiatives assigned to that role", engInitiatives.length === 2 && engInitiatives.every((i) => i.assignedRoleId === "r-eng-1"));
+    check("an unassigned initiative never shows up for any role", initiativesForRole(sampleOrg, "r-ceo").every((i) => i.id !== "i-4"));
+    check("an unknown role id returns an empty list, not an error", initiativesForRole(sampleOrg, "no-such-role").length === 0);
+  }
+
+  console.log("\nbuildInitiativeTask:");
+  {
+    const role = findRole(sampleOrg, "r-eng-1")!;
+    const initiative = sampleOrg.initiatives[0]!;
+    const task = buildInitiativeTask(sampleOrg, initiative, role);
+    check("names the role", task.includes("Engineer"));
+    check("includes the role's responsibilities", task.includes("Implements features"));
+    check("includes the organization's goal for context", task.includes("Ship localagent v1.0"));
+    check("includes the initiative's own title as the actual task", task.includes("Add dark-mode toggle"));
+
+    const withNotes = buildInitiativeTask(sampleOrg, sampleOrg.initiatives[2]!, findRole(sampleOrg, "r-ceo")!);
+    check("includes prior handoff notes when the initiative has them", withNotes.includes("Draft started"));
+
+    const withoutNotes = buildInitiativeTask(sampleOrg, initiative, role);
+    check("doesn't fabricate a notes section when there are none", !withoutNotes.toLowerCase().includes("notes/handoff"));
+  }
+
+  console.log("\nupdateInitiative:");
+  {
+    const updated = updateInitiative(sampleOrg, "i-1", { status: "in-progress", notes: "Started the toggle component" });
+    check("returns a NEW organization object (doesn't mutate the original)", updated !== sampleOrg);
+    check("the original is untouched", sampleOrg.initiatives[0]?.status === "todo");
+    check("the matching initiative is updated", updated.initiatives[0]?.status === "in-progress" && updated.initiatives[0]?.notes === "Started the toggle component");
+    check("every other initiative is unchanged", updated.initiatives[1] === sampleOrg.initiatives[1]);
+    check("roles are untouched", updated.roles === sampleOrg.roles);
+
+    const noMatch = updateInitiative(sampleOrg, "no-such-initiative", { status: "done" });
+    check("updating an unknown initiative id is a harmless no-op", JSON.stringify(noMatch) === JSON.stringify(sampleOrg));
   }
 
   console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

@@ -117,3 +117,48 @@ export async function saveOrganization(workspaceRoot: string, org: Organization)
     return { ok: false, error: err?.message ?? String(err) };
   }
 }
+
+export function findRole(org: Organization, roleId: string): Role | undefined {
+  return org.roles.find((r) => r.id === roleId);
+}
+
+export function initiativesForRole(org: Organization, roleId: string): Initiative[] {
+  return org.initiatives.filter((i) => i.assignedRoleId === roleId);
+}
+
+/**
+ * Pure functional update: returns a NEW Organization with one initiative
+ * patched, leaving the input untouched. An unknown initiativeId is a
+ * harmless no-op (returns an equivalent object) rather than an error —
+ * the caller (the session-wiring slice, once built) already knows which
+ * initiative it just ran; there's nothing a thrown error would protect
+ * against here that the no-op doesn't already handle safely.
+ */
+export function updateInitiative(org: Organization, initiativeId: string, patch: Partial<Pick<Initiative, "status" | "notes" | "assignedRoleId">>): Organization {
+  let changed = false;
+  const initiatives = org.initiatives.map((i) => {
+    if (i.id !== initiativeId) return i;
+    changed = true;
+    return { ...i, ...patch };
+  });
+  if (!changed) return org;
+  return { ...org, initiatives };
+}
+
+/**
+ * Composes the real task text an initiative's assigned role gets started
+ * with — the actual hand-off point into a normal session once the
+ * session-wiring slice exists. Deliberately plain text, not a structured
+ * prompt-injection-prone template: the role's own `responsibilities` and
+ * the initiative's own `notes` are workspace-authored content the user
+ * controls (same trust level as any other file in their own project),
+ * not external/untrusted input.
+ */
+export function buildInitiativeTask(org: Organization, initiative: Initiative, role: Role): string {
+  const lines: string[] = [`You are acting as ${role.title} in this organization.`];
+  if (role.responsibilities) lines.push(`Your responsibilities: ${role.responsibilities}`);
+  if (org.goal) lines.push(`The organization's goal: ${org.goal}`);
+  lines.push(`Your task: ${initiative.title}`);
+  if (initiative.notes) lines.push(`Notes/handoff from prior work: ${initiative.notes}`);
+  return lines.join("\n\n");
+}
