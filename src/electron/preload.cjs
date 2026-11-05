@@ -26,10 +26,18 @@ contextBridge.exposeInMainWorld("agent", {
   getDiagnostics: () => ipcRenderer.invoke("agent:diagnostics"),
   logRendererError: (entry) => ipcRenderer.invoke("agent:log-renderer-error", entry),
   openErrorLog: () => ipcRenderer.invoke("agent:open-error-log"),
+  loadOrganization: (workspaceRoot) => ipcRenderer.invoke("organization:load", workspaceRoot),
+  saveOrganization: (workspaceRoot, org) => ipcRenderer.invoke("organization:save", workspaceRoot, org),
+  runInitiative: (workspaceRoot, initiativeId) => ipcRenderer.invoke("organization:run-initiative", workspaceRoot, initiativeId),
   onEvent: (callback) => {
     const listener = (_event, sessionId, agentEvent) => callback(sessionId, agentEvent);
     ipcRenderer.on("agent:event", listener);
     return () => ipcRenderer.removeListener("agent:event", listener);
+  },
+  onOrganizationSessionStarted: (callback) => {
+    const listener = (_event, sessionId, initiativeId) => callback(sessionId, initiativeId);
+    ipcRenderer.on("organization:session-started", listener);
+    return () => ipcRenderer.removeListener("organization:session-started", listener);
   },
   onDownloadProgress: (callback) => {
     const listener = (_event, status) => callback(status);
