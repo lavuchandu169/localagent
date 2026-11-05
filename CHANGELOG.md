@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.164 — 2026-11-05
+
+- Add a built-in "crew" skill for multi-role AI-employee tasks
+
 ## v0.1.0-beta.163 — 2026-10-22
 
 - Replace fetch_url's regex-based IP range checks with node:net's BlockList
