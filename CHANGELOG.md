@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.166 — 2026-11-05
+
+- Merge branch 'fix-organization-review-findings'
+
 ## v0.1.0-beta.165 — 2026-11-05
 
 - Add the Organization renderer panel — the last piece for v1
