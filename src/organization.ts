@@ -1,42 +1,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { emptyOrganization, type Organization } from "./organizationTask.js";
 
-export interface Role {
-  id: string;
-  /** "CEO", "CTO", "Engineer", "Designer", "Marketer", or any custom title. */
-  title: string;
-  responsibilities: string;
-  /** Another role's id, or null for the top of the org (e.g. the CEO). */
-  reportsTo: string | null;
-  /** Which model this role runs as — the same model id strings already
-   * used elsewhere in the app (embedded model ids, cloud model ids, or
-   * "freellmapi-auto"). Not validated here; an unknown id is a session-
-   * start-time concern, not a data-model concern. */
-  model: string;
-}
-
-export type InitiativeStatus = "todo" | "in-progress" | "done";
-
-export interface Initiative {
-  id: string;
-  title: string;
-  /** Which role owns this initiative, or null if unassigned. */
-  assignedRoleId: string | null;
-  status: InitiativeStatus;
-  /** Freeform progress/handoff notes, appended over time. */
-  notes: string;
-}
-
-export interface Organization {
-  /** The company's stated goal, in the user's own words. */
-  goal: string;
-  roles: Role[];
-  initiatives: Initiative[];
-}
-
-export function emptyOrganization(): Organization {
-  return { goal: "", roles: [], initiatives: [] };
-}
+// Re-exports the pure data model and helpers for this module's existing
+// importers (main.ts, organizationSession.ts, tests) — see
+// organizationTask.ts for why they live in their own Node-free module.
+export * from "./organizationTask.js";
 
 function orgFilePath(workspaceRoot: string): string {
   return path.join(workspaceRoot, ".localagent", "organization.json");
@@ -100,8 +69,8 @@ export async function loadOrganization(workspaceRoot: string): Promise<Organizat
  * write-side operation in this area; skillLoader, read-only, never
  * needed to). Returns a result rather than throwing, matching this
  * app's ToolResult-shaped error convention, since a caller (the
- * Organization UI, once built) needs to show a write failure to the
- * user rather than crash a session over it.
+ * Organization UI) needs to show a write failure to the user rather than
+ * crash a session over it.
  */
 export async function saveOrganization(workspaceRoot: string, org: Organization): Promise<{ ok: true } | { ok: false; error: string }> {
   const dir = path.join(workspaceRoot, ".localagent");
@@ -116,49 +85,4 @@ export async function saveOrganization(workspaceRoot: string, org: Organization)
     await fs.rm(tmp, { force: true }).catch(() => {});
     return { ok: false, error: err?.message ?? String(err) };
   }
-}
-
-export function findRole(org: Organization, roleId: string): Role | undefined {
-  return org.roles.find((r) => r.id === roleId);
-}
-
-export function initiativesForRole(org: Organization, roleId: string): Initiative[] {
-  return org.initiatives.filter((i) => i.assignedRoleId === roleId);
-}
-
-/**
- * Pure functional update: returns a NEW Organization with one initiative
- * patched, leaving the input untouched. An unknown initiativeId is a
- * harmless no-op (returns an equivalent object) rather than an error —
- * the caller (the session-wiring slice, once built) already knows which
- * initiative it just ran; there's nothing a thrown error would protect
- * against here that the no-op doesn't already handle safely.
- */
-export function updateInitiative(org: Organization, initiativeId: string, patch: Partial<Pick<Initiative, "status" | "notes" | "assignedRoleId">>): Organization {
-  let changed = false;
-  const initiatives = org.initiatives.map((i) => {
-    if (i.id !== initiativeId) return i;
-    changed = true;
-    return { ...i, ...patch };
-  });
-  if (!changed) return org;
-  return { ...org, initiatives };
-}
-
-/**
- * Composes the real task text an initiative's assigned role gets started
- * with — the actual hand-off point into a normal session once the
- * session-wiring slice exists. Deliberately plain text, not a structured
- * prompt-injection-prone template: the role's own `responsibilities` and
- * the initiative's own `notes` are workspace-authored content the user
- * controls (same trust level as any other file in their own project),
- * not external/untrusted input.
- */
-export function buildInitiativeTask(org: Organization, initiative: Initiative, role: Role): string {
-  const lines: string[] = [`You are acting as ${role.title} in this organization.`];
-  if (role.responsibilities) lines.push(`Your responsibilities: ${role.responsibilities}`);
-  if (org.goal) lines.push(`The organization's goal: ${org.goal}`);
-  lines.push(`Your task: ${initiative.title}`);
-  if (initiative.notes) lines.push(`Notes/handoff from prior work: ${initiative.notes}`);
-  return lines.join("\n\n");
 }

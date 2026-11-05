@@ -49,7 +49,7 @@ import { formatPerfBadge } from "./perfBadge.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import { initOrganizationPanel, closeOrganizationPanel, isOrganizationPanelOpen, type OrganizationPanelDeps } from "./organizationPanel.js";
-import type { Organization } from "../../organization.js";
+import type { Organization } from "../../organizationTask.js";
 import { renderDiff } from "./diffView.js";
 import { renderMarkdown } from "./markdownToDom.js";
 import { loadSidebarCollapsed, saveSidebarCollapsed } from "./sidebarToggle.js";

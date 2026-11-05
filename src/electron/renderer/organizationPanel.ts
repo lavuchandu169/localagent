@@ -1,7 +1,7 @@
 import { byId, errorMessage } from "./domHelpers.js";
 import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 import { EMBEDDED_MODELS } from "../../models.js";
-import { buildInitiativeTask, type Organization, type Role, type Initiative } from "../../organization.js";
+import { buildInitiativeTask, type Organization, type Role, type Initiative } from "../../organizationTask.js";
 import type { AgentEvent } from "../../types.js";
 
 /** Same restricted model-id set resolveRoleProviderConfig (organizationSession.ts)
