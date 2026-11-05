@@ -336,6 +336,14 @@ console.log("\ndiscoverBuiltinSkills (against the real shipped content):");
   check("its source is 'builtin'", flaky?.source === "builtin");
   check("its triggers include 'flaky'", flaky?.triggers.includes("flaky") === true);
   check("its body eagerly inlines the references/common-causes.md content", flaky?.body.includes("Shared mutable state between tests") === true);
+
+  const crew = builtin.find((s) => s.id === "crew");
+  check("finds the real shipped crew skill", crew !== undefined);
+  check("its source is 'builtin'", crew?.source === "builtin");
+  check("its triggers include 'crew'", crew?.triggers.includes("crew") === true);
+  check("its triggers include 'ai employees'", crew?.triggers.includes("ai employees") === true);
+  check("its body explains the role-by-role handoff", crew?.body.includes("Acting as") === true);
+  check("its body eagerly inlines the references/pitfalls.md content", crew?.body.includes("Don't invent roles for a simple task") === true);
 }
 
 console.log("\ndiscoverUserSkills (against a disposable temp workspace):");
