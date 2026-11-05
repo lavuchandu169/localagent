@@ -13,8 +13,10 @@ import os from "node:os";
 import fsPromises from "node:fs/promises";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, stopTask, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries, getSessionOwnerEmail, isOwnerMatch } from "./sessionRegistry.js";
-import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, buildProvider, respondPermission, respondPlan, cancelSession, stopTask, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries, getSessionOwnerEmail, isOwnerMatch } from "./sessionRegistry.js";
+import type { SessionConfig, ResumePayload, ProviderConfig } from "./sessionRegistry.js";
+import { loadOrganization, saveOrganization, findRole, type Organization } from "../organization.js";
+import { startInitiativeSession, resolveRoleProviderConfig } from "./organizationSession.js";
 import type { AttachedImage, AttachedText, PermissionMode } from "../types.js";
 import { checkCachedModels, deleteModel } from "./modelCache.js";
 import { searchHuggingFaceGgufModels } from "./modelSearch.js";
@@ -507,6 +509,70 @@ app.whenReady().then(async () => {
       );
     }
   );
+
+  ipcMain.handle("organization:load", async (_event, workspaceRoot: string) => {
+    return loadOrganization(workspaceRoot);
+  });
+
+  ipcMain.handle("organization:save", async (_event, workspaceRoot: string, org: Organization) => {
+    return saveOrganization(workspaceRoot, org);
+  });
+
+  ipcMain.handle("organization:run-initiative", async (event, workspaceRoot: string, initiativeId: string) => {
+    const org = await loadOrganization(workspaceRoot);
+    const initiative = org.initiatives.find((i) => i.id === initiativeId);
+    if (!initiative) throw new Error(`Unknown initiative: ${initiativeId}`);
+    const role = initiative.assignedRoleId ? findRole(org, initiative.assignedRoleId) : undefined;
+    if (!role) throw new Error(`Initiative "${initiative.title}" has no assigned role.`);
+
+    // Real cloud-model roles need the same API key injection agent:start-session
+    // does above — resolveRoleProviderConfig never produces one itself (the
+    // renderer form never sends one either; both go through this same main-
+    // process-only resolution). startSession's own providerFactory hook is
+    // synchronous, so the (possibly async) key lookup has to happen here,
+    // before startInitiativeSession is ever called, and get baked into a
+    // providerFactory closure instead.
+    const baseResolved = resolveRoleProviderConfig(role);
+    let keyedConfig: ProviderConfig | undefined;
+    if (baseResolved.ok) {
+      const c = baseResolved.config;
+      keyedConfig =
+        c.kind === "anthropic"
+          ? { ...c, apiKey: await resolveAnthropicApiKey(anthropicSettingsFilePath, storageCrypto) }
+          : c.kind === "openai"
+            ? { ...c, apiKey: await resolveOpenAIApiKey(openaiSettingsFilePath, storageCrypto) }
+            : c.kind === "gemini"
+              ? { ...c, apiKey: await resolveGeminiApiKey(geminiSettingsFilePath, storageCrypto) }
+              : c.kind === "freellmapi"
+                ? { ...c, userDataDir: freellmapiUserDataDir }
+                : c;
+    }
+
+    let sessionId: string | undefined;
+    const result = await startInitiativeSession(
+      registry,
+      org,
+      initiative,
+      role,
+      workspaceRoot,
+      (agentEvent) => {
+        if (sessionId) event.sender.send("agent:event", sessionId, agentEvent);
+      },
+      {
+        providerFactory: keyedConfig ? () => buildProvider(keyedConfig!) : undefined,
+        getExtraTools: () => [...currentMcpTools(), createGithubCreateRepoTool(getGithubToken, onGithubUnauthorized), createGithubCreatePrTool(getGithubToken, onGithubUnauthorized)],
+        settingsDir: app.getPath("userData"),
+        storageCrypto,
+        getGithubToken,
+      },
+      (sid) => {
+        sessionId = sid;
+        event.sender.send("organization:session-started", sid, initiativeId);
+      }
+    );
+    if (!result.ok) throw new Error(result.error);
+    return result;
+  });
 
   ipcMain.handle("agent:pick-attachments", async (_event, limit?: number) => {
     const result = await showOpenDialog({ properties: ["openFile", "multiSelections"] });
