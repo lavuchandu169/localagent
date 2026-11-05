@@ -47,6 +47,8 @@ import { formatDoneLine } from "./doneLine.js";
 import { formatPerfBadge } from "./perfBadge.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
+import { initOrganizationPanel, closeOrganizationPanel, isOrganizationPanelOpen, type OrganizationPanelDeps } from "./organizationPanel.js";
+import type { Organization } from "../../organization.js";
 import { renderDiff } from "./diffView.js";
 import { renderMarkdown } from "./markdownToDom.js";
 import { loadSidebarCollapsed, saveSidebarCollapsed } from "./sidebarToggle.js";
@@ -231,6 +233,10 @@ interface AgentBridge {
   freellmapiFallbackUpdateModels(entries: UpdateModelListEntry[]): Promise<{ success: true }>;
   freellmapiFallbackSortModels(preset: SortPreset): Promise<{ success: true; preset: string }>;
   openExternal(url: string): Promise<void>;
+  loadOrganization(workspaceRoot: string): Promise<Organization>;
+  saveOrganization(workspaceRoot: string, org: Organization): Promise<{ ok: true } | { ok: false; error: string }>;
+  runInitiative(workspaceRoot: string, initiativeId: string): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }>;
+  onOrganizationSessionStarted(callback: (sessionId: string, initiativeId: string) => void): () => void;
 }
 
 declare global {
@@ -922,6 +928,7 @@ async function buildReportIssueUrl(): Promise<string> {
 function closeAllFullScreenModals(): boolean {
   if (isAboutPanelOpen()) closeAboutPanel();
   if (isMcpServersPanelOpen()) closeMcpServersPanel();
+  if (isOrganizationPanelOpen()) closeOrganizationPanel();
   if (!settingsPanel.hidden) closeSettingsPanel();
   if (isCommandPaletteOpen()) closeCommandPalette();
   closeFreellmapiPanel();
@@ -933,6 +940,9 @@ initAboutPanel(aboutPanelDeps);
 
 const mcpServersPanelDeps: McpServersPanelDeps = { closeOtherFullScreenModals: closeAllFullScreenModals };
 initMcpServersPanel(mcpServersPanelDeps);
+
+const organizationPanelDeps: OrganizationPanelDeps = { closeOtherFullScreenModals: closeAllFullScreenModals };
+initOrganizationPanel(organizationPanelDeps);
 
 const changesPanelDeps: ChangesPanelDeps = {
   getActiveSessionId: () => activeTab(tabRegistry)?.sessionId ?? null,

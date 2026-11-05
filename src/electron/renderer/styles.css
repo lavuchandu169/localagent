@@ -785,6 +785,7 @@ summary:focus-visible {
 #about-panel,
 #settings-panel,
 #mcp-servers-panel,
+#organization-panel,
 #command-palette-overlay,
 #freellmapi-panel,
 #freellmapi-fallback-panel {
@@ -803,6 +804,7 @@ summary:focus-visible {
 #about-panel,
 #settings-panel,
 #mcp-servers-panel,
+#organization-panel,
 #freellmapi-panel,
 #freellmapi-fallback-panel {
   background: var(--bg);
@@ -817,6 +819,7 @@ summary:focus-visible {
 #about-panel[hidden],
 #settings-panel[hidden],
 #mcp-servers-panel[hidden],
+#organization-panel[hidden],
 #command-palette-overlay[hidden],
 #freellmapi-panel[hidden],
 #freellmapi-fallback-panel[hidden] {
@@ -831,6 +834,7 @@ summary:focus-visible {
 #about-panel.closing,
 #settings-panel.closing,
 #mcp-servers-panel.closing,
+#organization-panel.closing,
 #command-palette-overlay.closing,
 #freellmapi-panel.closing,
 #freellmapi-fallback-panel.closing {
@@ -840,6 +844,7 @@ summary:focus-visible {
 #about-panel.closing .modal-card,
 #settings-panel.closing .modal-card,
 #mcp-servers-panel.closing .modal-card,
+#organization-panel.closing .modal-card,
 #command-palette-overlay.closing .modal-card,
 #freellmapi-panel.closing .modal-card,
 #freellmapi-fallback-panel.closing .modal-card {
@@ -1056,6 +1061,7 @@ summary:focus-visible {
   #about-panel,
   #settings-panel,
   #mcp-servers-panel,
+  #organization-panel,
   #command-palette-overlay,
   #freellmapi-panel,
   #freellmapi-fallback-panel {
@@ -1065,12 +1071,14 @@ summary:focus-visible {
   #about-panel.closing,
   #settings-panel.closing,
   #mcp-servers-panel.closing,
+  #organization-panel.closing,
   #command-palette-overlay.closing,
   #freellmapi-panel.closing,
   #freellmapi-fallback-panel.closing,
   #about-panel.closing .modal-card,
   #settings-panel.closing .modal-card,
   #mcp-servers-panel.closing .modal-card,
+  #organization-panel.closing .modal-card,
   #command-palette-overlay.closing .modal-card,
   #freellmapi-panel.closing .modal-card,
   #freellmapi-fallback-panel.closing .modal-card {
@@ -1213,6 +1221,40 @@ summary:focus-visible {
   border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 12px;
+}
+
+.organization-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.organization-row .organization-row-title {
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.organization-row .hint-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#organization-panel .row {
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+#organization-panel h3 {
+  margin: 16px 0 8px;
+  font-size: 13px;
 }
 
 .mcp-server-row .mcp-server-status-dot {

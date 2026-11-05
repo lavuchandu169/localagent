@@ -38,6 +38,7 @@
         <button id="settings-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="Settings" aria-label="Settings">⚙</button>
         <button id="about-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="About" aria-label="About">?</button>
         <button id="mcp-servers-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="MCP Servers" aria-label="MCP Servers">🔌</button>
+        <button id="organization-toggle" class="activity-icon" aria-expanded="false" aria-haspopup="true" title="Organization" aria-label="Organization">🏢</button>
       </nav>
 
       <aside id="sidebar">
@@ -157,6 +158,53 @@
             </div>
 
             <button id="mcp-servers-close" type="button">Close</button>
+          </div>
+        </div>
+
+        <div id="organization-panel" hidden role="dialog" aria-modal="true" aria-labelledby="organization-title">
+          <div class="modal-card">
+            <button id="organization-close-x" class="modal-close-x" type="button" aria-label="Close">×</button>
+            <h2 id="organization-title">Organization</h2>
+            <p class="hint-text">A small team of named AI roles working one goal together — every role's work still asks for your approval, exactly like a normal session.</p>
+
+            <div class="row">
+              <button id="organization-choose-workspace" type="button">Choose workspace…</button>
+              <span id="organization-workspace-path" class="hint-text">No workspace selected</span>
+            </div>
+
+            <div id="organization-body" hidden>
+              <label>
+                Goal
+                <textarea id="organization-goal" rows="2" placeholder="What is this organization trying to accomplish?"></textarea>
+              </label>
+              <div id="organization-goal-error" class="error-text" role="alert"></div>
+
+              <h3>Roster</h3>
+              <div id="organization-roles-error" class="error-text" role="alert"></div>
+              <div id="organization-roles-list"></div>
+              <div id="organization-roles-empty" class="hint-text">No roles yet.</div>
+              <div class="row">
+                <input id="organization-role-title" type="text" placeholder="Title (e.g. CTO)" />
+                <input id="organization-role-responsibilities" type="text" placeholder="Responsibilities" />
+                <select id="organization-role-model"></select>
+                <select id="organization-role-reports-to">
+                  <option value="">Reports to: nobody</option>
+                </select>
+                <button id="organization-role-add" type="button">+ Add role</button>
+              </div>
+
+              <h3>Backlog</h3>
+              <div id="organization-initiatives-error" class="error-text" role="alert"></div>
+              <div id="organization-initiatives-list"></div>
+              <div id="organization-initiatives-empty" class="hint-text">No initiatives yet.</div>
+              <div class="row">
+                <input id="organization-initiative-title" type="text" placeholder="Initiative" />
+                <select id="organization-initiative-role"></select>
+                <button id="organization-initiative-add" type="button">+ Add initiative</button>
+              </div>
+            </div>
+
+            <button id="organization-close" type="button">Close</button>
           </div>
         </div>
 
