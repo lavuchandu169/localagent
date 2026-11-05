@@ -70,7 +70,14 @@ export async function startInitiativeSession(
   role: Role,
   workspaceRoot: string,
   onEvent: (event: AgentEvent) => void,
-  deps: Parameters<typeof startSession>[2] = {}
+  deps: Parameters<typeof startSession>[2] = {},
+  /** Fired as soon as the session exists (right after startSession
+   * resolves), before the task itself has run at all — a caller
+   * streaming events to a UI (an IPC handler forwarding to a renderer)
+   * needs the sessionId this early to label those events and let the
+   * UI open that session's tab immediately, not only once the whole
+   * task finishes and this function's own promise resolves. */
+  onSessionStarted?: (sessionId: string) => void
 ): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }> {
   if (initiative.assignedRoleId !== role.id) {
     return { ok: false, error: `Initiative "${initiative.title}" is assigned to a different role than "${role.title}".` };
@@ -81,6 +88,7 @@ export async function startInitiativeSession(
   const task = buildInitiativeTask(org, initiative, role);
   try {
     const { sessionId } = await startSession(registry, { workspaceRoot, provider: resolved.config, mode: "DEFAULT" }, deps);
+    onSessionStarted?.(sessionId);
     await runTask(registry, sessionId, task, onEvent);
     return { ok: true, sessionId };
   } catch (err: any) {

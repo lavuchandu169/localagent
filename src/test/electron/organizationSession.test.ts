@@ -70,9 +70,25 @@ await (async () => {
     const provider = new MockProvider([{ turn: { type: "final", content: "Added the toggle." } }]);
     const registry = createSessionRegistry(sessionsDir);
     const events: AgentEvent[] = [];
-    const result = await startInitiativeSession(registry, org, init, r, workspaceRoot, (e) => events.push(e), { providerFactory: () => provider });
+    let earlySessionId: string | undefined;
+    let eventCountWhenStarted: number | undefined;
+    const result = await startInitiativeSession(
+      registry,
+      org,
+      init,
+      r,
+      workspaceRoot,
+      (e) => events.push(e),
+      { providerFactory: () => provider },
+      (sid) => {
+        earlySessionId = sid;
+        eventCountWhenStarted = events.length;
+      }
+    );
     check("reports ok with a real sessionId", result.ok === true && typeof (result as any).sessionId === "string");
     check("the session is actually registered", result.ok === true && registry.sessions.has((result as any).sessionId));
+    check("onSessionStarted fires with the SAME sessionId the final result reports", result.ok === true && earlySessionId === (result as any).sessionId);
+    check("onSessionStarted fires BEFORE the task runs, not after — a caller gets the id early enough to open the tab while the task is still in flight", eventCountWhenStarted === 0);
     check("the composed task — not just the bare initiative title — is what the model received", provider.receivedRequests[0]?.messages.some((m) => typeof m.content === "string" && m.content.includes("Engineer") && m.content.includes("Add dark-mode toggle")) === true);
     check("the session actually ran to completion", events.some((e) => e.type === "done" && e.success === true));
   }
