@@ -13,6 +13,7 @@ import {
   lastEventStillRunning,
   providerSupportsImages,
   filterAttachmentsForProvider,
+  seedTabForOrganizationSession,
   type TabState,
 } from "../../electron/renderer/tabState.js";
 import type { AgentEvent } from "../../types.js";
@@ -361,6 +362,48 @@ console.log("\nfilterAttachmentsForProvider:");
     const result = filterAttachmentsForProvider([text], { kind: "embedded", size: "qwen-coder-1.5b" });
     check("a text-only batch is fully accepted even for the embedded model — nothing to reject", result.accepted.length === 1 && result.rejected.length === 0);
   }
+}
+
+console.log("\nseedTabForOrganizationSession:");
+{
+  const registry = createTabRegistry();
+  const tab = openNewTab(registry)!;
+  check("a freshly-opened tab starts unconfigured", tab.sessionId === null && tab.events.length === 0);
+
+  seedTabForOrganizationSession(tab, {
+    sessionId: "org-session-1",
+    workspaceRoot: "/workspace/acme",
+    title: "Engineer: Fix the login bug",
+    task: "You are acting as Engineer in this organization.\n\nYour task: Fix the login bug",
+  });
+
+  check("sessionId is set to the already-running session", tab.sessionId === "org-session-1");
+  check("workspaceRoot is set", tab.workspaceRoot === "/workspace/acme");
+  check("title is set", tab.title === "Engineer: Fix the login bug");
+  check(
+    "the composed task is recorded as a task.sent event so the transcript doesn't open blank",
+    tab.events.length === 1 && tab.events[0]!.type === "task.sent" && (tab.events[0] as any).task === "You are acting as Engineer in this organization.\n\nYour task: Fix the login bug"
+  );
+  check("mode is hardcoded to DEFAULT, matching startInitiativeSession's own hardcoded mode", tab.mode === "DEFAULT");
+  check("activeProvider is left null — this caller has no way to know it for certain, same posture resumeSession's live-snapshot branch takes", tab.activeProvider === null);
+  check("running is derived from the seeded events (a task.sent is not a terminal done, so true)", tab.running === true);
+
+  // Also exercise it against a tab that's being REUSED (not brand-new) to
+  // make sure stale state from a previous session doesn't leak through.
+  const reused = openNewTab(registry)!;
+  reused.sessionId = null;
+  reused.events = [{ type: "status", message: "leftover" } as any];
+  reused.mode = "AUTO_SAFE" as any;
+  reused.activeProvider = { kind: "anthropic", model: "claude-opus-4" } as any;
+  seedTabForOrganizationSession(reused, {
+    sessionId: "org-session-2",
+    workspaceRoot: "/workspace/acme",
+    title: "CTO: Plan the roadmap",
+    task: "You are acting as CTO in this organization.\n\nYour task: Plan the roadmap",
+  });
+  check("reusing an unconfigured tab replaces its stale events rather than appending", reused.events.length === 1 && reused.events[0]!.type === "task.sent");
+  check("reusing an unconfigured tab resets mode to DEFAULT", reused.mode === "DEFAULT");
+  check("reusing an unconfigured tab resets activeProvider to null", reused.activeProvider === null);
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
