@@ -1,6 +1,6 @@
 import { isEmbeddedModelId } from "../models.js";
-import { buildInitiativeTask, type Organization, type Role, type Initiative } from "../organization.js";
-import { startSession, runTask, type SessionRegistry, type ProviderConfig } from "./sessionRegistry.js";
+import { buildInitiativeTask, findRole, type Organization, type Role, type Initiative } from "../organization.js";
+import { startSession, runTask, buildProvider, type SessionRegistry, type ProviderConfig, type ModelDownloadProgress } from "./sessionRegistry.js";
 import type { AgentEvent } from "../types.js";
 
 /**
@@ -94,4 +94,104 @@ export async function startInitiativeSession(
   } catch (err: any) {
     return { ok: false, error: err?.message ?? String(err) };
   }
+}
+
+/**
+ * Wraps an already-resolved (and, for cloud kinds, API-key-injected)
+ * ProviderConfig as a `startSession`-shaped providerFactory — the hook
+ * main.ts's organization:run-initiative handler uses to substitute its
+ * own keyed config for the unkeyed one `startInitiativeSession` derives
+ * internally via `resolveRoleProviderConfig` (which deliberately never
+ * carries a key; see that function's own doc comment).
+ *
+ * Takes `buildProviderFn` as a parameter (defaulting to the real
+ * `buildProvider`) purely so a test can substitute a spy without
+ * actually constructing a real provider — the bug this guards against
+ * (a previous version of this closure ignored its own
+ * onDownloadProgress/signal arguments, silently dropping embedded-model
+ * download progress and the ability to cancel one) is only observable
+ * through exactly those two forwarded arguments.
+ */
+export function keyedProviderFactory(
+  resolvedConfig: ProviderConfig | undefined,
+  buildProviderFn: typeof buildProvider = buildProvider
+): ((config: ProviderConfig, onDownloadProgress?: (status: ModelDownloadProgress) => void, signal?: AbortSignal) => ReturnType<typeof buildProvider>) | undefined {
+  if (!resolvedConfig) return undefined;
+  return (_config, onDownloadProgress, signal) => buildProviderFn(resolvedConfig, onDownloadProgress, signal);
+}
+
+/**
+ * The full orchestration behind "Run as `<role>`": looks up the
+ * initiative and its assigned role, resolves the role's model into a
+ * real (API-key-injected, for cloud kinds) ProviderConfig, and hands off
+ * to startInitiativeSession. Never throws — every failure mode (unknown
+ * initiative, no assigned role, unresolvable model id, a provider
+ * health-check failure, a task error) comes back as `{ ok: false, error
+ * }`, exactly like startInitiativeSession's own contract, so main.ts's
+ * IPC handler can simply `return` this function's result unconditionally
+ * instead of re-throwing it — throwing here would discard the very
+ * "record which initiative failed and why without an exception unwinding
+ * past that bookkeeping" property startInitiativeSession's doc comment
+ * already calls out, and would make the renderer's existing `result.ok
+ * === false` branch (organizationPanel.ts's runInitiative) permanently
+ * unreachable dead code instead of the real failure path it reads as.
+ */
+export async function runOrganizationInitiative(
+  registry: SessionRegistry,
+  org: Organization,
+  initiativeId: string,
+  workspaceRoot: string,
+  onEvent: (event: AgentEvent) => void,
+  onSessionStarted: ((sessionId: string) => void) | undefined,
+  deps: Parameters<typeof startSession>[2] & {
+    /** Resolves the real cloud API key for a role's provider kind — a
+     * main-process-only concern (settings file paths, StorageCrypto)
+     * this module has no business knowing about directly. Omitted (e.g.
+     * in a test) means cloud roles start with no key, exactly like
+     * omitting apiKey on a ProviderConfig elsewhere in this app. */
+    resolveApiKey?: (kind: "anthropic" | "openai" | "gemini") => Promise<string | undefined>;
+    /** Only consulted for the freellmapi kind — see buildProvider's own
+     * "main.ts must resolve it" comment on why this can't default to
+     * anything sensible on its own. */
+    freellmapiUserDataDir?: string;
+    /** Forwarded to keyedProviderFactory — defaults to the real
+     * buildProvider. Lets a test substitute a fake builder (so a cloud
+     * role's "ok: true" path doesn't have to make a real network call)
+     * without that seam existing anywhere a production caller could
+     * accidentally use it to skip real provider construction. */
+    buildProviderFn?: typeof buildProvider;
+  } = {}
+): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }> {
+  const initiative = org.initiatives.find((i) => i.id === initiativeId);
+  if (!initiative) return { ok: false, error: `Unknown initiative: ${initiativeId}` };
+  const role = initiative.assignedRoleId ? findRole(org, initiative.assignedRoleId) : undefined;
+  if (!role) return { ok: false, error: `Initiative "${initiative.title}" has no assigned role.` };
+
+  const baseResolved = resolveRoleProviderConfig(role);
+  let keyedConfig: ProviderConfig | undefined;
+  if (baseResolved.ok) {
+    const c = baseResolved.config;
+    keyedConfig =
+      c.kind === "anthropic"
+        ? { ...c, apiKey: await deps.resolveApiKey?.("anthropic") }
+        : c.kind === "openai"
+          ? { ...c, apiKey: await deps.resolveApiKey?.("openai") }
+          : c.kind === "gemini"
+            ? { ...c, apiKey: await deps.resolveApiKey?.("gemini") }
+            : c.kind === "freellmapi"
+              ? { ...c, userDataDir: deps.freellmapiUserDataDir }
+              : c;
+  }
+
+  const { resolveApiKey, freellmapiUserDataDir, buildProviderFn, ...startSessionDeps } = deps;
+  return startInitiativeSession(
+    registry,
+    org,
+    initiative,
+    role,
+    workspaceRoot,
+    onEvent,
+    { ...startSessionDeps, providerFactory: keyedProviderFactory(keyedConfig, buildProviderFn) },
+    onSessionStarted
+  );
 }
