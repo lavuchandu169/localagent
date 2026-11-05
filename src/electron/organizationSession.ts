@@ -1,6 +1,7 @@
 import { isEmbeddedModelId } from "../models.js";
-import type { Role } from "../organization.js";
-import type { ProviderConfig } from "./sessionRegistry.js";
+import { buildInitiativeTask, type Organization, type Role, type Initiative } from "../organization.js";
+import { startSession, runTask, type SessionRegistry, type ProviderConfig } from "./sessionRegistry.js";
+import type { AgentEvent } from "../types.js";
 
 /**
  * Mirrors the cloud-model id lists `deriveProviderConfigFromForm` uses in
@@ -38,4 +39,51 @@ export function resolveRoleProviderConfig(role: Role): { ok: true; config: Provi
     ok: false,
     error: `Role "${role.title}" has an unrecognized model id "${modelId}" — custom servers and custom embedded models aren't supported for organization roles yet; pick one of the built-in model ids.`,
   };
+}
+
+/**
+ * Starts a real session for one role's initiative and runs it to
+ * completion — the actual hand-off point from the Organization data
+ * model into localagent's existing session machinery. A role carries no
+ * special authority of its own: this always starts in "DEFAULT" mode
+ * (ask before every change), the exact same permission engine, per-hunk
+ * diff approval, and checkpoints any session a human starts goes
+ * through. `onEvent` streams every turn, tool call, and permission
+ * request exactly like a normal session — including any pending
+ * approval, which the caller (eventually the Organization UI) answers
+ * through the existing `respondPermission`/`respondPlan`, not anything
+ * new here.
+ *
+ * Returns a result rather than throwing: a caller tracking a backlog of
+ * initiatives needs to record *which* one failed and *why*, not have an
+ * exception unwind past that bookkeeping.
+ *
+ * Deliberately does NOT update the initiative's status or save the
+ * organization — that's the caller's job (via updateInitiative +
+ * saveOrganization), keeping this function's only side effect the
+ * session it actually starts.
+ */
+export async function startInitiativeSession(
+  registry: SessionRegistry,
+  org: Organization,
+  initiative: Initiative,
+  role: Role,
+  workspaceRoot: string,
+  onEvent: (event: AgentEvent) => void,
+  deps: Parameters<typeof startSession>[2] = {}
+): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }> {
+  if (initiative.assignedRoleId !== role.id) {
+    return { ok: false, error: `Initiative "${initiative.title}" is assigned to a different role than "${role.title}".` };
+  }
+  const resolved = resolveRoleProviderConfig(role);
+  if (!resolved.ok) return resolved;
+
+  const task = buildInitiativeTask(org, initiative, role);
+  try {
+    const { sessionId } = await startSession(registry, { workspaceRoot, provider: resolved.config, mode: "DEFAULT" }, deps);
+    await runTask(registry, sessionId, task, onEvent);
+    return { ok: true, sessionId };
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
 }
