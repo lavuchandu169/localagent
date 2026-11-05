@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.167 — 2026-11-05
+
+- Fix renderer breaking entirely by importing a Node-fs module
+
 ## v0.1.0-beta.166 — 2026-11-05
 
 - Merge branch 'fix-organization-review-findings'
