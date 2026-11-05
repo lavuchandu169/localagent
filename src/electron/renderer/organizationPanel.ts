@@ -1,7 +1,7 @@
 import { byId, errorMessage } from "./domHelpers.js";
 import { openOverlayPanel, closeOverlayPanel } from "./overlayPanel.js";
 import { EMBEDDED_MODELS } from "../../models.js";
-import type { Organization, Role, Initiative } from "../../organization.js";
+import { buildInitiativeTask, type Organization, type Role, type Initiative } from "../../organization.js";
 import type { AgentEvent } from "../../types.js";
 
 /** Same restricted model-id set resolveRoleProviderConfig (organizationSession.ts)
@@ -60,6 +60,24 @@ const initiativeIdBySessionId = new Map<string, string>();
 
 export interface OrganizationPanelDeps {
   closeOtherFullScreenModals: () => void;
+  /**
+   * Opens (or focuses, if a tab for it already exists) a real session tab
+   * for an initiative's just-started role session, so the user sees its
+   * full transcript and can approve/deny its permission requests like any
+   * other session. Without this, "Run as <role>" only ever showed this
+   * panel's own one-line inline status (see describeEventForStatus/
+   * runningStatus below) — which has no way at all to surface an approval
+   * UI, so any initiative whose role actually needed to write a file or
+   * run a command would hang forever with no one able to respond.
+   *
+   * Called as soon as onOrganizationSessionStarted fires below, which is
+   * guaranteed to happen before any of that session's own agent:event
+   * messages can arrive — see main.ts's organization:run-initiative
+   * handler, where onSessionStarted always fires (and sends
+   * organization:session-started) before runTask's first event, and
+   * startInitiativeSession's own doc comment on why that ordering holds.
+   */
+  openSessionTab: (params: { sessionId: string; workspaceRoot: string; task: string; title: string }) => void;
 }
 
 export function isOrganizationPanelOpen(): boolean {
@@ -369,6 +387,22 @@ export function initOrganizationPanel(deps: OrganizationPanelDeps): void {
 
   unsubscribeSessionStarted = window.agent.onOrganizationSessionStarted((sessionId, initiativeId) => {
     initiativeIdBySessionId.set(sessionId, initiativeId);
+    // Open the real tab right away, synchronously within this callback —
+    // no agent:event for this sessionId can have arrived yet (see this
+    // field's own doc comment on OrganizationPanelDeps.openSessionTab for
+    // why that ordering is guaranteed), so there's no window in which an
+    // early event gets silently dropped by routeEvent for lack of a
+    // matching open tab.
+    const initiative = org.initiatives.find((i) => i.id === initiativeId);
+    const role = initiative?.assignedRoleId ? org.roles.find((r) => r.id === initiative.assignedRoleId) : undefined;
+    if (initiative && role && workspaceRoot) {
+      deps.openSessionTab({
+        sessionId,
+        workspaceRoot,
+        task: buildInitiativeTask(org, initiative, role),
+        title: `${role.title}: ${initiative.title}`,
+      });
+    }
   });
   unsubscribeEvents = window.agent.onEvent((sessionId, event) => {
     const initiativeId = initiativeIdBySessionId.get(sessionId);

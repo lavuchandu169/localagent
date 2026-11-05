@@ -141,6 +141,51 @@ export function resetTabToUnconfigured(tab: TabState): void {
   tab.queuedFollowup = null;
 }
 
+/**
+ * Seeds a brand-new (or reused-but-unconfigured) tab for an Organization
+ * role's initiative session — one that is ALREADY RUNNING by the time this
+ * tab gets created, since organizationSession.ts's startInitiativeSession
+ * fires its onSessionStarted callback (forwarded over IPC as
+ * organization:session-started) right after the session starts, before the
+ * composed task has even been sent through runTask. This is what lets
+ * organizationPanel.ts open a real, interactive tab for "Run as <role>"
+ * instead of only showing a one-line inline status with no way to
+ * approve/deny a permission request.
+ *
+ * There is no prior event history to replay here (unlike resumeSession's
+ * live-snapshot branch in renderer.ts, which copies a LiveSessionSnapshot's
+ * buffered events) — only the task text the role was actually started
+ * with, recorded as the same renderer-only `task.sent` event the normal Run
+ * button's click handler pushes at send time (see AgentEvent's task.sent
+ * case), so the transcript doesn't open blank.
+ *
+ * `mode` is hardcoded to "DEFAULT" because that is what every organization
+ * role session is hardcoded to start with (see startInitiativeSession) — a
+ * role carries no special authority of its own, so there's nothing here to
+ * vary. `activeProvider` is left null — this caller has no way to know a
+ * role's resolved ProviderConfig for certain (it's resolved main-process-
+ * side and never sent back over IPC), same "don't guess wrong" posture
+ * resumeSession's own live-snapshot branch takes for a session this
+ * renderer didn't start via its own setup form.
+ *
+ * Replaces (never appends to) whatever the tab already had, since a
+ * reused tab is only ever handed in here while still unconfigured
+ * (sessionId === null) — any stale events/mode/provider on it are leftover
+ * defaults, not real session state worth preserving.
+ */
+export function seedTabForOrganizationSession(
+  tab: TabState,
+  params: { sessionId: string; workspaceRoot: string; title: string; task: string }
+): void {
+  tab.sessionId = params.sessionId;
+  tab.workspaceRoot = params.workspaceRoot;
+  tab.title = params.title;
+  tab.events = [{ type: "task.sent", task: params.task }];
+  tab.mode = "DEFAULT";
+  tab.activeProvider = null;
+  tab.running = lastEventStillRunning(tab.events);
+}
+
 /** A no-op if tabId isn't open. Falls back to focusing the previous tab in display order (or the next one, if the closed tab was first); leaves activeTabId null if no tabs remain. */
 export function closeTab(registry: TabRegistry, tabId: string): void {
   const index = registry.order.indexOf(tabId);

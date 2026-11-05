@@ -17,6 +17,7 @@ import {
   defaultTabConfig,
   lastEventStillRunning,
   filterAttachmentsForProvider,
+  seedTabForOrganizationSession,
   MAX_OPEN_TABS,
   type TabRegistry,
   type TabState,
@@ -941,7 +942,51 @@ initAboutPanel(aboutPanelDeps);
 const mcpServersPanelDeps: McpServersPanelDeps = { closeOtherFullScreenModals: closeAllFullScreenModals };
 initMcpServersPanel(mcpServersPanelDeps);
 
-const organizationPanelDeps: OrganizationPanelDeps = { closeOtherFullScreenModals: closeAllFullScreenModals };
+/**
+ * Opens a real session tab for an Organization role's just-started
+ * initiative session — the fix for the v1 gap where "Run as <role>" only
+ * ever showed a one-line inline status with no way to approve/deny a
+ * permission request (see OrganizationPanelDeps.openSessionTab's own doc
+ * comment in organizationPanel.ts). Mirrors resumeSession's own live-
+ * snapshot branch below (reuse the active tab if it's still unconfigured,
+ * else open a new one, respecting MAX_OPEN_TABS) but seeds the tab via
+ * seedTabForOrganizationSession instead of copying a LiveSessionSnapshot's
+ * events — there's no prior history yet, only the composed task the role
+ * was started with. Once tab.sessionId is set here, every subsequent
+ * agent:event for this session is already routed into it automatically by
+ * the top-level window.agent.onEvent handler below (routeEvent looks tabs
+ * up purely by sessionId, with no idea which panel opened them) — nothing
+ * else is needed for its permission requests/diffs to render and be
+ * answerable exactly like any other session.
+ */
+function openOrganizationSessionTab(params: { sessionId: string; workspaceRoot: string; task: string; title: string }): void {
+  const already = findTabForSession(tabRegistry, params.sessionId);
+  if (already) {
+    focusTab(tabRegistry, already.tabId);
+    renderTabStrip();
+    syncFormFromTab(already);
+    clearAndReplayEventLog(already);
+    return;
+  }
+  const current = activeTab(tabRegistry);
+  const tab = current && current.sessionId === null ? current : openNewTab(tabRegistry);
+  if (!tab) {
+    tabStripCapMessage.hidden = false;
+    return;
+  }
+  tabStripCapMessage.hidden = true;
+  seedTabForOrganizationSession(tab, params);
+  renderTabStrip();
+  focusTab(tabRegistry, tab.tabId);
+  renderTabStrip();
+  syncFormFromTab(tab);
+  clearAndReplayEventLog(tab);
+}
+
+const organizationPanelDeps: OrganizationPanelDeps = {
+  closeOtherFullScreenModals: closeAllFullScreenModals,
+  openSessionTab: openOrganizationSessionTab,
+};
 initOrganizationPanel(organizationPanelDeps);
 
 const changesPanelDeps: ChangesPanelDeps = {
