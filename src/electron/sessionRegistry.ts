@@ -139,7 +139,11 @@ export async function reloadCommandRules(registry: SessionRegistry): Promise<voi
   const file = registry.commandRulesFilePath;
   if (!file) return;
   for (const entry of registry.sessions.values()) {
-    entry.session.setAllowedCommands(await listAllowedCommands(file, entry.session.getWorkspaceRoot()));
+    const workspaceRoot = entry.session.getWorkspaceRoot();
+    const commands = await listAllowedCommands(file, workspaceRoot);
+    // The session may have moved to another workspace while the file was
+    // read. Its rules were cleared by that move: do not put the old ones back.
+    if (entry.session.getWorkspaceRoot() === workspaceRoot) entry.session.setAllowedCommands(commands);
   }
 }
 

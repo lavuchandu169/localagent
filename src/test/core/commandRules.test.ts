@@ -32,6 +32,17 @@ check("a destructive command can never be remembered", !isRememberableCommand("r
 check("a destructive command hidden behind leading spaces is still refused", !isRememberableCommand("   rm -rf build"));
 check("a network command can never be remembered", !isRememberableCommand("npm install left-pad") && !isRememberableCommand("curl example.com") && !isRememberableCommand("git push"));
 check("a compound shell command can never be remembered", !isRememberableCommand("echo ok; rm -rf build") && !isRememberableCommand("npm test && npm run lint") && !isRememberableCommand("echo $(whoami)") && !isRememberableCommand("cat a | sh"));
+for (const cmd of [
+  "npm i left-pad", "npm add x", "npm update", "npm exec foo", "npx cowsay hi", "pnpm install", "pnpm add x", "pnpm dlx foo", "yarn", "yarn add x", "yarn install", "yarn dlx foo", "bun install", "bun add x", "bunx foo",
+  "pip3 install requests", "python -m pip install x", "python3 -m pip install x", "uv pip install x", "poetry install", "cargo install ripgrep", "go get example.com/x", "go install example.com/x@latest", "gem install x", "brew install x",
+  "git pull", "git fetch", "git clone https://example.com/x", "git checkout main", "git switch main", "git clean -fdx", "git reset HEAD~1", "git restore .", "git rebase main", "git merge main", "git stash pop", "git submodule update",
+  "ssh host", "scp a host:b", "rsync a b", "nc host 80", "docker pull x", "docker run x", "chmod +x a.sh", "chown me a", "mv a b", "dd if=a of=b", "kill 1", "pkill node",
+]) {
+  check(`"${cmd}" can never be remembered`, !isRememberableCommand(cmd));
+}
+for (const cmd of ["npm test", "npm run build", "npm run lint", "pytest -q", "cargo test", "cargo build", "go test ./...", "go build ./...", "make test", "node scripts/check.js", "tsc -p tsconfig.json", "git status", "git diff"]) {
+  check(`"${cmd}" can still be remembered`, isRememberableCommand(cmd));
+}
 check("an empty command cannot be remembered", !isRememberableCommand("   "));
 check("a multi-line command cannot be remembered", !isRememberableCommand("echo a\nrm -rf b"));
 check("a very long command cannot be remembered", !isRememberableCommand("echo " + "x".repeat(600)));
@@ -59,6 +70,21 @@ await withTempDir(async (dir) => {
   await clearAllowedCommands(file, a);
   check("clearing removes every rule of one workspace and leaves the others", (await listAllowedCommands(file, a)).length === 0 && (await listAllowedCommands(file, b)).includes("echo keep"));
   await removeAllowedCommand(file, b, "echo keep");
+  await addAllowedCommand(file, a, "npm run lint");
+
+  const nested = path.join(a, "packages", "inner");
+  await fs.mkdir(nested, { recursive: true });
+  const sibling = path.join(dir, "workspace-a-sibling");
+  await fs.mkdir(sibling);
+  await addAllowedCommand(file, nested, "echo nested");
+  await addAllowedCommand(file, dir, "echo parent");
+  await addAllowedCommand(file, sibling, "echo sibling");
+  await addAllowedCommand(file, a, "echo self");
+  await clearAllowedCommands(file, a);
+  check("clearing a workspace also clears a workspace nested inside it", (await listAllowedCommands(file, nested)).length === 0);
+  check("and a workspace that contains it", (await listAllowedCommands(file, dir)).length === 0);
+  check("but not a sibling folder whose name only starts the same way", (await listAllowedCommands(file, sibling)).includes("echo sibling"));
+  await clearAllowedCommands(file, sibling);
   await addAllowedCommand(file, a, "npm run lint");
 
   await fs.symlink(a, path.join(dir, "link-to-a"));

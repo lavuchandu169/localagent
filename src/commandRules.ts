@@ -22,9 +22,33 @@ export function isRememberableCommand(command: string): boolean {
   const trimmed = command.trim();
   if (!trimmed || trimmed.length > MAX_COMMAND_LENGTH || /[\r\n]/.test(trimmed)) return false;
   if (hasShellMetacharacters(trimmed)) return false;
+  if (NEVER_REMEMBER.some((r) => r.test(trimmed))) return false;
   const risk = classifyCommand(trimmed);
   return risk !== "DESTRUCTIVE" && risk !== "NETWORK";
 }
+
+/**
+ * classifyCommand's NETWORK and DESTRUCTIVE lists name only a few
+ * spellings. A standing rule needs a wider net: package installs and
+ * package runners in every common tool, git commands that fetch or
+ * rewrite the working tree, remote access, containers, and commands
+ * that move, re-permission or kill things. This is still a list of
+ * known risks, not a proof that every other command is safe: a rule is
+ * the user's own standing approval of one exact command.
+ */
+const NEVER_REMEMBER: RegExp[] = [
+  /^(npm|pnpm|yarn|bun)\s+(i|install|add|ci|update|upgrade|up|exec|dlx|x|create|link|publish|remove|rm|uninstall)\b/,
+  /^yarn\s*$/,
+  /^(npx|bunx|pnpx)\b/,
+  /^(pip|pip3|pipx|uv|poetry|pipenv|conda|gem|brew|apt|apt-get|yum|dnf|pacman|choco|winget)\b/,
+  /^python3?\s+-m\s+(pip|ensurepip|venv)\b/,
+  /^cargo\s+(install|add|update|publish|fetch)\b/,
+  /^go\s+(get|install|mod)\b/,
+  /^git\s+(pull|fetch|clone|push|checkout|switch|clean|reset|restore|rebase|merge|stash|submodule|apply|am|cherry-pick|revert|commit|remote|config|worktree|gc|filter-branch)\b/,
+  /^(curl|wget|ssh|scp|sftp|rsync|nc|ncat|netcat|telnet|ftp)\b/,
+  /^(docker|podman|kubectl|helm|terraform)\b/,
+  /^(chmod|chown|chgrp|mv|dd|kill|pkill|killall|shutdown|reboot|launchctl|systemctl|crontab|open|osascript|eval|exec|source|sh|bash|zsh|env)\b/,
+];
 
 type RulesFile = { version: 1; workspaces: Record<string, string[]> };
 
@@ -80,8 +104,13 @@ function inOrder<T>(filePath: string, change: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** Reads wait for pending changes, so a read never returns rules that a clear in progress is about to remove. */
 export async function listAllowedCommands(filePath: string, workspaceRoot: string): Promise<string[]> {
-  return (await readRules(filePath)).workspaces[await workspaceKey(workspaceRoot)] ?? [];
+  return inOrder(filePath, async () => (await readRules(filePath)).workspaces[await workspaceKey(workspaceRoot)] ?? []);
+}
+
+function isSameOrNested(a: string, b: string): boolean {
+  return a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
 }
 
 /** Returns false when the command cannot be remembered or the workspace is at its limit. */
@@ -114,13 +143,16 @@ export async function removeAllowedCommand(filePath: string, workspaceRoot: stri
   });
 }
 
-/** Removes every rule of one workspace: used when a file there changed with no prompt, so no stored rule can run what changed. */
+/** Removes every rule of a workspace, and of any workspace that contains it or sits inside it: used when a file there changed with no prompt, so no stored rule can run what changed. */
 export async function clearAllowedCommands(filePath: string, workspaceRoot: string): Promise<void> {
   return inOrder(filePath, async () => {
     const rules = await readRules(filePath);
     const key = await workspaceKey(workspaceRoot);
-    if (!rules.workspaces[key]) return;
-    delete rules.workspaces[key];
+    // A file under this root also belongs to any workspace opened on a
+    // parent folder or on a folder nested inside it.
+    const affected = Object.keys(rules.workspaces).filter((k) => isSameOrNested(k, key) || isSameOrNested(key, k));
+    if (affected.length === 0) return;
+    for (const k of affected) delete rules.workspaces[k];
     await writeRules(filePath, rules);
   });
 }

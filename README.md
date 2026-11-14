@@ -198,9 +198,9 @@ When the agent asks to run a command in the desktop app, the prompt has three bu
 - A rule is one exact command. `npm test` and `npm test --coverage` are two different commands.
 - A rule applies to one workspace only. The app keeps the rules in its own data folder, not in the workspace, so a repository that you cloned cannot add a rule.
 - To see or remove the rules for the open workspace, open Settings (the ⚙ icon) and go to "Always-allowed commands".
-- These commands always ask, and the prompt does not show "Always allow" for them: destructive commands (`rm`, `sudo`, `git reset --hard`), network commands (`npm install`, `curl`, `git push`), and commands that contain shell characters such as `;`, `&&`, `|` or `$`.
+- These commands always ask, and the prompt does not show "Always allow" for them: destructive commands (`rm`, `sudo`, `mv`, `chmod`, `kill`), commands that install or download (`npm install`, `npx`, `pip`, `curl`, `docker`), git commands that fetch or change the working tree (`git pull`, `git push`, `git checkout`, `git reset`), and commands that contain shell characters such as `;`, `&&`, `|` or `$`.
 - Read-only mode refuses all commands, also the ones that have a rule.
-- If the agent changes a file without a prompt (the two auto-edit modes do this), the app deletes all the rules of that workspace. Each command then asks again, in all sessions. A command such as `npm test` runs a script from the project's files, and the agent could have changed that script. The rules are thus most useful in the "Ask before every change" mode.
+- If the agent changes a file without a prompt (the two auto-edit modes do this), the app deletes all the rules of that workspace, and of a workspace that contains it or is inside it. Each command then asks again, in all sessions. A command such as `npm test` runs a script from the project's files, and the agent could have changed that script. The rules are thus most useful in the "Ask before every change" mode.
 
 **Risk that remains.** A command with a rule runs the instructions that are in the project's files at that time. If those files changed outside the session, for example through `git pull`, the command runs the new instructions without a prompt. Add rules only in projects that you trust.
 

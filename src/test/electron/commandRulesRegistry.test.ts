@@ -118,6 +118,16 @@ try {
     const later = await start(registry, workspaceC, echoTwice());
     check("and so does a session started afterwards", (await run(registry, later, false)).length === 2);
   }
+  {
+    await addAllowedCommand(rulesFile, workspaceA, "echo hi");
+    const registry = createSessionRegistry(sessionsDir, undefined, undefined, rulesFile);
+    const sessionId = await start(registry, workspaceA, echoTwice());
+    const reload = reloadCommandRules(registry);
+    updateLiveSessionSettings(registry, sessionId, { workspaceRoot: workspaceB });
+    await reload;
+    await reloadCommandRules(registry);
+    check("a reload that started before a workspace change does not bring the old workspace's rules into the new one", (await run(registry, sessionId, false)).length === 2);
+  }
 } finally {
   await fs.rm(base, { recursive: true, force: true });
 }
