@@ -13,7 +13,8 @@ import os from "node:os";
 import fsPromises from "node:fs/promises";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, stopTask, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries, getSessionOwnerEmail, isOwnerMatch } from "./sessionRegistry.js";
+import { createSessionRegistry, startSession, runTask, respondPermission, respondPlan, cancelSession, stopTask, removeSession, getLiveSessionSnapshot, updateLiveSessionSettings, getCheckpointHash, revertSessionCheckpoint, getSessionChanges, withPendingApprovalEntries, getSessionOwnerEmail, isOwnerMatch, reloadCommandRules } from "./sessionRegistry.js";
+import { listAllowedCommands, removeAllowedCommand } from "../commandRules.js";
 import type { SessionConfig, ResumePayload } from "./sessionRegistry.js";
 import { loadOrganization, saveOrganization, type Organization } from "../organization.js";
 import { runOrganizationInitiative } from "./organizationSession.js";
@@ -167,6 +168,7 @@ app.whenReady().then(async () => {
   });
 
   const authFilePath = path.join(app.getPath("userData"), "auth.json");
+  const commandRulesFilePath = path.join(app.getPath("userData"), "command-rules.json");
   const githubAuthFilePath = path.join(app.getPath("userData"), "github-auth.json");
   const githubSettingsFilePath = path.join(app.getPath("userData"), "githubSettings.json");
   const settingsFilePath = path.join(app.getPath("userData"), "googleSettings.json");
@@ -411,7 +413,8 @@ app.whenReady().then(async () => {
     // "waiting for approval" indicator (agent:list-sessions' new
     // waitingForApproval field) live, including for a session with no tab
     // currently open.
-    () => broadcastToAllWindows("agent:sessions-changed")
+    () => broadcastToAllWindows("agent:sessions-changed"),
+    commandRulesFilePath
   );
 
   // Tracks the AbortController for whichever agent:start-session call is
@@ -591,9 +594,19 @@ app.whenReady().then(async () => {
   // of these no-ops (or returns the same "nothing to report" shape its
   // own !entry/missing-checkpoint case already uses) for a foreign-owned
   // session, exactly as if the id didn't exist.
-  ipcMain.handle("agent:respond-permission", async (_event, sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]) => {
+  ipcMain.handle("agent:respond-permission", async (_event, sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[], remember?: boolean) => {
     if (!(await isSessionOwnedByCurrentAccount(sessionId))) return;
-    respondPermission(registry, sessionId, callId, approved, approvedHunkIds);
+    respondPermission(registry, sessionId, callId, approved, approvedHunkIds, remember === true);
+  });
+
+  ipcMain.handle("command-rules:list", async (_event, workspaceRoot: string) =>
+    typeof workspaceRoot === "string" && workspaceRoot ? listAllowedCommands(commandRulesFilePath, workspaceRoot) : []
+  );
+
+  ipcMain.handle("command-rules:remove", async (_event, workspaceRoot: string, command: string) => {
+    if (typeof workspaceRoot !== "string" || typeof command !== "string" || !workspaceRoot) return;
+    await removeAllowedCommand(commandRulesFilePath, workspaceRoot, command);
+    await reloadCommandRules(registry);
   });
 
   ipcMain.handle("agent:respond-plan", async (_event, sessionId: string, approved: boolean) => {

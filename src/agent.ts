@@ -37,6 +37,7 @@ import {
   renderTranscript,
   SUMMARY_SYSTEM_PROMPT,
 } from "./compaction.js";
+import { isRememberableCommand } from "./commandRules.js";
 import { LOAD_SKILL_FALLBACK_MESSAGE } from "./tools/loadSkill.js";
 import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
@@ -71,6 +72,10 @@ export interface AgentSessionOptions {
   systemPrompt?: string;
   /** Seeds the conversation from a prior session's history instead of starting fresh with just the system prompt — used to resume a saved session. */
   initialMessages?: ChatMessage[];
+  /** Commands the user chose to always allow in this workspace (see commandRules.ts). */
+  allowedCommands?: string[];
+  /** Called when the user approves a command with "always allow", so the caller can store the rule. */
+  onCommandRemembered?: (command: string) => void | Promise<void>;
   /** Overrides the provider's own context window for deciding when to compact the history. */
   contextWindowTokens?: number;
   /** Seeds checkpointHash from a prior session's persisted value — without this, resuming a session after an app restart always starts with no checkpoint (getCheckpointHash() === null), silently making "Revert this task" unavailable with no indication the capability (and the now-or-never window to use it) just disappeared (correctness audit: session High #2). */
@@ -367,6 +372,7 @@ export class AgentSession {
       this.messages.push({ role: "system", content: prompt });
     }
     if (opts.initialCheckpointHash) this.checkpointHash = opts.initialCheckpointHash;
+    this.setAllowedCommands(opts.allowedCommands ?? []);
   }
 
   /** History length at the last failed compaction: no retry until the history has grown past it by a few messages. */
@@ -464,6 +470,9 @@ export class AgentSession {
     // (unknown revision / not a git repo at all). The old checkpoint is
     // simply inapplicable here, not something to silently keep offering.
     this.checkpointHash = null;
+    // Always-allowed commands belong to one workspace. The caller sets
+    // the new workspace's own rules with setAllowedCommands.
+    this.allowedCommands.clear();
     // Deferred-minor finding M5: loadedSkillIds tracks what's been
     // injected for THIS workspace's own skills — carrying it across a
     // workspace switch would wrongly suppress a different project's
@@ -471,6 +480,17 @@ export class AgentSession {
     // loaded from the PREVIOUS workspace, even though it's genuinely
     // different content the user has never seen or approved here.
     this.loadedSkillIds.clear();
+  }
+
+  private allowedCommands = new Set<string>();
+
+  /** Replaces the always-allowed commands, for example after a workspace change or when a rule is removed in settings. */
+  setAllowedCommands(commands: string[]): void {
+    this.allowedCommands = new Set(commands.map((c) => c.trim()).filter(isRememberableCommand));
+  }
+
+  getAllowedCommands(): string[] {
+    return [...this.allowedCommands];
   }
 
   /** The workspace a checkpoint hash (see getCheckpointHash) needs to be reverted against — reads the same live opts.workspaceRoot setWorkspaceRoot mutates, so this is never stale even after a mid-session workspace edit. */
@@ -1236,8 +1256,17 @@ export class AgentSession {
         if (decision === "ASK" && call.name === "run_command" && this.projectScriptApprovedThisTask && this.isApprovedVerifyCommand(String(call.arguments.command ?? ""))) {
           decision = "ALLOW";
         }
+        // A remembered command skips the prompt. Only ASK is lifted, so
+        // read-only mode's DENY stands, and a destructive command asks
+        // every time even if a rule somehow names it.
+        const commandText = call.name === "run_command" && typeof call.arguments.command === "string" ? call.arguments.command.trim() : null;
+        const rememberable = commandText !== null && isRememberableCommand(commandText);
+        if (decision === "ASK" && rememberable && this.allowedCommands.has(commandText)) {
+          decision = "ALLOW";
+        }
+        const canRemember = decision === "ASK" && rememberable;
         const diff = await this.computeEditDiffForCall(call);
-        yield diff ? { type: "permission.request", call, decision, diff } : { type: "permission.request", call, decision };
+        yield { type: "permission.request", call, decision, ...(diff ? { diff } : {}), ...(canRemember ? { canRemember } : {}) };
 
         if (decision === "DENY") {
           if (tool.permission === "WRITE") this.wroteThisTask = true;
@@ -1270,6 +1299,14 @@ export class AgentSession {
           // enforces everywhere else.
           if (call.name === "run_command" && this.isApprovedVerifyCommand(String(call.arguments.command ?? ""))) {
             this.projectScriptApprovedThisTask = true;
+          }
+          if (response.remember && canRemember && commandText !== null) {
+            this.allowedCommands.add(commandText);
+            try {
+              await this.opts.onCommandRemembered?.(commandText);
+            } catch (err: any) {
+              console.warn(`[permissions] could not store the "always allow" rule: ${err?.message ?? err}`);
+            }
           }
           // A genuinely PARTIAL hunk selection rewrites the arguments actually
           // handed to tool.execute below — the model's own turn history (the

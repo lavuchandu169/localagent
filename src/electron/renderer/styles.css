@@ -2451,6 +2451,39 @@ label .hint-text {
   border: 1px solid var(--danger);
 }
 
+.permission-prompt .remember-btn {
+  background: transparent;
+  color: var(--success);
+  border: 1px solid var(--success);
+}
+
+#command-rules-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.command-rule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.command-rule code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.command-rule-remove {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
 .permission-prompt.permission-resolved {
   opacity: 0.5;
 }

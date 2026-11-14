@@ -174,6 +174,8 @@ export interface PermissionResponse {
   approved: boolean;
   /** Only meaningful for an edit_file call with a diff — the DiffSegment hunk ids (see diffUtil.ts) to actually apply. Omitted, or covering every hunk id in the diff, behaves exactly like approving the whole call unmodified. Ignored when approved is false. */
   approvedHunkIds?: number[];
+  /** "Always allow this command in this workspace." Honoured only for an approved run_command call that commandRules.ts accepts. */
+  remember?: boolean;
 }
 
 export type PermissionDecision = "ALLOW" | "ASK" | "DENY";
@@ -201,7 +203,7 @@ export type AgentEvent =
   | { type: "tool_call.start"; index: number; name: string }
   | { type: "tool_call.delta"; index: number; argumentsDelta: string }
   | { type: "tool.result"; call: ToolCall; result: ToolResult }
-  | { type: "permission.request"; call: ToolCall; decision: PermissionDecision; diff?: Change[] }
+  | { type: "permission.request"; call: ToolCall; decision: PermissionDecision; diff?: Change[]; /** True when approving this call may also be remembered for the workspace. */ canRemember?: boolean }
   | { type: "checkpoint.created"; checkpointHash: string }
   | { type: "plan.proposed"; plan: ProposedPlan }
   /** One real API call's token cost, whenever the provider's response reports it — see ChatResponse.usage. Carries `model` since a single session's cost depends on which Claude model actually served each turn. */
