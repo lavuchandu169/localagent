@@ -34,6 +34,7 @@ Everything in this document is real. It works today. For the list of gaps, see [
   - [Embedded models](#embedded-models)
 - [Project instructions](#project-instructions)
 - [Long conversations](#long-conversations)
+- [Always-allowed commands](#always-allowed-commands)
 - [Desktop app](#desktop-app)
   - [Multi-session tabs](#multi-session-tabs)
   - [MCP servers](#mcp-servers)
@@ -189,6 +190,19 @@ Each model can read only a limited quantity of text in one request. When a sessi
 - After a summary, the agent does not have the contents of files that it read before. If it then edits one of those files without reading it again, it asks for your approval, also in the auto-edit modes.
 - If the summary request fails, the agent continues with the full history.
 - A summary can lose details. For exact work on a long task, start a new session.
+
+## Always-allowed commands
+
+When the agent asks to run a command in the desktop app, the prompt has three buttons: Approve, Always allow, and Deny. Select "Always allow" to approve the command now and to let the agent run that same command in that workspace without asking again.
+
+- A rule is one exact command. `npm test` and `npm test --coverage` are two different commands.
+- A rule applies to one workspace only. The app keeps the rules in its own data folder, not in the workspace, so a repository that you cloned cannot add a rule.
+- To see or remove the rules for the open workspace, open Settings (the ⚙ icon) and go to "Always-allowed commands".
+- These commands always ask, and the prompt does not show "Always allow" for them: destructive commands (`rm`, `sudo`, `git reset --hard`), network commands (`npm install`, `curl`, `git push`), and commands that contain shell characters such as `;`, `&&`, `|` or `$`.
+- Read-only mode refuses all commands, also the ones that have a rule.
+- If the agent changed a file without a prompt in the session (the two auto-edit modes do this), the rules stop for the remainder of that session and each command asks again. A command such as `npm test` runs a script from the project's files, and the agent could have changed that script.
+
+**Risk that remains.** A command with a rule runs the instructions that are in the project's files at that time. If those files changed outside the session, for example through `git pull`, the command runs the new instructions without a prompt. Add rules only in projects that you trust.
 
 ## Desktop app
 

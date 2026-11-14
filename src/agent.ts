@@ -1,3 +1,4 @@
+import os from "node:os";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -486,8 +487,22 @@ export class AgentSession {
 
   /** Replaces the always-allowed commands, for example after a workspace change or when a rule is removed in settings. */
   setAllowedCommands(commands: string[]): void {
-    this.allowedCommands = new Set(commands.map((c) => c.trim()).filter(isRememberableCommand));
+    this.allowedCommands = this.canUseCommandRules() ? new Set(commands.map((c) => c.trim()).filter(isRememberableCommand)) : new Set();
   }
+
+  /** Rules belong to a workspace the user chose. The home-directory fallback is not one. */
+  private canUseCommandRules(): boolean {
+    return this.opts.hasWorkspace !== false && this.opts.workspaceRoot !== os.homedir();
+  }
+
+  /**
+   * True once this session has applied a file change with no prompt (an
+   * auto-edit mode). A remembered command runs whatever the workspace's
+   * files say, for example a package.json script, so after a change the
+   * user never saw it must ask again. Otherwise the agent could rewrite
+   * the script and then run it unprompted. Never reset within a session.
+   */
+  private appliedWriteWithoutPrompt = false;
 
   getAllowedCommands(): string[] {
     return [...this.allowedCommands];
@@ -1261,10 +1276,11 @@ export class AgentSession {
         // every time even if a rule somehow names it.
         const commandText = call.name === "run_command" && typeof call.arguments.command === "string" ? call.arguments.command.trim() : null;
         const rememberable = commandText !== null && isRememberableCommand(commandText);
-        if (decision === "ASK" && rememberable && this.allowedCommands.has(commandText)) {
+        if (decision === "ASK" && rememberable && !this.appliedWriteWithoutPrompt && this.canUseCommandRules() && this.allowedCommands.has(commandText)) {
           decision = "ALLOW";
         }
-        const canRemember = decision === "ASK" && rememberable;
+        if (decision === "ALLOW" && tool.permission === "WRITE") this.appliedWriteWithoutPrompt = true;
+        const canRemember = decision === "ASK" && rememberable && this.canUseCommandRules();
         const diff = await this.computeEditDiffForCall(call);
         yield { type: "permission.request", call, decision, ...(diff ? { diff } : {}), ...(canRemember ? { canRemember } : {}) };
 

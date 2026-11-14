@@ -84,7 +84,7 @@ interface Harness {
 function harness(
   root: string,
   script: MockScriptEntry[],
-  options: { mode?: PermissionMode; allowedCommands?: string[]; respond?: (call: ToolCall) => PermissionResponse } = {}
+  options: { mode?: PermissionMode; allowedCommands?: string[]; hasWorkspace?: boolean; respond?: (call: ToolCall) => PermissionResponse } = {}
 ): Harness {
   const asked: ToolCall[] = [];
   const remembered: string[] = [];
@@ -96,6 +96,7 @@ function harness(
     tools: defaultToolRegistry(),
     permissionMode: options.mode ?? "DEFAULT",
     allowedCommands: options.allowedCommands,
+    hasWorkspace: options.hasWorkspace,
     onCommandRemembered: (command) => {
       remembered.push(command);
     },
@@ -189,6 +190,47 @@ await withTempDir(async (root) => {
   await h.run("edit a.txt");
   check("'always allow' applies to commands only, never to file edits", h.remembered.length === 0 && requestFor(h, "e1")?.canRemember !== true);
 });
+
+function editTurn(id: string, file: string): MockScriptEntry {
+  return { turn: { type: "tool_calls", toolCalls: [{ id, name: "edit_file", arguments: { path: file, content: "changed\n" } }] } };
+}
+function readTurn(id: string, file: string): MockScriptEntry {
+  return { turn: { type: "tool_calls", toolCalls: [{ id, name: "read_file", arguments: { path: file } }] } };
+}
+
+console.log("\nA remembered command and files the agent changed without a prompt:");
+await withTempDir(async (root) => {
+  await fs.writeFile(path.join(root, "package.json"), "{}\n");
+  const h = harness(root, [readTurn("r1", "package.json"), editTurn("e1", "package.json"), runCommandTurn("c1", "echo hi"), final, runCommandTurn("c2", "echo hi"), final], {
+    mode: "ACCEPT_EDITS",
+    allowedCommands: ["echo hi"],
+  });
+  await h.run("change the file then run");
+  check("in an auto-edit mode, the edit itself is applied without a prompt", !h.asked.some((c) => c.id === "e1"));
+  check("after an edit that the user never saw, a remembered command asks again", h.asked.some((c) => c.id === "c1"));
+  await h.run("run again");
+  check("and it keeps asking for the rest of the session", h.asked.some((c) => c.id === "c2"));
+});
+
+await withTempDir(async (root) => {
+  await fs.writeFile(path.join(root, "package.json"), "{}\n");
+  const h = harness(root, [readTurn("r1", "package.json"), editTurn("e1", "package.json"), runCommandTurn("c1", "echo hi"), final], { allowedCommands: ["echo hi"] });
+  await h.run("change the file then run");
+  check("when the user approved the edit in a prompt, a remembered command still runs without asking", h.asked.some((c) => c.id === "e1") && !h.asked.some((c) => c.id === "c1"));
+});
+
+await withTempDir(async (root) => {
+  const h = harness(root, [runCommandTurn("c1", "echo hi"), final], { allowedCommands: ["echo hi"], hasWorkspace: false, respond: () => ({ approved: true, remember: true }) });
+  await h.run("say hi");
+  check("with no workspace chosen, no rule applies and nothing can be remembered", h.session.getAllowedCommands().length === 0 && h.remembered.length === 0 && requestFor(h, "c1")?.canRemember !== true);
+  h.session.setAllowedCommands(["echo hi"]);
+  check("rules cannot be set on a session that has no chosen workspace", h.session.getAllowedCommands().length === 0);
+});
+
+{
+  const h = harness(os.homedir(), [final], { allowedCommands: ["echo hi"] });
+  check("the home directory is never treated as a workspace for rules", h.session.getAllowedCommands().length === 0);
+}
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
