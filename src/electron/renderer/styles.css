@@ -1658,6 +1658,7 @@ label .hint-text {
   margin: 0;
   max-width: none;
   flex-shrink: 0;
+  color: var(--statusbar-text);
 }
 
 #status-bar #active-model-badge .signal-dot {

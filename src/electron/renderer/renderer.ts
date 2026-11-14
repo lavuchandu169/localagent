@@ -1474,7 +1474,9 @@ function renderEvent(event: AgentEvent): void {
       break;
     }
     case "tool.start":
-      toolCard(event.call);
+      // A call that asked for approval, or showed a diff, already has its
+      // card. A second one would leave the first looking pending forever.
+      if (!toolCards.has(event.call.id)) toolCard(event.call);
       break;
     case "tool.result": {
       const card = toolCards.get(event.call.id) ?? toolCard(event.call);
