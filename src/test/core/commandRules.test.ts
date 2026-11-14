@@ -64,6 +64,14 @@ await withTempDir(async (dir) => {
   await fs.symlink(a, path.join(dir, "link-to-a"));
   check("a workspace reached through a symlink shares the real folder's rules", (await listAllowedCommands(file, path.join(dir, "link-to-a"))).includes("npm run lint"));
 
+  const c = path.join(dir, "workspace-c");
+  await fs.mkdir(c);
+  await Promise.all(Array.from({ length: 25 }, (_, i) => addAllowedCommand(file, c, `echo parallel ${i}`)));
+  check("rules added at the same time are all kept", (await listAllowedCommands(file, c)).length === 25);
+  await Promise.all([clearAllowedCommands(file, c), addAllowedCommand(file, a, "echo during clear")]);
+  check("a clear and an add that overlap both take effect", (await listAllowedCommands(file, c)).length === 0 && (await listAllowedCommands(file, a)).includes("echo during clear"));
+  await removeAllowedCommand(file, a, "echo during clear");
+
   for (let i = 0; i < MAX_COMMANDS_PER_WORKSPACE + 5; i++) await addAllowedCommand(file, b, `echo ${i}`);
   check("a workspace cannot hold more than the maximum number of rules", (await listAllowedCommands(file, b)).length === MAX_COMMANDS_PER_WORKSPACE);
 
@@ -91,7 +99,7 @@ interface Harness {
 function harness(
   root: string,
   script: MockScriptEntry[],
-  options: { mode?: PermissionMode; allowedCommands?: string[]; hasWorkspace?: boolean; respond?: (call: ToolCall) => PermissionResponse } = {}
+  options: { mode?: PermissionMode; allowedCommands?: string[]; hasWorkspace?: boolean; onUnpromptedWrite?: () => void; respond?: (call: ToolCall) => PermissionResponse } = {}
 ): Harness {
   const asked: ToolCall[] = [];
   const remembered: string[] = [];
@@ -104,6 +112,7 @@ function harness(
     permissionMode: options.mode ?? "DEFAULT",
     allowedCommands: options.allowedCommands,
     hasWorkspace: options.hasWorkspace,
+    onUnpromptedWrite: options.onUnpromptedWrite,
     onCommandRemembered: (command) => {
       remembered.push(command);
     },
@@ -224,6 +233,53 @@ await withTempDir(async (root) => {
   const h = harness(root, [readTurn("r1", "package.json"), editTurn("e1", "package.json"), runCommandTurn("c1", "echo hi"), final], { allowedCommands: ["echo hi"] });
   await h.run("change the file then run");
   check("when the user approved the edit in a prompt, a remembered command still runs without asking", h.asked.some((c) => c.id === "e1") && !h.asked.some((c) => c.id === "c1"));
+});
+
+await withTempDir(async (root) => {
+  await fs.writeFile(path.join(root, "a.txt"), "1\n");
+  await fs.writeFile(path.join(root, "b.txt"), "1\n");
+  let calls = 0;
+  const h = harness(root, [readTurn("r1", "a.txt"), editTurn("e1", "a.txt"), readTurn("r2", "b.txt"), editTurn("e2", "b.txt"), final], {
+    mode: "ACCEPT_EDITS",
+    onUnpromptedWrite: () => {
+      calls++;
+    },
+  });
+  await h.run("edit two files");
+  check("every unprompted edit is reported, not only the first", calls === 2);
+});
+
+await withTempDir(async (root) => {
+  await fs.writeFile(path.join(root, "a.txt"), "1\n");
+  const h = harness(root, [readTurn("r1", "a.txt"), editTurn("e1", "a.txt"), final], {
+    mode: "ACCEPT_EDITS",
+    onUnpromptedWrite: () => {
+      throw new Error("disk full");
+    },
+  });
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await h.run("edit a file");
+  } finally {
+    console.warn = originalWarn;
+  }
+  check("if the rules cannot be cleared, the edit asks for approval instead of applying silently", h.asked.some((c) => c.id === "e1") && requestFor(h, "e1")?.decision === "ASK");
+});
+
+await withTempDir(async (root) => {
+  const second = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-command-rules-second-"));
+  try {
+    await fs.writeFile(path.join(root, "a.txt"), "1\n");
+    const h = harness(root, [readTurn("r1", "a.txt"), editTurn("e1", "a.txt"), final, runCommandTurn("c1", "echo hi"), final], { mode: "ACCEPT_EDITS" });
+    await h.run("edit a file");
+    h.session.setWorkspaceRoot(second);
+    h.session.setAllowedCommands(["echo hi"]);
+    await h.run("say hi");
+    check("an unprompted edit in one workspace does not switch off the rules of the next workspace", !h.asked.some((c) => c.id === "c1"));
+  } finally {
+    await fs.rm(second, { recursive: true, force: true });
+  }
 });
 
 await withTempDir(async (root) => {
