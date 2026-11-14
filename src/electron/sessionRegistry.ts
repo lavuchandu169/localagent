@@ -1,3 +1,4 @@
+import { resolveSlashCommand } from "../slashCommands.js";
 import { addAllowedCommand, clearAllowedCommands, listAllowedCommands } from "../commandRules.js";
 import crypto from "node:crypto";
 import os from "node:os";
@@ -123,15 +124,18 @@ export interface SessionRegistry {
   onPendingApprovalsChanged?: () => void;
   /** Where "always allow this command" rules are stored (see commandRules.ts). Undefined turns the feature off: nothing is loaded or stored. */
   commandRulesFilePath?: string;
+  /** The user's own folder of custom slash commands (see slashCommands.ts). Undefined means built-in commands only. */
+  commandsDir?: string;
 }
 
 export function createSessionRegistry(
   sessionsDir: string,
   cloudSync?: CloudSyncConfig,
   onPendingApprovalsChanged?: () => void,
-  commandRulesFilePath?: string
+  commandRulesFilePath?: string,
+  commandsDir?: string
 ): SessionRegistry {
-  return { sessions: new Map(), sessionsDir, cloudSync, onPendingApprovalsChanged, commandRulesFilePath };
+  return { sessions: new Map(), sessionsDir, cloudSync, onPendingApprovalsChanged, commandRulesFilePath, commandsDir };
 }
 
 /** Re-reads every live session's always-allowed commands from the rules file: after a rule is removed in settings, or after a session moves to another workspace. */
@@ -717,6 +721,17 @@ async function syncDeleteFromCloud(registry: SessionRegistry, sessionId: string)
   }
 }
 
+async function* commandMessage(text: string): AsyncGenerator<AgentEvent> {
+  yield { type: "text", text };
+  yield { type: "done", success: true, summary: "Command answered." };
+}
+
+/** Tells the user that what they typed was replaced by a command's text before the model saw it. */
+async function* withExpansionNote(command: string | undefined, events: AsyncIterable<AgentEvent>): AsyncGenerator<AgentEvent> {
+  if (command) yield { type: "status", message: `Running your /${command} command.` };
+  yield* events;
+}
+
 async function doRunTask(
   registry: SessionRegistry,
   sessionId: string,
@@ -735,7 +750,16 @@ async function doRunTask(
     // or a provider error — always yields "done" as its final event, with
     // "error" (when present) yielded immediately before it. Persisting on
     // both would just save the same final state twice.
-    for await (const event of entry.session.run(task, attachments)) {
+    // A task that starts with "/name" is a command: it is handled here
+    // and only an expanded custom command ever reaches the model.
+    const resolved = await resolveSlashCommand(task, registry.commandsDir);
+    const events: AsyncIterable<AgentEvent> =
+      resolved.kind === "compact"
+        ? entry.session.compactNow()
+        : resolved.kind === "message"
+          ? commandMessage(resolved.text)
+          : withExpansionNote(resolved.command, entry.session.run(resolved.task, attachments));
+    for await (const event of events) {
       if (!isEphemeralStreamEvent(event)) entry.events.push(event);
       onEvent(event);
       if (event.type === "done") {

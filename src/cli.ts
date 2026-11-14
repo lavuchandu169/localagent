@@ -1,8 +1,10 @@
 import readline from "node:readline/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { AgentSession } from "./agent.js";
 import { defaultToolRegistry } from "./toolRegistry.js";
+import { resolveSlashCommand } from "./slashCommands.js";
 import { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
 import { EmbeddedLlamaProvider } from "./providers/embeddedLlama.js";
 import { AnthropicProvider } from "./providers/anthropicProvider.js";
@@ -35,7 +37,19 @@ export function parseArgs(argv: string[]) {
 
 async function main() {
   const { args, positional } = parseArgs(process.argv.slice(2));
-  const task = positional.join(" ");
+  const typed = positional.join(" ");
+  // A task that starts with "/name" is a command. Custom commands come
+  // from the user's own folder, the same one the desktop app reads.
+  const resolved = typed ? await resolveSlashCommand(typed, path.join(os.homedir(), ".localagent", "commands")) : null;
+  if (resolved?.kind === "message") {
+    console.log(resolved.text);
+    return;
+  }
+  if (resolved?.kind === "compact") {
+    console.log("/compact works on a running session in the desktop app. The CLI runs one task and exits, so there is nothing to compact.");
+    return;
+  }
+  const task = resolved?.task ?? "";
   if (!task) {
     console.error(
       'Usage: localagent "<task description>" [--workspace <dir>] [--base-url <url>] [--model <name>] [--mode DEFAULT|PLAN|ACCEPT_EDITS|AUTO_SAFE] [--provider anthropic]\n' +

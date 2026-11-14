@@ -386,12 +386,14 @@ export class AgentSession {
    * nears the context window. Never fails the task: if the summary call
    * fails or returns nothing, the history stays as it was.
    */
-  private async *compactIfNeeded(): AsyncGenerator<AgentEvent> {
+  private async *compactIfNeeded(force = false): AsyncGenerator<AgentEvent, boolean> {
     const window = this.opts.contextWindowTokens ?? this.opts.provider.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-    if (estimateTokens(this.messages, this.opts.tools.toSchema()) <= window * COMPACTION_THRESHOLD) return;
-    if (this.compactionFailedAtLength >= 0 && this.messages.length < this.compactionFailedAtLength + 4) return;
+    if (!force) {
+      if (estimateTokens(this.messages, this.opts.tools.toSchema()) <= window * COMPACTION_THRESHOLD) return false;
+      if (this.compactionFailedAtLength >= 0 && this.messages.length < this.compactionFailedAtLength + 4) return false;
+    }
     const plan = planCompaction(this.messages);
-    if (!plan) return;
+    if (!plan) return false;
 
     yield { type: "status", message: "Compacting earlier conversation to free up context..." };
     let summary = "";
@@ -414,11 +416,11 @@ export class AgentSession {
     } catch {
       // Handled below, the same as an empty summary.
     }
-    if (this.cancelled || this.stopRequested) return;
+    if (this.cancelled || this.stopRequested) return false;
     if (!summary) {
       this.compactionFailedAtLength = this.messages.length;
       yield { type: "status", message: "Could not compact the conversation. Continuing with the full history." };
-      return;
+      return false;
     }
 
     this.messages = buildCompactedHistory(plan, summary);
@@ -428,6 +430,28 @@ export class AgentSession {
     const stillVisible = readPathsIn(this.messages);
     for (const p of [...this.readPaths]) if (!stillVisible.has(p)) this.readPaths.delete(p);
     yield { type: "status", message: "Compacted earlier conversation to free up context." };
+    return true;
+  }
+
+  /**
+   * Compacts now, whatever the history's size: the /compact command.
+   * Runs like a task, between tasks, and always ends with a done event.
+   */
+  async *compactNow(): AsyncGenerator<AgentEvent> {
+    this.stopRequested = false;
+    this.abortController = new AbortController();
+    const before = this.messages.length;
+    const compacted = yield* this.compactIfNeeded(true);
+    if (compacted) {
+      yield { type: "done", success: true, summary: `Compacted ${before} messages into ${this.messages.length}.` };
+    } else if (this.cancelled || this.stopRequested) {
+      yield { type: "done", success: false, summary: "Stopped." };
+    } else if (this.compactionFailedAtLength === this.messages.length) {
+      yield { type: "done", success: false, summary: "Could not compact the conversation." };
+    } else {
+      yield { type: "text", text: "There is not enough earlier conversation to compact yet." };
+      yield { type: "done", success: true, summary: "Nothing to compact." };
+    }
   }
 
   /** A copy of the current conversation history, safe to persist or inspect without risking mutation of the live session. */

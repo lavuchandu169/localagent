@@ -34,6 +34,7 @@ Everything in this document is real. It works today. For the list of gaps, see [
   - [Embedded models](#embedded-models)
 - [Project instructions](#project-instructions)
 - [Long conversations](#long-conversations)
+- [Slash commands](#slash-commands)
 - [Always-allowed commands](#always-allowed-commands)
 - [Desktop app](#desktop-app)
   - [Multi-session tabs](#multi-session-tabs)
@@ -190,6 +191,28 @@ Each model can read only a limited quantity of text in one request. When a sessi
 - After a summary, the agent does not have the contents of files that it read before. If it then edits one of those files without reading it again, it asks for your approval, also in the auto-edit modes.
 - If the summary request fails, the agent continues with the full history.
 - A summary can lose details. For exact work on a long task, start a new session.
+
+## Slash commands
+
+A task that starts with `/` and a command name is a command. The app and the CLI handle it before the model sees it.
+
+| Command | What it does |
+|---|---|
+| `/help` | Shows the list of commands. |
+| `/compact` | Replaces the older turns of the session with a summary now. Refer to [Long conversations](#long-conversations). Desktop app only. |
+| `/<your-command>` | Sends the text of your own command file as the task. |
+
+To make your own command:
+
+1. Make the folder `~/.localagent/commands`.
+2. Put a Markdown file in it. The file name is the command name: `review.md` makes `/review`. Use lower-case letters, digits, and hyphens.
+3. Write the task text in the file. Write `$ARGUMENTS` where the text that you type after the command name must go. If the file has no `$ARGUMENTS`, the app adds your text at the end.
+
+Example: with a file `review.md` that contains `Review $ARGUMENTS for bugs. Do not change files.`, the task `/review src/parser.ts` sends `Review src/parser.ts for bugs. Do not change files.`
+
+- The app reads commands from your home folder only, not from the workspace. A repository that you cloned cannot add a command.
+- A file cannot replace `/help` or `/compact`.
+- A path at the start of a task, such as `/Users/me/a.ts has a bug`, is not a command.
 
 ## Always-allowed commands
 
