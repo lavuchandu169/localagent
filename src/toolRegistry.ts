@@ -7,6 +7,7 @@ import { deleteFileTool } from "./tools/deleteFile.js";
 import { runCommandTool } from "./tools/runCommand.js";
 import { fetchUrlTool } from "./tools/fetchUrl.js";
 import { findFilesTool } from "./tools/findFiles.js";
+import { updateTodosTool } from "./tools/updateTodos.js";
 
 export class ToolRegistry {
   private fixedTools = new Map<string, Tool>();
@@ -53,7 +54,11 @@ export class ToolRegistry {
   }
 }
 
-export function defaultToolRegistry(getExtraTools: () => Tool[] = () => []): ToolRegistry {
+export function defaultToolRegistry(
+  getExtraTools: () => Tool[] = () => [],
+  /** taskList adds update_todos. Off by default: an extra always-available tool misleads small local models (see the load_skill note below), so callers turn it on only for a capable model. */
+  options: { taskList?: boolean } = {}
+): ToolRegistry {
   // Deliberately NOT registered here: a "load_skill" tool. Live-tested
   // regression (see toolRegistry.test.ts and tools/loadSkill.ts) — a 3B
   // model offered "load_skill" as an always-available real option
@@ -62,5 +67,8 @@ export function defaultToolRegistry(getExtraTools: () => Tool[] = () => []): Too
   // task. A model only ever encounters the name "load_skill" now via
   // agent.ts's own dispatch-level fallback (its "unknown tool" branch),
   // never as a listed, choosable tool.
-  return new ToolRegistry([readFileTool, listDirectoryTool, findFilesTool, grepTool, editFileTool, deleteFileTool, runCommandTool, fetchUrlTool], getExtraTools);
+  return new ToolRegistry(
+    [readFileTool, listDirectoryTool, findFilesTool, grepTool, editFileTool, deleteFileTool, runCommandTool, fetchUrlTool, ...(options.taskList ? [updateTodosTool] : [])],
+    getExtraTools
+  );
 }
