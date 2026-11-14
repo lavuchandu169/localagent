@@ -1,4 +1,4 @@
-import { addAllowedCommand, listAllowedCommands } from "../commandRules.js";
+import { addAllowedCommand, clearAllowedCommands, listAllowedCommands } from "../commandRules.js";
 import crypto from "node:crypto";
 import os from "node:os";
 import { AgentSession } from "../agent.js";
@@ -328,6 +328,11 @@ export async function startSession(
     allowedCommands: registry.commandRulesFilePath && hasWorkspace ? await listAllowedCommands(registry.commandRulesFilePath, workspaceRoot) : [],
     onCommandRemembered: async (command) => {
       if (registry.commandRulesFilePath) await addAllowedCommand(registry.commandRulesFilePath, session.getWorkspaceRoot(), command);
+    },
+    onUnpromptedWrite: async () => {
+      if (!registry.commandRulesFilePath) return;
+      await clearAllowedCommands(registry.commandRulesFilePath, session.getWorkspaceRoot());
+      await reloadCommandRules(registry);
     },
     onApprovalNeeded: (call) =>
       new Promise<PermissionResponse>((resolve) => {

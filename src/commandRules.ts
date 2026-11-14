@@ -90,3 +90,12 @@ export async function removeAllowedCommand(filePath: string, workspaceRoot: stri
   else delete rules.workspaces[key];
   await writeRules(filePath, rules);
 }
+
+/** Removes every rule of one workspace: used when a file there changed with no prompt, so no stored rule can run what changed. */
+export async function clearAllowedCommands(filePath: string, workspaceRoot: string): Promise<void> {
+  const rules = await readRules(filePath);
+  const key = await workspaceKey(workspaceRoot);
+  if (!rules.workspaces[key]) return;
+  delete rules.workspaces[key];
+  await writeRules(filePath, rules);
+}

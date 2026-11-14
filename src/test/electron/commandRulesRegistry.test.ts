@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { createSessionRegistry, startSession, runTask, respondPermission, updateLiveSessionSettings, reloadCommandRules, type SessionRegistry } from "../../electron/sessionRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
 import { addAllowedCommand, listAllowedCommands, removeAllowedCommand } from "../../commandRules.js";
-import type { AgentEvent, ChatResponse } from "../../types.js";
+import type { AgentEvent, ChatResponse, PermissionMode } from "../../types.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -24,10 +24,10 @@ function echoTwice(): ChatResponse[] {
   ];
 }
 
-async function start(registry: SessionRegistry, workspaceRoot: string, script: ChatResponse[]) {
+async function start(registry: SessionRegistry, workspaceRoot: string, script: ChatResponse[], mode: PermissionMode = "DEFAULT") {
   const { sessionId } = await startSession(
     registry,
-    { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT" },
+    { workspaceRoot, provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode },
     { providerFactory: () => new MockProvider(script) }
   );
   return sessionId;
@@ -92,6 +92,31 @@ try {
     await reloadCommandRules(registry);
     check("removing a rule takes effect in a live session after a reload", (await run(registry, sessionId, false)).length === 2);
     await addAllowedCommand(rulesFile, workspaceA, "echo hi");
+  }
+  {
+    const workspaceC = path.join(base, "c");
+    await fs.mkdir(workspaceC);
+    await fs.writeFile(path.join(workspaceC, "package.json"), "{}\n");
+    await addAllowedCommand(rulesFile, workspaceC, "echo hi");
+    await addAllowedCommand(rulesFile, workspaceA, "echo hi");
+    const registry = createSessionRegistry(sessionsDir, undefined, undefined, rulesFile);
+    const asking = await start(registry, workspaceC, echoTwice());
+    const autoEditing = await start(
+      registry,
+      workspaceC,
+      [
+        { turn: { type: "tool_calls", toolCalls: [{ id: "r1", name: "read_file", arguments: { path: "package.json" } }] } },
+        { turn: { type: "tool_calls", toolCalls: [{ id: "e1", name: "edit_file", arguments: { path: "package.json", content: "{\"scripts\":{}}\n" } }] } },
+        { turn: { type: "final", content: "edited" } },
+      ],
+      "ACCEPT_EDITS"
+    );
+    check("an auto-edit session changes a file with no prompt", (await run(registry, autoEditing, false)).length === 0);
+    check("that clears the workspace's stored rules", (await listAllowedCommands(rulesFile, workspaceC)).length === 0);
+    check("another workspace's rules are untouched", (await listAllowedCommands(rulesFile, workspaceA)).includes("echo hi"));
+    check("a second live session on the same workspace asks again", (await run(registry, asking, false)).length === 2);
+    const later = await start(registry, workspaceC, echoTwice());
+    check("and so does a session started afterwards", (await run(registry, later, false)).length === 2);
   }
 } finally {
   await fs.rm(base, { recursive: true, force: true });

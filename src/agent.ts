@@ -77,6 +77,8 @@ export interface AgentSessionOptions {
   allowedCommands?: string[];
   /** Called when the user approves a command with "always allow", so the caller can store the rule. */
   onCommandRemembered?: (command: string) => void | Promise<void>;
+  /** Called the first time this session applies a file change with no prompt, so the caller can clear the workspace's stored command rules. */
+  onUnpromptedWrite?: () => void | Promise<void>;
   /** Overrides the provider's own context window for deciding when to compact the history. */
   contextWindowTokens?: number;
   /** Seeds checkpointHash from a prior session's persisted value — without this, resuming a session after an app restart always starts with no checkpoint (getCheckpointHash() === null), silently making "Revert this task" unavailable with no indication the capability (and the now-or-never window to use it) just disappeared (correctness audit: session High #2). */
@@ -1279,7 +1281,16 @@ export class AgentSession {
         if (decision === "ASK" && rememberable && !this.appliedWriteWithoutPrompt && this.canUseCommandRules() && this.allowedCommands.has(commandText)) {
           decision = "ALLOW";
         }
-        if (decision === "ALLOW" && tool.permission === "WRITE") this.appliedWriteWithoutPrompt = true;
+        if (decision === "ALLOW" && tool.permission === "WRITE" && !this.appliedWriteWithoutPrompt) {
+          this.appliedWriteWithoutPrompt = true;
+          // Other sessions on this workspace, and later ones, must stop
+          // honouring its rules too: the caller clears the stored rules.
+          try {
+            await this.opts.onUnpromptedWrite?.();
+          } catch (err: any) {
+            console.warn(`[permissions] could not clear the workspace's command rules: ${err?.message ?? err}`);
+          }
+        }
         const canRemember = decision === "ASK" && rememberable && this.canUseCommandRules();
         const diff = await this.computeEditDiffForCall(call);
         yield { type: "permission.request", call, decision, ...(diff ? { diff } : {}), ...(canRemember ? { canRemember } : {}) };

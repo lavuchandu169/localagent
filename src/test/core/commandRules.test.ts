@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { addAllowedCommand, isRememberableCommand, listAllowedCommands, MAX_COMMANDS_PER_WORKSPACE, removeAllowedCommand } from "../../commandRules.js";
+import { addAllowedCommand, clearAllowedCommands, isRememberableCommand, listAllowedCommands, MAX_COMMANDS_PER_WORKSPACE, removeAllowedCommand } from "../../commandRules.js";
 import { AgentSession } from "../../agent.js";
 import { defaultToolRegistry } from "../../toolRegistry.js";
 import { MockProvider, type MockScriptEntry } from "../../providers/mockProvider.js";
@@ -53,6 +53,13 @@ await withTempDir(async (dir) => {
   check("a destructive command is refused by the store too", (await addAllowedCommand(file, a, "rm -rf build")) === false && !(await listAllowedCommands(file, a)).includes("rm -rf build"));
   await removeAllowedCommand(file, a, "npm test");
   check("a rule can be removed", !(await listAllowedCommands(file, a)).includes("npm test") && (await listAllowedCommands(file, a)).includes("npm run lint"));
+
+  await addAllowedCommand(file, b, "echo keep");
+  await addAllowedCommand(file, a, "echo one");
+  await clearAllowedCommands(file, a);
+  check("clearing removes every rule of one workspace and leaves the others", (await listAllowedCommands(file, a)).length === 0 && (await listAllowedCommands(file, b)).includes("echo keep"));
+  await removeAllowedCommand(file, b, "echo keep");
+  await addAllowedCommand(file, a, "npm run lint");
 
   await fs.symlink(a, path.join(dir, "link-to-a"));
   check("a workspace reached through a symlink shares the real folder's rules", (await listAllowedCommands(file, path.join(dir, "link-to-a"))).includes("npm run lint"));
