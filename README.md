@@ -76,7 +76,7 @@ Everything in this document is real. It works today. For the list of gaps, see [
 - **Automatic fallback.** When a configured cloud provider (Anthropic, OpenAI, or Gemini), or the free-tier router, hits a rate limit mid-task, the session retries on the next configured cloud provider. It does not just fail the task. See [Automatic fallback on rate limits](#automatic-fallback-on-rate-limits).
 
 **Tools and safety, checked by code, not by guesswork**
-- Tools: `read_file` (reads a full file, or a line range with offset and limit, for a large file); `list_directory`; `grep` (ripgrep, with a pure-JS fallback); `edit_file` (full content for a new file or a large rewrite, or `old_string`/`new_string` for one targeted change, without rewriting the rest of the file); `delete_file` (one file, or a whole directory with `recursive: true`); `run_command`. Every tool an MCP server offers is also available, once you connect that server.
+- Tools: `read_file` (reads a full file, or a line range with offset and limit, for a large file); `list_directory`; `find_files` (finds files by name pattern at any depth, for example `*.test.ts` or `src/**/*.tsx`); `grep` (ripgrep, with a pure-JS fallback); `edit_file` (full content for a new file or a large rewrite, or `old_string`/`new_string` for one targeted change, without rewriting the rest of the file); `delete_file` (one file, or a whole directory with `recursive: true`); `run_command`. Every tool an MCP server offers is also available, once you connect that server.
 - Every file tool refuses to touch a protected path: `.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials.*`, `secrets.*`, `.ssh/`, `.aws/`, `.git/`. Every file tool also redacts text that looks like a secret, before that text ever reaches the model or your terminal.
 - `PermissionEngine` is deterministic code. It is not an LLM's judgment. It has four modes: `PLAN`, `DEFAULT`, `ACCEPT_EDITS`, `AUTO_SAFE`. It also classifies commands by risk: `SAFE_READ`, `NETWORK`, `DESTRUCTIVE`, `UNKNOWN`. An `UNKNOWN` command always asks for your approval. If a model proposes a full-file rewrite of a file it never read, the engine asks for your approval too, even in an auto-approve mode. Every MCP tool call asks for your approval, in every mode, the same as a shell command does.
 - **Per-hunk diff approval.** An edit the agent proposes shows you the real colored diff before you approve it. Each changed section has its own checkbox. Uncheck a section you do not want. Only the checked sections get written to disk.
@@ -198,7 +198,7 @@ When the agent asks to run a command in the desktop app, the prompt has three bu
 - A rule is one exact command. `npm test` and `npm test --coverage` are two different commands.
 - A rule applies to one workspace only. The app keeps the rules in its own data folder, not in the workspace, so a repository that you cloned cannot add a rule.
 - To see or remove the rules for the open workspace, open Settings (the ⚙ icon) and go to "Always-allowed commands".
-- These commands always ask, and the prompt does not show "Always allow" for them: destructive commands (`rm`, `sudo`, `mv`, `chmod`, `kill`), commands that install or download (`npm install`, `npx`, `pip`, `curl`, `docker`), git commands that fetch or change the working tree (`git pull`, `git push`, `git checkout`, `git reset`), and commands that contain shell characters such as `;`, `&&`, `|` or `$`.
+- Only a usual local test, build, or lint command can have a rule. Examples: `npm test`, `npm run <script>`, `pytest`, `cargo test`, `go test`, `make`, `tsc`, `eslint`, `node <script>`. The prompt shows "Always allow" only for these. All other commands always ask: destructive commands, commands that install or download, git commands that change the working tree, a program that is given with a path, and commands that contain shell characters such as `;`, `&&`, `|` or `$`.
 - Read-only mode refuses all commands, also the ones that have a rule.
 - If the agent changes a file without a prompt (the two auto-edit modes do this), the app deletes all the rules of that workspace, and of a workspace that contains it or is inside it. Each command then asks again, in all sessions. A command such as `npm test` runs a script from the project's files, and the agent could have changed that script. The rules are thus most useful in the "Ask before every change" mode.
 
@@ -384,7 +384,7 @@ This is a real, [source-traced](https://github.com/tt-a1i/archify) diagram. It i
 | `src/types.ts` | The `ModelProvider` interface everything else depends on |
 | `src/models.ts` | The curated embedded-model catalog |
 | `src/providers/` | `EmbeddedLlamaProvider`, `OpenAICompatibleProvider`, `AnthropicProvider`, `OpenAIProvider`, `GeminiProvider`, `FreellmapiProxyProvider`, `MockProvider` |
-| `src/tools/` | `read_file`, `list_directory`, `grep`, `edit_file`, `delete_file`, `run_command` |
+| `src/tools/` | `read_file`, `list_directory`, `find_files`, `grep`, `edit_file`, `delete_file`, `run_command` |
 | `src/permissions.ts` | `PermissionEngine` — the deterministic policy layer |
 | `src/protected.ts` | Protected-path matching and secret redaction |
 | `src/checkpoints.ts` / `src/changesSince.ts` | Scratch-index checkpoint/revert and the "Files changed" diff computation |

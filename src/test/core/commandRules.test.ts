@@ -40,7 +40,17 @@ for (const cmd of [
 ]) {
   check(`"${cmd}" can never be remembered`, !isRememberableCommand(cmd));
 }
-for (const cmd of ["npm test", "npm run build", "npm run lint", "pytest -q", "cargo test", "cargo build", "go test ./...", "go build ./...", "make test", "node scripts/check.js", "tsc -p tsconfig.json", "git status", "git diff"]) {
+for (const cmd of [
+  "/usr/bin/git pull", "./node_modules/.bin/eslint .", "GIT pull", "Npm test", "git -C . pull", "git -c core.pager=less status", "npm --prefix x test", "cargo +nightly test",
+  "nohup npm test", "time npm test", "env FOO=1 npm test", "command npm test", "xargs echo", "nice make test",
+  "git branch -D main", "node -e 1", "node --eval 1", "node -r ./x.js y.js", "python -c 1", "python3 -m http.server", "python -m venv x", "npm run", "npm start", "npm run-script", "unknown-tool x", "./script.sh", "~/bin/tool", "deno run x.ts",
+]) {
+  check(`"${cmd}" can never be remembered`, !isRememberableCommand(cmd));
+}
+for (const cmd of [
+  "npm test", "npm run build", "npm run lint", "npm run test:unit -- --watch", "pnpm test", "yarn run lint", "bun run build", "pytest -q", "python -m pytest tests", "python3 scripts/check.py", "cargo test", "cargo build", "cargo clippy",
+  "go test ./...", "go build ./...", "go vet ./...", "make test", "make", "node scripts/check.js", "tsc -p tsconfig.json", "eslint src", "jest --coverage", "vitest run", "git status", "git diff", "echo hi",
+]) {
   check(`"${cmd}" can still be remembered`, isRememberableCommand(cmd));
 }
 check("an empty command cannot be remembered", !isRememberableCommand("   "));

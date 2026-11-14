@@ -13,42 +13,58 @@ export const MAX_COMMANDS_PER_WORKSPACE = 200;
 const MAX_COMMAND_LENGTH = 500;
 
 /**
- * Some commands ask every time, with no way to turn that off:
- * destructive ones; network ones, because the same text can fetch or
- * send something different on each run; and anything with shell
- * metacharacters, because a compound command can hide a second one.
+ * Only an ordinary local test, build or lint command can be remembered.
+ * This is an allow list on purpose. A block list of risky commands can
+ * always be sidestepped by a spelling it does not know: a path in front
+ * of the program, a wrapper such as nohup or env, a global option before
+ * the subcommand, an interpreter's -c or -e. Here anything that is not
+ * recognised asks every time.
+ *
+ * The program must be a bare lower-case name, with no path. The checks
+ * after it look only at the words that select what runs; the remaining
+ * arguments are free, because a rule is one exact string that the user
+ * read and approved.
  */
 export function isRememberableCommand(command: string): boolean {
   const trimmed = command.trim();
   if (!trimmed || trimmed.length > MAX_COMMAND_LENGTH || /[\r\n]/.test(trimmed)) return false;
   if (hasShellMetacharacters(trimmed)) return false;
-  if (NEVER_REMEMBER.some((r) => r.test(trimmed))) return false;
   const risk = classifyCommand(trimmed);
-  return risk !== "DESTRUCTIVE" && risk !== "NETWORK";
+  if (risk === "DESTRUCTIVE" || risk === "NETWORK") return false;
+  const [program, ...args] = trimmed.split(/\s+/);
+  const accepts = program ? REMEMBERABLE_PROGRAMS.get(program) : undefined;
+  return accepts !== undefined && accepts(args);
 }
 
-/**
- * classifyCommand's NETWORK and DESTRUCTIVE lists name only a few
- * spellings. A standing rule needs a wider net: package installs and
- * package runners in every common tool, git commands that fetch or
- * rewrite the working tree, remote access, containers, and commands
- * that move, re-permission or kill things. This is still a list of
- * known risks, not a proof that every other command is safe: a rule is
- * the user's own standing approval of one exact command.
- */
-const NEVER_REMEMBER: RegExp[] = [
-  /^(npm|pnpm|yarn|bun)\s+(i|install|add|ci|update|upgrade|up|exec|dlx|x|create|link|publish|remove|rm|uninstall)\b/,
-  /^yarn\s*$/,
-  /^(npx|bunx|pnpx)\b/,
-  /^(pip|pip3|pipx|uv|poetry|pipenv|conda|gem|brew|apt|apt-get|yum|dnf|pacman|choco|winget)\b/,
-  /^python3?\s+-m\s+(pip|ensurepip|venv)\b/,
-  /^cargo\s+(install|add|update|publish|fetch)\b/,
-  /^go\s+(get|install|mod)\b/,
-  /^git\s+(pull|fetch|clone|push|checkout|switch|clean|reset|restore|rebase|merge|stash|submodule|apply|am|cherry-pick|revert|commit|remote|config|worktree|gc|filter-branch)\b/,
-  /^(curl|wget|ssh|scp|sftp|rsync|nc|ncat|netcat|telnet|ftp)\b/,
-  /^(docker|podman|kubectl|helm|terraform)\b/,
-  /^(chmod|chown|chgrp|mv|dd|kill|pkill|killall|shutdown|reboot|launchctl|systemctl|crontab|open|osascript|eval|exec|source|sh|bash|zsh|env)\b/,
-];
+const anyArguments = () => true;
+const firstIs =
+  (...subcommands: string[]) =>
+  (args: string[]) =>
+    args[0] !== undefined && subcommands.includes(args[0]);
+/** A script path or target, not an option: rules out -e, -c, -r and the like. */
+const firstIsNotAnOption = (args: string[]) => args[0] !== undefined && !args[0].startsWith("-");
+const packageScript = (args: string[]) =>
+  args[0] === "test" || args[0] === "t" || ((args[0] === "run" || args[0] === "run-script") && args[1] !== undefined && /^[\w:.-]+$/.test(args[1]));
+
+const REMEMBERABLE_PROGRAMS = new Map<string, (args: string[]) => boolean>([
+  ["npm", packageScript],
+  ["pnpm", packageScript],
+  ["yarn", packageScript],
+  ["bun", packageScript],
+  ["node", firstIsNotAnOption],
+  ["python", (args) => (args[0] === "-m" ? args[1] === "pytest" || args[1] === "unittest" : firstIsNotAnOption(args))],
+  ["python3", (args) => (args[0] === "-m" ? args[1] === "pytest" || args[1] === "unittest" : firstIsNotAnOption(args))],
+  ["cargo", firstIs("test", "build", "check", "clippy", "fmt", "doc", "bench", "run")],
+  ["go", firstIs("test", "build", "vet", "fmt", "run")],
+  ["dotnet", firstIs("test", "build")],
+  ["swift", firstIs("test", "build")],
+  ["mvn", firstIs("test", "verify", "compile", "package")],
+  ["gradle", firstIs("test", "build", "check", "assemble")],
+  ["git", firstIs("status", "diff", "log", "show")],
+  ...["make", "pytest", "jest", "vitest", "mocha", "tsc", "eslint", "prettier", "ruff", "mypy", "black", "flake8", "rspec", "phpunit", "tox", "echo", "ls", "pwd", "cat", "wc", "head", "tail"].map(
+    (name): [string, (args: string[]) => boolean] => [name, anyArguments]
+  ),
+]);
 
 type RulesFile = { version: 1; workspaces: Record<string, string[]> };
 
