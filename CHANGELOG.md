@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.169 — 2026-11-14
+
+- Merge branch 'context-compaction'
+
 ## v0.1.0-beta.168 — 2026-11-14
 
 - Load a workspace's AGENTS.md as standing instructions for every session
