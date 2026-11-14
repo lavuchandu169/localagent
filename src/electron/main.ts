@@ -414,7 +414,9 @@ app.whenReady().then(async () => {
     // waitingForApproval field) live, including for a session with no tab
     // currently open.
     () => broadcastToAllWindows("agent:sessions-changed"),
-    commandRulesFilePath
+    commandRulesFilePath,
+    // The user's own folder, never the workspace: a command's text is sent as the user's request.
+    path.join(os.homedir(), ".localagent", "commands")
   );
 
   // Tracks the AbortController for whichever agent:start-session call is
