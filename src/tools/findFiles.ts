@@ -15,46 +15,92 @@ interface Input {
   path?: string;
 }
 
-/**
- * Turns a glob into an anchored regular expression over a forward-slash
- * relative path. Supports `*`, `**`, `?` and `{a,b}`; every other
- * character is literal. A pattern with no slash matches the file name
- * in any folder, which is what a model nearly always means by "*.ts".
- */
-export function globToRegExp(glob: string): RegExp {
-  const pattern = glob.includes("/") ? glob : `**/${glob}`;
-  let out = "";
-  let inBraces = false;
-  for (let i = 0; i < pattern.length; i++) {
-    const ch = pattern[i]!;
-    if (ch === "*") {
-      if (pattern[i + 1] === "*") {
-        i++;
-        if (pattern[i + 1] === "/") {
-          i++;
-          out += "(?:[^/]+/)*"; // "**/" : zero or more folders
-        } else {
-          out += ".*"; // trailing "**" : everything below
-        }
-      } else {
-        out += "[^/]*";
-      }
-    } else if (ch === "?") {
-      out += "[^/]";
-    } else if (ch === "{") {
-      inBraces = true;
-      out += "(?:";
-    } else if (ch === "}" && inBraces) {
-      inBraces = false;
-      out += ")";
-    } else if (ch === "," && inBraces) {
-      out += "|";
-    } else {
-      out += ch.replace(/[.+^$()|[\]\\{}]/g, "\\$&");
+const MAX_BRACE_ALTERNATIVES = 32;
+
+/** Expands {a,b} groups into plain patterns. Throws when the result would be too many patterns. */
+function expandBraces(pattern: string): string[] {
+  const open = pattern.indexOf("{");
+  const close = open === -1 ? -1 : pattern.indexOf("}", open);
+  if (open === -1 || close === -1) return [pattern];
+  const head = pattern.slice(0, open);
+  const rest = expandBraces(pattern.slice(close + 1));
+  const out: string[] = [];
+  for (const option of pattern.slice(open + 1, close).split(",")) {
+    for (const tail of rest) {
+      out.push(head + option + tail);
+      if (out.length > MAX_BRACE_ALTERNATIVES) throw new Error(`too many {a,b} combinations (max ${MAX_BRACE_ALTERNATIVES}).`);
     }
   }
-  if (inBraces) out += ")";
-  return new RegExp(`^${out}$`);
+  return out;
+}
+
+/** Matches one path segment against a segment pattern with * and ?. Iterative, so its cost is at most pattern length times name length. */
+function matchSegment(pattern: string, name: string): boolean {
+  let p = 0;
+  let n = 0;
+  let starAt = -1;
+  let retryFrom = 0;
+  while (n < name.length) {
+    if (p < pattern.length && (pattern[p] === "?" || pattern[p] === name[n])) {
+      p++;
+      n++;
+    } else if (p < pattern.length && pattern[p] === "*") {
+      starAt = p++;
+      retryFrom = n;
+    } else if (starAt !== -1) {
+      p = starAt + 1;
+      n = ++retryFrom;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.length && pattern[p] === "*") p++;
+  return p === pattern.length;
+}
+
+/** Matches path segments against pattern segments, where a "**" segment stands for any number of folders. Each (pattern, path) position is visited once. */
+function matchSegments(patternSegments: string[], pathSegments: string[]): boolean {
+  const failed = new Set<number>();
+  const visit = (pi: number, si: number): boolean => {
+    const key = pi * (pathSegments.length + 1) + si;
+    if (failed.has(key)) return false;
+    let ok: boolean;
+    if (pi === patternSegments.length) {
+      ok = si === pathSegments.length;
+    } else if (patternSegments[pi] === "**") {
+      // A trailing "**" takes everything that is left; otherwise it takes zero folders or one more.
+      ok = pi === patternSegments.length - 1 ? si < pathSegments.length : visit(pi + 1, si) || (si < pathSegments.length && visit(pi, si + 1));
+    } else {
+      ok = si < pathSegments.length && matchSegment(patternSegments[pi]!, pathSegments[si]!) && visit(pi + 1, si + 1);
+    }
+    if (!ok) failed.add(key);
+    return ok;
+  };
+  return visit(0, 0);
+}
+
+/**
+ * Compiles a glob into a matcher over a forward-slash relative path.
+ * Supports `*`, `**`, `?` and `{a,b}`; every other character is literal.
+ * A pattern with no slash matches the file name in any folder, which is
+ * what a model nearly always means by "*.ts".
+ *
+ * This is a hand-written matcher, not a regular expression, on purpose:
+ * a regex built from a pattern with several wildcards can take seconds
+ * or longer to reject one path, and the pattern comes from the model.
+ */
+export function compileGlob(glob: string): { test(relPath: string): boolean } {
+  const alternatives = expandBraces(glob).map((alternative) => {
+    const withFolder = alternative.includes("/") ? alternative : `**/${alternative}`;
+    // Repeated "**" segments mean the same as one.
+    return withFolder.split("/").filter((segment, i, all) => !(segment === "**" && all[i - 1] === "**"));
+  });
+  return {
+    test(relPath: string): boolean {
+      const pathSegments = relPath.split("/");
+      return alternatives.some((patternSegments) => matchSegments(patternSegments, pathSegments));
+    },
+  };
 }
 
 export const findFilesTool: Tool<Input, { files: string[] }> = {
@@ -80,9 +126,9 @@ export const findFilesTool: Tool<Input, { files: string[] }> = {
     const resolved = await resolveWithinWorkspace(ctx.workspaceRoot, input.path ?? ".");
     if (!resolved.ok) return { ok: false, output: null, error: resolved.error };
 
-    let matcher: RegExp;
+    let matcher: { test(relPath: string): boolean };
     try {
-      matcher = globToRegExp(pattern);
+      matcher = compileGlob(pattern);
     } catch (err: any) {
       return { ok: false, output: null, error: `Invalid pattern: ${err.message}` };
     }

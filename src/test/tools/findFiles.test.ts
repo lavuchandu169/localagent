@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { findFilesTool, globToRegExp, MAX_FIND_RESULTS } from "../../tools/findFiles.js";
+import { findFilesTool, compileGlob, MAX_FIND_RESULTS } from "../../tools/findFiles.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -13,9 +13,9 @@ function check(name: string, cond: boolean) {
   }
 }
 
-console.log("globToRegExp:");
+console.log("compileGlob:");
 {
-  const m = (glob: string, p: string) => globToRegExp(glob).test(p);
+  const m = (glob: string, p: string) => compileGlob(glob).test(p);
   check("* matches inside one path segment", m("src/*.ts", "src/a.ts") && !m("src/*.ts", "src/deep/a.ts"));
   check("** matches any number of folders, including none", m("src/**/*.ts", "src/a.ts") && m("src/**/*.ts", "src/x/y/a.ts") && !m("src/**/*.ts", "lib/a.ts"));
   check("a pattern with no slash matches the file name at any depth", m("*.md", "README.md") && m("*.md", "docs/guide/intro.md") && !m("*.md", "docs/intro.mdx"));
@@ -24,6 +24,38 @@ console.log("globToRegExp:");
   check("regex characters in a pattern are literal", m("a+b(1).txt", "a+b(1).txt") && !m("a+b(1).txt", "aab1.txt") && !m("file.ts", "fileXts"));
   check("a trailing ** matches everything below a folder", m("src/**", "src/a/b.ts") && !m("src/**", "lib/a.ts"));
   check("matching is exact from start to end", !m("a.ts", "xa.ts") && !m("src/a.ts", "src/a.tsx"));
+}
+
+console.log("\ncompileGlob stays fast on hostile patterns:");
+{
+  const longPath = Array.from({ length: 40 }, (_, i) => `dir${i}`).join("/") + "/file.txt";
+  const timed = (glob: string) => {
+    const started = Date.now();
+    let threw = false;
+    try {
+      compileGlob(glob).test(longPath);
+    } catch {
+      threw = true;
+    }
+    return { ms: Date.now() - started, threw };
+  };
+  const manyGlobstars = timed("**/".repeat(40) + "nomatch");
+  check("repeated **/ segments do not blow up matching time", manyGlobstars.ms < 500);
+  check("repeated **/ behaves like a single one", compileGlob("**/**/**/*.ts").test("a/b/c.ts") && compileGlob("**/**/*.ts").test("c.ts"));
+  check("repeated * behaves like a single one", compileGlob("a***b.ts").test("aXYb.ts") && compileGlob("a*b.ts").test("aXYb.ts"));
+  const started = Date.now();
+  const slowForRegex = compileGlob("x/" + "*a".repeat(60) + "b").test("x/" + "a".repeat(250));
+  check("many wildcards against a long name are answered at once, and correctly", slowForRegex === false && Date.now() - started < 500);
+  check("many wildcards still match when they should", compileGlob("x/" + "*a".repeat(20) + "*").test("x/" + "a".repeat(30)));
+  const manyBraces = timed("{a,b}".repeat(40));
+  check("a pattern with too many brace combinations is refused", manyBraces.threw && manyBraces.ms < 500);
+  check("nested ** and * combine correctly", compileGlob("src/**/test/*.spec.ts").test("src/a/b/test/x.spec.ts") && !compileGlob("src/**/test/*.spec.ts").test("src/a/b/x.spec.ts"));
+  check("a pattern does not match a longer path that only starts with it", !compileGlob("src/a").test("src/a/b.ts") && !compileGlob("src/*").test("src/a/b.ts"));
+  const deep = Array.from({ length: 60 }, () => "a").join("/");
+  const startedDeep = Date.now();
+  const deepResult = compileGlob("**/a/".repeat(25) + "nomatch").test(deep);
+  check("many ** segments against a deep path are rejected at once", deepResult === false && Date.now() - startedDeep < 500);
+  check("a star can match an empty string", compileGlob("a*.ts").test("a.ts") && compileGlob("*").test("x"));
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-findfiles-test-"));
@@ -71,6 +103,8 @@ try {
     const r2 = await findFilesTool.execute({} as any, ctx);
     const r3 = await findFilesTool.execute({ pattern: "x".repeat(600) }, ctx);
     check("a missing, empty or oversized pattern is a clear error, not a crash", r1.ok === false && r2.ok === false && r3.ok === false);
+    const r4 = await findFilesTool.execute({ pattern: "{a,b}".repeat(40) }, ctx);
+    check("a pattern with too many brace combinations is a clear error from the tool", r4.ok === false && /combinations/i.test(r4.error ?? ""));
   }
   {
     const r = await findFilesTool.execute({ pattern: "/etc/*" }, ctx);
