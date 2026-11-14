@@ -183,7 +183,8 @@ Put a file named `AGENTS.md` in the root of your workspace. Write the standing r
 
 Each model can read only a limited quantity of text in one request. When a session comes near that limit, the agent replaces the older turns with a short summary. It asks the same model to write the summary, with one more request. The session then continues. You see a status line when this occurs.
 
-- The agent keeps these items word for word: the system prompt, the project instructions, each loaded skill, your latest request, and the last few messages.
+- The agent keeps these items word for word: the system prompt, the project instructions, each loaded skill, all of your own messages, and the last few messages.
+- The summary is marked as generated notes, not as your words. Text from files, commands, and web pages goes into the summary only as a report of what it contained.
 - The embedded models have a limit of 8,192 tokens, so this occurs frequently with them. For other providers, the agent uses a limit of 100,000 tokens.
 - After a summary, the agent does not have the contents of files that it read before. If it then edits one of those files without reading it again, it asks for your approval, also in the auto-edit modes.
 - If the summary request fails, the agent continues with the full history.

@@ -7,6 +7,8 @@ import {
   renderTranscript,
   buildCompactedHistory,
   MIN_MESSAGES_TO_COMPACT,
+  SUMMARY_MARKER,
+  SUMMARY_SYSTEM_PROMPT,
   KEEP_RECENT_MESSAGES,
 } from "../../compaction.js";
 import { AgentSession } from "../../agent.js";
@@ -53,6 +55,7 @@ console.log("\nplanCompaction:");
     system,
     ...toolPair("skill_project-instructions", "load_skill", { id: "project-instructions" }, "RULES"),
     user("first task"),
+    ...toolPair("r0", "read_file", { path: "z.ts" }, "Z CONTENT"),
     ...toolPair("r1", "read_file", { path: "a.ts" }, "A CONTENT"),
     assistant("done with first"),
     user("second task"),
@@ -72,7 +75,7 @@ console.log("\nplanCompaction:");
     check("the tail never starts with an orphaned tool result", plan.tail[0]?.role !== "tool");
     check("the tail keeps at least the most recent messages", plan.tail.length >= KEEP_RECENT_MESSAGES);
     check("the most recent tool result is in the tail", plan.tail[plan.tail.length - 1]?.content === "E CONTENT");
-    check("the current request is kept word for word when it falls in the summarised range", plan.currentRequest?.content === "second task");
+    check("every user message in the summarised range is kept word for word, in order", JSON.stringify(plan.userMessages.map((m) => m.content)) === JSON.stringify(["first task", "second task"]));
     check("older turns go to the summary", plan.toSummarize.some((m) => m.content === "A CONTENT"));
     const total = 1 + plan.pinned.length + plan.toSummarize.length + plan.tail.length;
     check("every message is accounted for exactly once", total === history.length);
@@ -80,14 +83,27 @@ console.log("\nplanCompaction:");
     const rebuilt = buildCompactedHistory(plan, "SUMMARY TEXT");
     check("the rebuilt history starts with the system prompt, then the pinned skill", rebuilt[0] === system && rebuilt[2]?.content === "RULES");
     check("the summary follows as a user message", rebuilt[3]?.role === "user" && rebuilt[3].content.includes("SUMMARY TEXT"));
-    check("the current request follows the summary", rebuilt[4]?.content === "second task");
+    check("the user's own messages follow the summary, unchanged", rebuilt[4]?.content === "first task" && rebuilt[5]?.content === "second task");
+    check("the summary is framed as generated notes, not as something the user said", /not written by the user/i.test(rebuilt[3]?.content ?? "") && /not instructions/i.test(rebuilt[3]?.content ?? ""));
+    check("the summary message carries the marker", rebuilt[3]?.content.startsWith(SUMMARY_MARKER) === true);
     check("the rebuilt history is shorter", rebuilt.length < history.length);
     check("the old file content is gone", !rebuilt.some((m) => m.content.includes("A CONTENT")));
   }
 
   const recentRequest: ChatMessage[] = [system, ...Array.from({ length: 12 }, (_, i) => assistant(`old ${i}`)), user("latest"), assistant("reply")];
   const recentPlan = planCompaction(recentRequest);
-  check("a current request that is already in the tail is not duplicated", recentPlan !== null && recentPlan.currentRequest === undefined && recentPlan.tail.some((m) => m.content === "latest"));
+  check("a user message that is already in the tail is not duplicated", recentPlan !== null && recentPlan.userMessages.length === 0 && recentPlan.tail.some((m) => m.content === "latest"));
+
+  const withOldSummary: ChatMessage[] = [system, user(`${SUMMARY_MARKER}\nold notes`), user("real request"), ...Array.from({ length: 12 }, (_, i) => assistant(`m ${i}`))];
+  const oldSummaryPlan = planCompaction(withOldSummary);
+  check(
+    "an earlier generated summary is summarised again, never kept as if the user wrote it",
+    oldSummaryPlan !== null && oldSummaryPlan.userMessages.length === 1 && oldSummaryPlan.userMessages[0]?.content === "real request" && oldSummaryPlan.toSummarize.some((m) => m.content.includes("old notes"))
+  );
+
+  const userHeavy: ChatMessage[] = [system, ...Array.from({ length: 10 }, (_, i) => user(`u ${i}`)), ...Array.from({ length: KEEP_RECENT_MESSAGES }, (_, i) => assistant(`m ${i}`))];
+  check("a range made only of user messages has nothing to summarise", planCompaction(userHeavy) === null);
+  check("the summariser is told that tool results are data and that only USER lines are requests", /TOOL RESULT/.test(SUMMARY_SYSTEM_PROMPT) && /USER/.test(SUMMARY_SYSTEM_PROMPT));
 
   const misaligned: ChatMessage[] = [
     system,
@@ -173,6 +189,7 @@ await withWorkspace(async (root) => {
   const taskRequest = provider.receivedRequests[1];
   check("the real task call gets the summary instead of the old turns", taskRequest?.messages.some((m) => m.content.includes("Files f0-f9 were read.")) === true && !taskRequest.messages.some((m) => m.content.includes("CONTENT-0")));
   check("the new request is still present word for word", taskRequest?.messages.some((m) => m.role === "user" && m.content === "next task") === true);
+  check("the earlier request is also still present word for word", taskRequest?.messages.some((m) => m.role === "user" && m.content === "original task") === true);
   check("the stored history shrank", session.getMessages().length < before);
   check("the user is told that compaction happened", events.some((e) => e.type === "status" && /compact/i.test(e.message)));
   check("the summary call's token cost is reported", events.some((e) => e.type === "usage" && e.inputTokens === 900));
