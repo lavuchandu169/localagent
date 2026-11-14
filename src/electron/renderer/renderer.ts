@@ -46,6 +46,7 @@ import { createFrameCoalescer } from "./rafCoalesce.js";
 import { createDebouncer } from "./debounce.js";
 import { formatDoneLine } from "./doneLine.js";
 import { formatPerfBadge } from "./perfBadge.js";
+import { initCommandRulesPanel, refreshCommandRulesPanel } from "./commandRulesPanel.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import { initOrganizationPanel, closeOrganizationPanel, isOrganizationPanelOpen, type OrganizationPanelDeps } from "./organizationPanel.js";
@@ -161,7 +162,9 @@ interface AgentBridge {
   startSession(config: SessionConfig, resume?: ResumePayload): Promise<{ sessionId: string; workspaceRoot: string; checkpointHash: string | null }>;
   runTask(sessionId: string, task: string, attachments?: { images?: AttachedImage[]; textAttachments?: AttachedText[] }): Promise<void>;
   pickAttachments(limit?: number): Promise<{ attachments: PickedAttachment[]; errors: { name: string; error: string }[]; skipped: number }>;
-  respondPermission(sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]): Promise<void>;
+  respondPermission(sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[], remember?: boolean): Promise<void>;
+  listCommandRules(workspaceRoot: string): Promise<string[]>;
+  removeCommandRule(workspaceRoot: string, command: string): Promise<void>;
   respondPlan(sessionId: string, approved: boolean): Promise<void>;
   cancelSession(sessionId: string): Promise<void>;
   stopTask(sessionId: string): Promise<void>;
@@ -938,6 +941,7 @@ function closeAllFullScreenModals(): boolean {
 
 const aboutPanelDeps: AboutPanelDeps = { closeOtherFullScreenModals: closeAllFullScreenModals, buildReportIssueUrl };
 initAboutPanel(aboutPanelDeps);
+initCommandRulesPanel({ getWorkspaceRoot: () => activeTab(tabRegistry)?.workspaceRoot ?? null });
 
 const mcpServersPanelDeps: McpServersPanelDeps = { closeOtherFullScreenModals: closeAllFullScreenModals };
 initMcpServersPanel(mcpServersPanelDeps);
@@ -1164,6 +1168,7 @@ settingsToggle.addEventListener("click", async () => {
   if (opening) {
     if (!closeAllFullScreenModals()) return;
     await openSettingsPanel();
+    await refreshCommandRulesPanel();
   }
   if (opening) openOverlayPanel(settingsPanel);
   else closeOverlayPanel(settingsPanel);
@@ -1469,7 +1474,9 @@ function renderEvent(event: AgentEvent): void {
       break;
     }
     case "tool.start":
-      toolCard(event.call);
+      // A call that asked for approval, or showed a diff, already has its
+      // card. A second one would leave the first looking pending forever.
+      if (!toolCards.has(event.call.id)) toolCard(event.call);
       break;
     case "tool.result": {
       const card = toolCards.get(event.call.id) ?? toolCard(event.call);
@@ -1520,9 +1527,17 @@ function renderEvent(event: AgentEvent): void {
       const deny = document.createElement("button");
       deny.className = "deny-btn";
       deny.textContent = "Deny";
-      const respond = (approved: boolean) => {
+      // Offered only when the agent says this exact command may be remembered for the workspace.
+      const always = event.canRemember ? document.createElement("button") : null;
+      if (always) {
+        always.className = "remember-btn";
+        always.textContent = "Always allow";
+        always.title = "Approve now, and run this exact command in this workspace without asking again. Remove it later in Settings.";
+      }
+      const respond = (approved: boolean, remember = false) => {
         approve.disabled = true;
         deny.disabled = true;
+        if (always) always.disabled = true;
         prompt.classList.add("permission-resolved");
         // Only meaningful for an edit_file approval. DIFF_LINE_CAP can mean
         // renderDiff never rendered a checkbox at all for a hunk past the
@@ -1542,11 +1557,15 @@ function renderEvent(event: AgentEvent): void {
           approvedHunkIds = allHunkIds.filter((id) => !renderedIds.has(id) || checkedIds.has(id));
         }
         const tab = activeTab(tabRegistry);
-        if (tab?.sessionId) void window.agent.respondPermission(tab.sessionId, event.call.id, approved, approvedHunkIds);
+        if (tab?.sessionId) void window.agent.respondPermission(tab.sessionId, event.call.id, approved, approvedHunkIds, remember);
       };
       approve.addEventListener("click", () => respond(true));
       deny.addEventListener("click", () => respond(false));
       prompt.appendChild(approve);
+      if (always) {
+        always.addEventListener("click", () => respond(true, true));
+        prompt.appendChild(always);
+      }
       prompt.appendChild(deny);
       card.appendChild(prompt);
       scrollEventLogToBottom();

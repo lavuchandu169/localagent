@@ -1,3 +1,4 @@
+import { addAllowedCommand, clearAllowedCommands, listAllowedCommands } from "../commandRules.js";
 import crypto from "node:crypto";
 import os from "node:os";
 import { AgentSession } from "../agent.js";
@@ -120,10 +121,26 @@ export interface SessionRegistry {
   cloudSync?: CloudSyncConfig;
   /** Correctness audit finding (session Medium #4): fired whenever any session's pending permission/plan approval starts, gets answered, or is swept away (session cancelled/deleted) — lets main.ts rebroadcast agent:sessions-changed so the sidebar's "waiting for approval" indicator (see getSessionIdsWithPendingApproval) stays live even for a session with no tab currently open. */
   onPendingApprovalsChanged?: () => void;
+  /** Where "always allow this command" rules are stored (see commandRules.ts). Undefined turns the feature off: nothing is loaded or stored. */
+  commandRulesFilePath?: string;
 }
 
-export function createSessionRegistry(sessionsDir: string, cloudSync?: CloudSyncConfig, onPendingApprovalsChanged?: () => void): SessionRegistry {
-  return { sessions: new Map(), sessionsDir, cloudSync, onPendingApprovalsChanged };
+export function createSessionRegistry(
+  sessionsDir: string,
+  cloudSync?: CloudSyncConfig,
+  onPendingApprovalsChanged?: () => void,
+  commandRulesFilePath?: string
+): SessionRegistry {
+  return { sessions: new Map(), sessionsDir, cloudSync, onPendingApprovalsChanged, commandRulesFilePath };
+}
+
+/** Re-reads every live session's always-allowed commands from the rules file: after a rule is removed in settings, or after a session moves to another workspace. */
+export async function reloadCommandRules(registry: SessionRegistry): Promise<void> {
+  const file = registry.commandRulesFilePath;
+  if (!file) return;
+  for (const entry of registry.sessions.values()) {
+    entry.session.setAllowedCommands(await listAllowedCommands(file, entry.session.getWorkspaceRoot()));
+  }
 }
 
 /**
@@ -307,6 +324,16 @@ export async function startSession(
     getGithubToken: deps.getGithubToken,
     permissionMode: config.mode,
     initialMessages: deps.resume?.initialMessages,
+    // No rules for the home-directory fallback: that is not a workspace the user chose.
+    allowedCommands: registry.commandRulesFilePath && hasWorkspace ? await listAllowedCommands(registry.commandRulesFilePath, workspaceRoot) : [],
+    onCommandRemembered: async (command) => {
+      if (registry.commandRulesFilePath) await addAllowedCommand(registry.commandRulesFilePath, session.getWorkspaceRoot(), command);
+    },
+    onUnpromptedWrite: async () => {
+      if (!registry.commandRulesFilePath) return;
+      await clearAllowedCommands(registry.commandRulesFilePath, session.getWorkspaceRoot());
+      await reloadCommandRules(registry);
+    },
     onApprovalNeeded: (call) =>
       new Promise<PermissionResponse>((resolve) => {
         pendingApprovals.set(call.id, resolve);
@@ -387,7 +414,11 @@ export function updateLiveSessionSettings(
   // though setWorkspaceRoot defaults to true anyway, to make that explicit
   // at the one call site that can flip a session from no-workspace into a
   // real one.
-  if (updates.workspaceRoot !== undefined) entry.session.setWorkspaceRoot(updates.workspaceRoot, true);
+  if (updates.workspaceRoot !== undefined) {
+    entry.session.setWorkspaceRoot(updates.workspaceRoot, true);
+    // The new workspace has its own always-allowed commands.
+    void reloadCommandRules(registry).catch(() => {});
+  }
   if (updates.mode !== undefined) entry.session.setPermissionMode(updates.mode);
   if (updates.planFirst !== undefined) entry.session.setPlanFirst(updates.planFirst);
   return true;
@@ -744,14 +775,14 @@ export async function runTask(
 }
 
 /** No-op on an unknown session/callId — the renderer may race a stale click against a session that already moved on. approvedHunkIds is only ever meaningful for a real edit_file partial approval; every other caller simply omits it. */
-export function respondPermission(registry: SessionRegistry, sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[]): void {
+export function respondPermission(registry: SessionRegistry, sessionId: string, callId: string, approved: boolean, approvedHunkIds?: number[], remember?: boolean): void {
   const entry = registry.sessions.get(sessionId);
   if (!entry) return;
   const resolve = entry.pendingApprovals.get(callId);
   if (!resolve) return;
   entry.pendingApprovals.delete(callId);
   registry.onPendingApprovalsChanged?.();
-  resolve({ approved, approvedHunkIds });
+  resolve({ approved, approvedHunkIds, remember: remember === true });
 }
 
 /** Same contract as respondPermission, for the single pending plan approval (see SessionEntry.pendingPlanApproval) — no callId, since at most one plan is ever pending per session. */

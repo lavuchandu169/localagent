@@ -8,8 +8,10 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("agent", {
   startSession: (config, resume) => ipcRenderer.invoke("agent:start-session", config, resume),
   runTask: (sessionId, task, attachments) => ipcRenderer.invoke("agent:run-task", sessionId, task, attachments),
-  respondPermission: (sessionId, callId, approved, approvedHunkIds) =>
-    ipcRenderer.invoke("agent:respond-permission", sessionId, callId, approved, approvedHunkIds),
+  respondPermission: (sessionId, callId, approved, approvedHunkIds, remember) =>
+    ipcRenderer.invoke("agent:respond-permission", sessionId, callId, approved, approvedHunkIds, remember),
+  listCommandRules: (workspaceRoot) => ipcRenderer.invoke("command-rules:list", workspaceRoot),
+  removeCommandRule: (workspaceRoot, command) => ipcRenderer.invoke("command-rules:remove", workspaceRoot, command),
   respondPlan: (sessionId, approved) => ipcRenderer.invoke("agent:respond-plan", sessionId, approved),
   cancelSession: (sessionId) => ipcRenderer.invoke("agent:cancel-session", sessionId),
   stopTask: (sessionId) => ipcRenderer.invoke("agent:stop-task", sessionId),
