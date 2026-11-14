@@ -54,11 +54,30 @@ async function readRules(filePath: string): Promise<RulesFile> {
   }
 }
 
+let tmpCounter = 0;
+
 async function writeRules(filePath: string, rules: RulesFile): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.${process.pid}.tmp`;
+  const tmp = `${filePath}.${process.pid}.${++tmpCounter}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(rules, null, 2), { mode: 0o600 });
   await fs.rename(tmp, filePath);
+}
+
+/**
+ * Every change to a rules file is a read, a modification and a write.
+ * Two of them at the same time would lose one of the changes, so each
+ * file's changes run one after the other.
+ */
+const pendingChanges = new Map<string, Promise<unknown>>();
+
+function inOrder<T>(filePath: string, change: () => Promise<T>): Promise<T> {
+  const previous = pendingChanges.get(filePath) ?? Promise.resolve();
+  const next = previous.then(change, change);
+  pendingChanges.set(
+    filePath,
+    next.catch(() => {})
+  );
+  return next;
 }
 
 export async function listAllowedCommands(filePath: string, workspaceRoot: string): Promise<string[]> {
@@ -69,33 +88,39 @@ export async function listAllowedCommands(filePath: string, workspaceRoot: strin
 export async function addAllowedCommand(filePath: string, workspaceRoot: string, command: string): Promise<boolean> {
   if (!isRememberableCommand(command)) return false;
   const trimmed = command.trim();
-  const rules = await readRules(filePath);
-  const key = await workspaceKey(workspaceRoot);
-  const commands = rules.workspaces[key] ?? [];
-  if (commands.includes(trimmed)) return true;
-  if (commands.length >= MAX_COMMANDS_PER_WORKSPACE) return false;
-  rules.workspaces[key] = [...commands, trimmed];
-  await writeRules(filePath, rules);
-  return true;
+  return inOrder(filePath, async () => {
+    const rules = await readRules(filePath);
+    const key = await workspaceKey(workspaceRoot);
+    const commands = rules.workspaces[key] ?? [];
+    if (commands.includes(trimmed)) return true;
+    if (commands.length >= MAX_COMMANDS_PER_WORKSPACE) return false;
+    rules.workspaces[key] = [...commands, trimmed];
+    await writeRules(filePath, rules);
+    return true;
+  });
 }
 
 export async function removeAllowedCommand(filePath: string, workspaceRoot: string, command: string): Promise<void> {
-  const rules = await readRules(filePath);
-  const key = await workspaceKey(workspaceRoot);
-  const commands = rules.workspaces[key];
-  if (!commands) return;
-  const remaining = commands.filter((c) => c !== command.trim());
-  if (remaining.length === commands.length) return;
-  if (remaining.length > 0) rules.workspaces[key] = remaining;
-  else delete rules.workspaces[key];
-  await writeRules(filePath, rules);
+  return inOrder(filePath, async () => {
+    const rules = await readRules(filePath);
+    const key = await workspaceKey(workspaceRoot);
+    const commands = rules.workspaces[key];
+    if (!commands) return;
+    const remaining = commands.filter((c) => c !== command.trim());
+    if (remaining.length === commands.length) return;
+    if (remaining.length > 0) rules.workspaces[key] = remaining;
+    else delete rules.workspaces[key];
+    await writeRules(filePath, rules);
+  });
 }
 
 /** Removes every rule of one workspace: used when a file there changed with no prompt, so no stored rule can run what changed. */
 export async function clearAllowedCommands(filePath: string, workspaceRoot: string): Promise<void> {
-  const rules = await readRules(filePath);
-  const key = await workspaceKey(workspaceRoot);
-  if (!rules.workspaces[key]) return;
-  delete rules.workspaces[key];
-  await writeRules(filePath, rules);
+  return inOrder(filePath, async () => {
+    const rules = await readRules(filePath);
+    const key = await workspaceKey(workspaceRoot);
+    if (!rules.workspaces[key]) return;
+    delete rules.workspaces[key];
+    await writeRules(filePath, rules);
+  });
 }

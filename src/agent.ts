@@ -476,6 +476,8 @@ export class AgentSession {
     // Always-allowed commands belong to one workspace. The caller sets
     // the new workspace's own rules with setAllowedCommands.
     this.allowedCommands.clear();
+    // The unprompted-change state is about the old workspace's files.
+    this.appliedWriteWithoutPrompt = false;
     // Deferred-minor finding M5: loadedSkillIds tracks what's been
     // injected for THIS workspace's own skills — carrying it across a
     // workspace switch would wrongly suppress a different project's
@@ -502,7 +504,8 @@ export class AgentSession {
    * auto-edit mode). A remembered command runs whatever the workspace's
    * files say, for example a package.json script, so after a change the
    * user never saw it must ask again. Otherwise the agent could rewrite
-   * the script and then run it unprompted. Never reset within a session.
+   * the script and then run it unprompted. Reset only when the session
+   * moves to a different workspace.
    */
   private appliedWriteWithoutPrompt = false;
 
@@ -1281,14 +1284,18 @@ export class AgentSession {
         if (decision === "ASK" && rememberable && !this.appliedWriteWithoutPrompt && this.canUseCommandRules() && this.allowedCommands.has(commandText)) {
           decision = "ALLOW";
         }
-        if (decision === "ALLOW" && tool.permission === "WRITE" && !this.appliedWriteWithoutPrompt) {
-          this.appliedWriteWithoutPrompt = true;
-          // Other sessions on this workspace, and later ones, must stop
-          // honouring its rules too: the caller clears the stored rules.
+        if (decision === "ALLOW" && tool.permission === "WRITE") {
+          // Reported for every unprompted change, not only the first:
+          // another session may have stored a new rule since the last one.
+          // The caller clears the workspace's stored rules for all sessions.
           try {
             await this.opts.onUnpromptedWrite?.();
+            this.appliedWriteWithoutPrompt = true;
           } catch (err: any) {
-            console.warn(`[permissions] could not clear the workspace's command rules: ${err?.message ?? err}`);
+            // The rules could not be cleared, so this change must not go
+            // through unseen: ask for it instead.
+            console.warn(`[permissions] could not clear the workspace's command rules, asking for this change instead: ${err?.message ?? err}`);
+            decision = "ASK";
           }
         }
         const canRemember = decision === "ASK" && rememberable && this.canUseCommandRules();
