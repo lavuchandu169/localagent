@@ -101,7 +101,7 @@ async function main() {
     workspaceRoot,
     model,
     provider,
-    tools: defaultToolRegistry(),
+    tools: defaultToolRegistry(undefined, { taskList: !(provider instanceof EmbeddedLlamaProvider) }),
     permissionMode: mode,
     onApprovalNeeded: async (call: ToolCall) => {
       const answer = await rl.question(`\nApprove ${call.name}(${JSON.stringify(call.arguments)})? [y/N] `);

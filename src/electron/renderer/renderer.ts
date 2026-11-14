@@ -47,6 +47,7 @@ import { createDebouncer } from "./debounce.js";
 import { formatDoneLine } from "./doneLine.js";
 import { formatPerfBadge } from "./perfBadge.js";
 import { initCommandRulesPanel, refreshCommandRulesPanel } from "./commandRulesPanel.js";
+import { renderTodoList } from "./todoListView.js";
 import { initAboutPanel, openAboutPanel, closeAboutPanel, isAboutPanelOpen, setAboutWorkspaceText, setAboutHardwareText, type AboutPanelDeps } from "./aboutPanel.js";
 import { initMcpServersPanel, openMcpServersPanel, closeMcpServersPanel, isMcpServersPanelOpen, type McpServersPanelDeps } from "./mcpServersPanel.js";
 import { initOrganizationPanel, closeOrganizationPanel, isOrganizationPanelOpen, type OrganizationPanelDeps } from "./organizationPanel.js";
@@ -1359,8 +1360,11 @@ function toolCard(call: ToolCall): HTMLElement {
   const dot = document.createElement("span");
   dot.className = "pulse-dot";
   header.appendChild(dot);
-  header.appendChild(document.createTextNode(`${call.name}(${JSON.stringify(call.arguments)})`));
+  // The model's own task list reads better as a checklist than as JSON.
+  const todoList = call.name === "update_todos" ? renderTodoList(call.arguments.todos) : null;
+  header.appendChild(document.createTextNode(todoList ? "Task list" : `${call.name}(${JSON.stringify(call.arguments)})`));
   card.appendChild(header);
+  if (todoList) card.appendChild(todoList);
   eventLog.appendChild(card);
   scrollEventLogToBottom();
   toolCards.set(call.id, card);
@@ -1503,7 +1507,8 @@ function renderEvent(event: AgentEvent): void {
       if (building) building.remove();
       const hasDiff = !!event.diff && event.diff.length > 0;
       if (event.decision !== "ASK" && !hasDiff) {
-        logLine(`[permission] ${event.call.name} -> ${event.decision}`, "log-status");
+        // The task list changes nothing, so a permission line for it is only noise.
+        if (event.call.name !== "update_todos") logLine(`[permission] ${event.call.name} -> ${event.decision}`, "log-status");
         break;
       }
       const card = toolCards.get(event.call.id) ?? toolCard(event.call);
