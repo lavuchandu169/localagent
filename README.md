@@ -140,6 +140,7 @@ node dist/cli.js "explain how add() works in math.js" \
 | `--model <name>` | A server model id, with `--base-url`. Otherwise, one of the 10 embedded model ids (default `qwen-coder-1.5b`). Run with no arguments to see the full list. |
 | `--provider anthropic` | Use the real Claude API. Needs `ANTHROPIC_API_KEY`. |
 | `--mode <mode>` | The permission mode. See the table below. |
+| `--json` | For scripts and CI. Refer to "Use in scripts" below. |
 
 | Mode | Reads | Edits | Shell commands |
 |---|---|---|---|
@@ -147,6 +148,18 @@ node dist/cli.js "explain how add() works in math.js" \
 | `DEFAULT` | ✅ free | ⏸ asks | ⏸ asks |
 | `ACCEPT_EDITS` | ✅ free | ✅ auto | ⏸ asks |
 | `AUTO_SAFE` | ✅ free | ✅ auto | ✅ auto *(only the project's own exact test/verify command — `npm test`, `pytest`, `cargo test`, `go test ./...`; everything else still asks)* |
+
+**Use in scripts.** Add `--json` to run a task from a script or a CI job:
+
+```bash
+node dist/cli.js --json "list the TODO comments in src" --workspace . --mode PLAN > run.jsonl
+tail -n 1 run.jsonl   # {"type":"result","success":true,"text":"..."}
+```
+
+- Each line on stdout is one JSON object: one for each event of the run. The last line has `"type":"result"`, with `success` and the final answer in `text`.
+- Progress notes go to stderr, so stdout contains only JSON.
+- The exit code is 0 when the task succeeds, and 1 when it fails. This is also true without `--json`.
+- There are no prompts. An edit or a command that needs approval is refused. To let the agent edit files in a script, use `--mode ACCEPT_EDITS`.
 
 The custom Hugging Face path and search feature, described below, works in the desktop app only. The CLI's `--model` flag only accepts the curated ids.
 

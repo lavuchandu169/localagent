@@ -9,12 +9,59 @@ import { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
 import { EmbeddedLlamaProvider } from "./providers/embeddedLlama.js";
 import { AnthropicProvider } from "./providers/anthropicProvider.js";
 import { isEmbeddedModelId, describeEmbeddedModel, EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, type EmbeddedModelId } from "./models.js";
-import type { ModelProvider, PermissionMode, ToolCall } from "./types.js";
+import type { AgentEvent, ModelProvider, PermissionMode, ToolCall } from "./types.js";
 
 function embeddedModelIdsByCategory(category: "coding" | "chat"): string {
   return (Object.keys(EMBEDDED_MODELS) as EmbeddedModelId[])
     .filter((id) => EMBEDDED_MODELS[id].category === category)
     .join(" | ");
+}
+
+/** Flags that take no value: the word after one is part of the task, not the flag's value. */
+const SWITCHES = new Set(["json"]);
+
+/** Events that only drive live rendering in the app. They would be noise in a script's output. */
+const JSON_SKIPPED_EVENTS = new Set(["text.delta", "tool_call.start", "tool_call.delta", "stream.reset", "perf"]);
+
+/**
+ * Prints a run's events and returns whether it succeeded. In JSON mode
+ * every line on `out` is one JSON object, and the last line is
+ * {"type":"result","success":…,"text":…} with the final answer, so a
+ * script can read stdout line by line. Exported for testing.
+ */
+export async function reportRun(events: AsyncIterable<AgentEvent>, opts: { json: boolean; out: (line: string) => void; err: (line: string) => void }): Promise<boolean> {
+  let success = false;
+  let finalText = "";
+  for await (const event of events) {
+    if (event.type === "text") finalText = event.text;
+    if (event.type === "done") success = event.success;
+    if (opts.json) {
+      if (!JSON_SKIPPED_EVENTS.has(event.type)) opts.out(JSON.stringify(event));
+      continue;
+    }
+    switch (event.type) {
+      case "status":
+        opts.out(`… ${event.message}`);
+        break;
+      case "tool.start":
+        opts.out(`▶ ${event.call.name}(${JSON.stringify(event.call.arguments)})`);
+        break;
+      case "tool.result":
+        opts.out(`  → ${event.result.ok ? "ok" : "error"}${event.result.error ? ": " + event.result.error : ""}`);
+        break;
+      case "text":
+        opts.out(`\n${event.text}\n`);
+        break;
+      case "error":
+        opts.err(`✗ ${event.message}`);
+        break;
+      case "done":
+        opts.out(`\n[done] success=${event.success}`);
+        break;
+    }
+  }
+  if (opts.json) opts.out(JSON.stringify({ type: "result", success, text: finalText }));
+  return success;
 }
 
 /** Exported for direct unit testing (test-engineer finding, full-project audit: this file had no coverage at all) — pure and side-effect-free, so no entry-point guard is needed around the export itself, only around main()'s auto-invocation below. */
@@ -26,7 +73,7 @@ export function parseArgs(argv: string[]) {
     if (a.startsWith("--")) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      const val = next && !next.startsWith("--") ? (i++, next) : "true";
+      const val = !SWITCHES.has(key) && next && !next.startsWith("--") ? (i++, next) : "true";
       args[key] = val;
     } else {
       positional.push(a);
@@ -52,16 +99,20 @@ async function main() {
   const task = resolved?.task ?? "";
   if (!task) {
     console.error(
-      'Usage: localagent "<task description>" [--workspace <dir>] [--base-url <url>] [--model <name>] [--mode DEFAULT|PLAN|ACCEPT_EDITS|AUTO_SAFE] [--provider anthropic]\n' +
+      'Usage: localagent "<task description>" [--workspace <dir>] [--base-url <url>] [--model <name>] [--mode DEFAULT|PLAN|ACCEPT_EDITS|AUTO_SAFE] [--provider anthropic] [--json]\n' +
         "  --base-url given     → talk to that OpenAI-compatible server (Ollama/LM Studio/etc), --model is its model id.\n" +
         `  --base-url omitted   → run a model in-process, no server needed. --model selects an id, default "${DEFAULT_EMBEDDED_MODEL}":\n` +
         `      coding: ${embeddedModelIdsByCategory("coding")}\n` +
         `      chat:   ${embeddedModelIdsByCategory("chat")}\n` +
-        "  --provider anthropic → use the real Claude Sonnet 5 API instead — sends code over the network, needs ANTHROPIC_API_KEY."
+        "  --provider anthropic → use the real Claude Sonnet 5 API instead — sends code over the network, needs ANTHROPIC_API_KEY.\n" +
+        "  --json               → for scripts: one JSON object per line on stdout, no prompts (anything that needs approval is refused), exit code 1 on failure."
     );
     process.exit(1);
   }
 
+  const json = args.json === "true";
+  // Progress notes go to stderr in JSON mode, so stdout holds only JSON lines.
+  const info = json ? (line: string) => console.error(line) : (line: string) => console.log(line);
   const workspaceRoot = path.resolve(args.workspace ?? process.cwd());
   const baseUrl = args["base-url"];
   const mode = (args.mode as PermissionMode) ?? "DEFAULT";
@@ -72,7 +123,7 @@ async function main() {
   if (args.provider === "anthropic") {
     model = "claude-sonnet-5";
     provider = new AnthropicProvider();
-    console.log("\n[localagent] using the Claude Sonnet 5 API — code and task context will be sent to Anthropic over the network…");
+    info("\n[localagent] using the Claude Sonnet 5 API — code and task context will be sent to Anthropic over the network…");
     const health = await provider.healthCheck();
     if (!health.ok) {
       console.error(`\nCould not reach the Anthropic API with the current credentials: ${health.error}`);
@@ -100,7 +151,7 @@ async function main() {
     }
     model = size;
     provider = new EmbeddedLlamaProvider({ size });
-    console.log(`\n[localagent] no --base-url given, running ${describeEmbeddedModel(size)} in-process (downloads and caches on first run)…`);
+    info(`\n[localagent] no --base-url given, running ${describeEmbeddedModel(size)} in-process (downloads and caches on first run)…`);
     const health = await provider.healthCheck();
     if (!health.ok) {
       console.error(`\nFailed to download or load ${EMBEDDED_MODELS[size].name}: ${health.error}`);
@@ -109,7 +160,8 @@ async function main() {
     }
   }
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  // In JSON mode nobody is there to answer a prompt, and stdout must stay pure JSON.
+  const rl = json ? null : readline.createInterface({ input: process.stdin, output: process.stdout });
 
   const session = new AgentSession({
     workspaceRoot,
@@ -118,37 +170,22 @@ async function main() {
     tools: defaultToolRegistry(undefined, { taskList: !(provider instanceof EmbeddedLlamaProvider) }),
     permissionMode: mode,
     onApprovalNeeded: async (call: ToolCall) => {
+      if (!rl) {
+        console.error(`[localagent] refused ${call.name}: it needs approval, and --json mode cannot ask. Use --mode ACCEPT_EDITS or AUTO_SAFE to allow more.`);
+        return { approved: false };
+      }
       const answer = await rl.question(`\nApprove ${call.name}(${JSON.stringify(call.arguments)})? [y/N] `);
       return { approved: answer.trim().toLowerCase() === "y" };
     },
   });
 
-  console.log(`\n[localagent] workspace=${workspaceRoot} model=${model} mode=${mode}\n`);
+  info(`\n[localagent] workspace=${workspaceRoot} model=${model} mode=${mode}\n`);
 
-  for await (const event of session.run(task)) {
-    switch (event.type) {
-      case "status":
-        console.log(`… ${event.message}`);
-        break;
-      case "tool.start":
-        console.log(`▶ ${event.call.name}(${JSON.stringify(event.call.arguments)})`);
-        break;
-      case "tool.result":
-        console.log(`  → ${event.result.ok ? "ok" : "error"}${event.result.error ? ": " + event.result.error : ""}`);
-        break;
-      case "text":
-        console.log(`\n${event.text}\n`);
-        break;
-      case "error":
-        console.error(`✗ ${event.message}`);
-        break;
-      case "done":
-        console.log(`\n[done] success=${event.success}`);
-        break;
-    }
-  }
+  const success = await reportRun(session.run(task), { json, out: (line) => console.log(line), err: (line) => console.error(line) });
 
-  rl.close();
+  rl?.close();
+  // A script must be able to tell a failed run from a good one.
+  process.exitCode = success ? 0 : 1;
 }
 
 // Guarded so importing this module (e.g. to unit test parseArgs above)
