@@ -17,6 +17,7 @@ function isThrowsEntry(entry: MockScriptEntry): entry is { throws: Error } {
  */
 export class MockProvider implements ModelProvider {
   id = "mock";
+  contextWindowTokens?: number;
   private step = 0;
   /** Every request this provider has received, in order — lets a test verify what was actually sent (e.g. which tools were offered), not just what came back. */
   receivedRequests: ChatRequest[] = [];

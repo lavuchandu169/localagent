@@ -139,6 +139,8 @@ export class ProviderChatError extends Error {
 
 export interface ModelProvider {
   id: string;
+  /** How many tokens this provider's model can take in one request, when the provider knows. The agent compacts its history before reaching it (see compaction.ts). */
+  contextWindowTokens?: number;
   listModels(): Promise<ModelInfo[]>;
   healthCheck(): Promise<HealthCheckResult>;
   chat(request: ChatRequest): Promise<ChatResponse>;
