@@ -18,7 +18,15 @@ import { ProviderChatError } from "./types.js";
 import { ToolRegistry } from "./toolRegistry.js";
 import { PermissionEngine } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
-import { discoverBuiltinSkills, discoverUserSkills, matchSkills, MAX_SKILLS_PER_TASK, type SkillMetadata } from "./skillLoader.js";
+import {
+  discoverBuiltinSkills,
+  discoverProjectInstructions,
+  discoverUserSkills,
+  matchSkills,
+  MAX_SKILLS_PER_TASK,
+  PROJECT_INSTRUCTIONS_ID,
+  type SkillMetadata,
+} from "./skillLoader.js";
 import { LOAD_SKILL_FALLBACK_MESSAGE } from "./tools/loadSkill.js";
 import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
@@ -597,6 +605,15 @@ export class AgentSession {
    * skill twice in one session.
    */
   private async *autoLoadSkills(task: string): AsyncGenerator<AgentEvent> {
+    // The workspace's instruction file loads once per session, ahead of
+    // any matched skill and outside MAX_SKILLS_PER_TASK. Skipped when no
+    // real workspace was chosen: workspaceRoot is then only a default
+    // directory, not a project the user picked.
+    if (this.opts.hasWorkspace !== false && !this.loadedSkillIds.has(PROJECT_INSTRUCTIONS_ID)) {
+      const instructions = await discoverProjectInstructions(this.opts.workspaceRoot);
+      if (instructions) yield* this.injectSkill(instructions, false);
+    }
+
     const [builtin, user] = await Promise.all([discoverBuiltinSkills(), discoverUserSkills(this.opts.workspaceRoot)]);
     const builtinIds = new Set(builtin.map((s) => s.id));
 
@@ -616,70 +633,76 @@ export class AgentSession {
     }
 
     for (const skill of toLoad) {
-      const isUserSourced = skill.source === "user";
-      const call: ToolCall = {
-        id: `skill_${skill.id}`,
-        name: "load_skill",
-        arguments: isUserSourced
-          ? {
-              id: skill.id,
-              name: skill.name,
-              description: skill.description,
-              triggers: skill.triggers,
-              body: skill.body,
-              source: skill.source,
-              overridesBuiltin: builtinIds.has(skill.id),
-            }
-          : { id: skill.id },
-      };
-
-      const decision: PermissionDecision = isUserSourced ? "ASK" : "ALLOW";
-      yield { type: "permission.request", call, decision };
-      this.messages.push({ role: "assistant", content: "", tool_calls: [call] });
-
-      if (decision === "ASK") {
-        const response = this.opts.onApprovalNeeded ? await this.opts.onApprovalNeeded(call) : { approved: false };
-        if (!response.approved) {
-          // Recorded immediately — a rejected skill isn't asked about
-          // again this session either, and there are no further yields
-          // for this skill after this point for a cancellation to land
-          // between.
-          this.loadedSkillIds.add(skill.id);
-          this.messages.push({
-            role: "tool",
-            tool_call_id: call.id,
-            name: "load_skill",
-            content: JSON.stringify({ ok: false, error: "User rejected loading this project-authored skill." }),
-          });
-          continue;
-        }
-      }
-
-      const truncated = skill.body.length > AgentSession.MAX_SKILL_BODY_CHARS;
-      const body = truncated ? skill.body.slice(0, AgentSession.MAX_SKILL_BODY_CHARS) : skill.body;
-      if (truncated) {
-        console.warn(
-          `[skills] "${skill.id}"'s body was truncated to ${AgentSession.MAX_SKILL_BODY_CHARS} characters (was ${skill.body.length}) — the model only sees the truncated version.`
-        );
-      }
-      const result = { ok: true, output: { id: skill.id, name: skill.name, body, source: skill.source, truncated } };
-
-      yield { type: "tool.start", call };
-      yield { type: "tool.result", call, result };
-
-      this.messages.push({
-        role: "tool",
-        tool_call_id: call.id,
-        name: "load_skill",
-        content: JSON.stringify(result),
-      });
-      // Deferred-minor finding M6: marked loaded only here, AFTER the
-      // skill has actually been shown (both yields fired, message
-      // pushed) — not earlier, where a cancellation landing between
-      // here and the final yield could mark a skill "loaded" that the
-      // model never actually saw, permanently suppressing a real retry.
-      this.loadedSkillIds.add(skill.id);
+      yield* this.injectSkill(skill, builtinIds.has(skill.id));
     }
+  }
+
+  /** Shows one skill to the model as a synthetic load_skill call. A
+   * user-sourced skill waits for approval first. */
+  private async *injectSkill(skill: SkillMetadata, overridesBuiltin: boolean): AsyncGenerator<AgentEvent> {
+    const isUserSourced = skill.source === "user";
+    const call: ToolCall = {
+      id: `skill_${skill.id}`,
+      name: "load_skill",
+      arguments: isUserSourced
+        ? {
+            id: skill.id,
+            name: skill.name,
+            description: skill.description,
+            triggers: skill.triggers,
+            body: skill.body,
+            source: skill.source,
+            overridesBuiltin,
+          }
+        : { id: skill.id },
+    };
+
+    const decision: PermissionDecision = isUserSourced ? "ASK" : "ALLOW";
+    yield { type: "permission.request", call, decision };
+    this.messages.push({ role: "assistant", content: "", tool_calls: [call] });
+
+    if (decision === "ASK") {
+      const response = this.opts.onApprovalNeeded ? await this.opts.onApprovalNeeded(call) : { approved: false };
+      if (!response.approved) {
+        // Recorded immediately — a rejected skill isn't asked about
+        // again this session either, and there are no further yields
+        // for this skill after this point for a cancellation to land
+        // between.
+        this.loadedSkillIds.add(skill.id);
+        this.messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          name: "load_skill",
+          content: JSON.stringify({ ok: false, error: "User rejected loading this project-authored skill." }),
+        });
+        return;
+      }
+    }
+
+    const truncated = skill.body.length > AgentSession.MAX_SKILL_BODY_CHARS;
+    const body = truncated ? skill.body.slice(0, AgentSession.MAX_SKILL_BODY_CHARS) : skill.body;
+    if (truncated) {
+      console.warn(
+        `[skills] "${skill.id}"'s body was truncated to ${AgentSession.MAX_SKILL_BODY_CHARS} characters (was ${skill.body.length}) — the model only sees the truncated version.`
+      );
+    }
+    const result = { ok: true, output: { id: skill.id, name: skill.name, body, source: skill.source, truncated } };
+
+    yield { type: "tool.start", call };
+    yield { type: "tool.result", call, result };
+
+    this.messages.push({
+      role: "tool",
+      tool_call_id: call.id,
+      name: "load_skill",
+      content: JSON.stringify(result),
+    });
+    // Deferred-minor finding M6: marked loaded only here, AFTER the
+    // skill has actually been shown (both yields fired, message
+    // pushed) — not earlier, where a cancellation landing between
+    // here and the final yield could mark a skill "loaded" that the
+    // model never actually saw, permanently suppressing a real retry.
+    this.loadedSkillIds.add(skill.id);
   }
 
   /**

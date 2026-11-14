@@ -32,6 +32,7 @@ Everything in this document is real. It works today. For the list of gaps, see [
 - [Quick start](#quick-start)
 - [CLI](#cli)
   - [Embedded models](#embedded-models)
+- [Project instructions](#project-instructions)
 - [Desktop app](#desktop-app)
   - [Multi-session tabs](#multi-session-tabs)
   - [MCP servers](#mcp-servers)
@@ -167,6 +168,16 @@ The app picks a recommended model for your hardware automatically. It marks this
 
 The prebuilt installers include GPU acceleration: Vulkan for NVIDIA, AMD, and Intel GPUs on Windows and Linux, and Metal for Apple Silicon on macOS. The app detects your hardware automatically. It offloads layers to the GPU when one is available. It falls back to the CPU otherwise, so nothing breaks either way. The installers leave out `node-llama-cpp`'s separate CUDA backend on purpose. On top of Vulkan, this backend would add about 500MB, mostly for an NVIDIA-only fallback binary. Vulkan already covers more hardware than this backend does. If you build from source with that package installed, your build will include it.
 
+## Project instructions
+
+Put a file named `AGENTS.md` in the root of your workspace. Write the standing rules for that project in it: the test command, the code style, the folders the agent must not change. The agent loads this file one time in each session, before the first task. This works in the CLI and in the desktop app.
+
+- If there is no `AGENTS.md`, the agent uses `CLAUDE.md` instead.
+- The agent asks for your approval before it loads the file, and it shows you the full text. A repository that you cloned controls this file, so read it before you approve. If you reject it, the agent does not see the text, and it does not ask again in that session.
+- The agent sees a maximum of 6,000 characters. Keep the file short.
+- The agent does not follow a symbolic link.
+- If you change the file, start a new session to load the new text.
+
 ## Desktop app
 
 ```bash
@@ -200,7 +211,7 @@ Running an initiative starts a real session for that role. It is the same agent 
 
 This is a separate feature from the built-in `crew` skill. `crew` is a prompt that teaches one agent to role-play through a small roster inside a single task, with no persistence. Organization starts a real, separate session per role, with its own model and its own backlog that survives between app launches.
 
-**Known limitation.** The panel only shows inline status text for a running initiative, not a full session tab. If a role's task needs your approval for an edit or a command, you cannot currently approve or deny it from this panel.
+A running initiative opens in its own session tab, with the title `<role>: <initiative>`. Approve or reject the role's edits and commands in that tab, the same as in any other session. If all 6 tabs are in use, close one tab first.
 
 ### Checkpoints, diffs, and file changes
 

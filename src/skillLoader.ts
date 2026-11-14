@@ -156,6 +156,10 @@ const SKILL_ID_PATTERN = /^[a-z0-9-]+$/;
 
 async function readSkillDirectory(dir: string, source: "builtin" | "user", inlineReferences: boolean): Promise<SkillMetadata | null> {
   const id = path.basename(dir);
+  if (id === PROJECT_INSTRUCTIONS_ID) {
+    console.warn(`[skills] skipping "${id}": this id is reserved for the workspace's own instruction file`);
+    return null;
+  }
   if (!SKILL_ID_PATTERN.test(id)) {
     console.warn(`[skills] skipping "${id}": skill directory names must match ${SKILL_ID_PATTERN}`);
     return null;
@@ -259,4 +263,50 @@ export function discoverBuiltinSkills(): Promise<SkillMetadata[]> {
  * task, with no restart and no cache-invalidation logic needed. */
 export function discoverUserSkills(workspaceRoot: string): Promise<SkillMetadata[]> {
   return discoverSkillsIn(path.join(workspaceRoot, ".localagent", "skills"), "user", false);
+}
+
+/** The id the workspace's instruction file is loaded under. Reserved:
+ * no skill directory may use it (see readSkillDirectory). */
+export const PROJECT_INSTRUCTIONS_ID = "project-instructions";
+
+/** Checked in this order; the first usable file wins. */
+const PROJECT_INSTRUCTION_FILENAMES = ["AGENTS.md", "CLAUDE.md"];
+
+/**
+ * Reads the workspace's standing instruction file, if it has one, as a
+ * user-sourced skill with no triggers: the agent loads it once per
+ * session rather than by keyword match. User-sourced on purpose: a
+ * cloned repo controls this file exactly as it controls
+ * `.localagent/skills/`, so it goes through the same approval. Never
+ * throws. A symlink is not followed, because it could point outside
+ * the workspace.
+ */
+export async function discoverProjectInstructions(workspaceRoot: string): Promise<SkillMetadata | null> {
+  for (const filename of PROJECT_INSTRUCTION_FILENAMES) {
+    const filePath = path.join(workspaceRoot, filename);
+    let raw: string;
+    try {
+      const stat = await fs.lstat(filePath);
+      if (stat.isSymbolicLink()) {
+        console.warn(`[skills] skipping "${filename}": a symlinked instruction file is not supported`);
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      raw = await fs.readFile(filePath, "utf8");
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") console.warn(`[skills] could not read "${filename}": ${err?.message ?? err}`);
+      continue;
+    }
+    const body = (raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw).trim();
+    if (!body) continue;
+    return {
+      id: PROJECT_INSTRUCTIONS_ID,
+      name: filename,
+      description: `This workspace's standing instructions, from ${filename}.`,
+      triggers: [],
+      body,
+      source: "user",
+    };
+  }
+  return null;
 }
