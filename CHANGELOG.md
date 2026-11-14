@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.173 — 2026-11-14
+
+- Merge branch 'find-files'
+
 ## v0.1.0-beta.172 — 2026-11-14
 
 - Merge remote-tracking branch 'origin/main'
