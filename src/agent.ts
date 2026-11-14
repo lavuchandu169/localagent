@@ -27,6 +27,16 @@ import {
   PROJECT_INSTRUCTIONS_ID,
   type SkillMetadata,
 } from "./skillLoader.js";
+import {
+  buildCompactedHistory,
+  COMPACTION_THRESHOLD,
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  estimateTokens,
+  planCompaction,
+  readPathsIn,
+  renderTranscript,
+  SUMMARY_SYSTEM_PROMPT,
+} from "./compaction.js";
 import { LOAD_SKILL_FALLBACK_MESSAGE } from "./tools/loadSkill.js";
 import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
@@ -61,6 +71,8 @@ export interface AgentSessionOptions {
   systemPrompt?: string;
   /** Seeds the conversation from a prior session's history instead of starting fresh with just the system prompt — used to resume a saved session. */
   initialMessages?: ChatMessage[];
+  /** Overrides the provider's own context window for deciding when to compact the history. */
+  contextWindowTokens?: number;
   /** Seeds checkpointHash from a prior session's persisted value — without this, resuming a session after an app restart always starts with no checkpoint (getCheckpointHash() === null), silently making "Revert this task" unavailable with no indication the capability (and the now-or-never window to use it) just disappeared (correctness audit: session High #2). */
   initialCheckpointHash?: string | null;
   /** Called when a tool call needs ASK approval. Return `{ approved: true }` to allow; add `approvedHunkIds` to apply only some of an edit_file diff's hunks. */
@@ -355,6 +367,58 @@ export class AgentSession {
       this.messages.push({ role: "system", content: prompt });
     }
     if (opts.initialCheckpointHash) this.checkpointHash = opts.initialCheckpointHash;
+  }
+
+  /** History length at the last failed compaction: no retry until the history has grown past it by a few messages. */
+  private compactionFailedAtLength = -1;
+
+  /**
+   * Replaces older turns with a model-written summary when the history
+   * nears the context window. Never fails the task: if the summary call
+   * fails or returns nothing, the history stays as it was.
+   */
+  private async *compactIfNeeded(): AsyncGenerator<AgentEvent> {
+    const window = this.opts.contextWindowTokens ?? this.opts.provider.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+    if (estimateTokens(this.messages, this.opts.tools.toSchema()) <= window * COMPACTION_THRESHOLD) return;
+    if (this.compactionFailedAtLength >= 0 && this.messages.length < this.compactionFailedAtLength + 4) return;
+    const plan = planCompaction(this.messages);
+    if (!plan) return;
+
+    yield { type: "status", message: "Compacting earlier conversation to free up context..." };
+    let summary = "";
+    try {
+      // Sized so the summary request itself fits in a small local model's window.
+      const transcript = renderTranscript(plan.toSummarize, Math.floor(window * 1.4));
+      const response = await this.opts.provider.chat({
+        model: this.opts.model,
+        messages: [
+          { role: "system", content: SUMMARY_SYSTEM_PROMPT },
+          { role: "user", content: transcript },
+        ],
+        maxTokens: 700,
+        signal: this.abortController?.signal,
+      });
+      if (response.usage) {
+        yield { type: "usage", model: this.opts.model, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens };
+      }
+      if (response.turn.type === "final") summary = response.turn.content.trim();
+    } catch {
+      // Handled below, the same as an empty summary.
+    }
+    if (this.cancelled || this.stopRequested) return;
+    if (!summary) {
+      this.compactionFailedAtLength = this.messages.length;
+      yield { type: "status", message: "Could not compact the conversation. Continuing with the full history." };
+      return;
+    }
+
+    this.messages = buildCompactedHistory(plan, summary);
+    this.compactionFailedAtLength = -1;
+    // A file whose content was summarised away no longer counts as read,
+    // so the read-before-write check applies to it again.
+    const stillVisible = readPathsIn(this.messages);
+    for (const p of [...this.readPaths]) if (!stillVisible.has(p)) this.readPaths.delete(p);
+    yield { type: "status", message: "Compacted earlier conversation to free up context." };
   }
 
   /** A copy of the current conversation history, safe to persist or inspect without risking mutation of the live session. */
@@ -823,6 +887,9 @@ export class AgentSession {
         yield { type: "done", success: false, summary: "Turn budget exceeded." };
         return;
       }
+
+      yield* this.compactIfNeeded();
+      if (this.cancelled || this.stopRequested) break;
 
       yield { type: "status", message: `Turn ${this.turn + 1}: thinking...` };
 

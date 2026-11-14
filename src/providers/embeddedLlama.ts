@@ -348,6 +348,7 @@ export function maybeSamplePerf(
 
 export class EmbeddedLlamaProvider implements ModelProvider {
   id = "embedded-llama";
+  contextWindowTokens = EMBEDDED_CONTEXT_SIZE;
   private chatPromise: Promise<import("node-llama-cpp").LlamaChat> | undefined;
   private model: import("node-llama-cpp").LlamaModel | undefined;
   private context: import("node-llama-cpp").LlamaContext | undefined;

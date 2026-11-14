@@ -33,6 +33,7 @@ Everything in this document is real. It works today. For the list of gaps, see [
 - [CLI](#cli)
   - [Embedded models](#embedded-models)
 - [Project instructions](#project-instructions)
+- [Long conversations](#long-conversations)
 - [Desktop app](#desktop-app)
   - [Multi-session tabs](#multi-session-tabs)
   - [MCP servers](#mcp-servers)
@@ -177,6 +178,16 @@ Put a file named `AGENTS.md` in the root of your workspace. Write the standing r
 - The agent sees a maximum of 6,000 characters. Keep the file short.
 - The agent does not follow a symbolic link.
 - If you change the file, start a new session to load the new text.
+
+## Long conversations
+
+Each model can read only a limited quantity of text in one request. When a session comes near that limit, the agent replaces the older turns with a short summary. It asks the same model to write the summary, with one more request. The session then continues. You see a status line when this occurs.
+
+- The agent keeps these items word for word: the system prompt, the project instructions, each loaded skill, your latest request, and the last few messages.
+- The embedded models have a limit of 8,192 tokens, so this occurs frequently with them. For other providers, the agent uses a limit of 100,000 tokens.
+- After a summary, the agent does not have the contents of files that it read before. If it then edits one of those files without reading it again, it asks for your approval, also in the auto-edit modes.
+- If the summary request fails, the agent continues with the full history.
+- A summary can lose details. For exact work on a long task, start a new session.
 
 ## Desktop app
 
