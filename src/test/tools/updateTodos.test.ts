@@ -59,6 +59,7 @@ check("the task list tool is not offered by default", defaultToolRegistry().get(
 {
   const registry = defaultToolRegistry(() => [], { taskList: true });
   check("it is offered when asked for", registry.get("update_todos") !== undefined && registry.availableTools().length === 9);
+  check("asking for the task list does not add the helper tool", registry.get("delegate_task") === undefined);
   check("it appears in the schema sent to the model", registry.toSchema().some((t) => t.name === "update_todos"));
 }
 

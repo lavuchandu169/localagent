@@ -35,6 +35,7 @@ Everything in this document is real. It works today. For the list of gaps, see [
 - [Project instructions](#project-instructions)
 - [Long conversations](#long-conversations)
 - [Slash commands](#slash-commands)
+- [Helpers](#helpers)
 - [Hooks](#hooks)
 - [Always-allowed commands](#always-allowed-commands)
 - [Desktop app](#desktop-app)
@@ -78,7 +79,7 @@ Everything in this document is real. It works today. For the list of gaps, see [
 - **Automatic fallback.** When a configured cloud provider (Anthropic, OpenAI, or Gemini), or the free-tier router, hits a rate limit mid-task, the session retries on the next configured cloud provider. It does not just fail the task. See [Automatic fallback on rate limits](#automatic-fallback-on-rate-limits).
 
 **Tools and safety, checked by code, not by guesswork**
-- Tools: `read_file` (reads a full file, or a line range with offset and limit, for a large file); `list_directory`; `find_files` (finds files by name pattern at any depth, for example `*.test.ts` or `src/**/*.tsx`); `grep` (ripgrep, with a pure-JS fallback); `update_todos` (the agent's own task list for work with 3 or more steps, shown as a checklist; offered to cloud and custom-server models, not to the small embedded models); `edit_file` (full content for a new file or a large rewrite, or `old_string`/`new_string` for one targeted change, without rewriting the rest of the file); `delete_file` (one file, or a whole directory with `recursive: true`); `run_command`. Every tool an MCP server offers is also available, once you connect that server.
+- Tools: `read_file` (reads a full file, or a line range with offset and limit, for a large file); `list_directory`; `find_files` (finds files by name pattern at any depth, for example `*.test.ts` or `src/**/*.tsx`); `grep` (ripgrep, with a pure-JS fallback); `update_todos` (the agent's own task list for work with 3 or more steps, shown as a checklist; offered to cloud and custom-server models, not to the small embedded models); `delegate_task` (gives a research question to a helper, described in [Helpers](#helpers)); `edit_file` (full content for a new file or a large rewrite, or `old_string`/`new_string` for one targeted change, without rewriting the rest of the file); `delete_file` (one file, or a whole directory with `recursive: true`); `run_command`. Every tool an MCP server offers is also available, once you connect that server.
 - Every file tool refuses to touch a protected path: `.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials.*`, `secrets.*`, `.ssh/`, `.aws/`, `.git/`. Every file tool also redacts text that looks like a secret, before that text ever reaches the model or your terminal.
 - `PermissionEngine` is deterministic code. It is not an LLM's judgment. It has four modes: `PLAN`, `DEFAULT`, `ACCEPT_EDITS`, `AUTO_SAFE`. It also classifies commands by risk: `SAFE_READ`, `NETWORK`, `DESTRUCTIVE`, `UNKNOWN`. An `UNKNOWN` command always asks for your approval. If a model proposes a full-file rewrite of a file it never read, the engine asks for your approval too, even in an auto-approve mode. Every MCP tool call asks for your approval, in every mode, the same as a shell command does.
 - **Per-hunk diff approval.** An edit the agent proposes shows you the real colored diff before you approve it. Each changed section has its own checkbox. Uncheck a section you do not want. Only the checked sections get written to disk.
@@ -227,6 +228,17 @@ Example: with a file `review.md` that contains `Review $ARGUMENTS for bugs. Do n
 - The app reads commands from your home folder only, not from the workspace. A repository that you cloned cannot add a command.
 - A file cannot replace `/help` or `/compact`.
 - A path at the start of a task, such as `/Users/me/a.ts has a bug`, is not a command.
+
+## Helpers
+
+For a broad search, the agent can give a question to a helper. Example: "find each place that calls `parse()` and tell me what it passes". The helper starts with an empty conversation, does the search, and gives back only its findings. This keeps the long search out of the main conversation, so the main conversation fills more slowly.
+
+- A helper can only read and search files in the workspace. It cannot change a file, run a command, use the network, or start a helper of its own.
+- A helper uses the same model as the session. Its token use is added to the session's total.
+- One task can start a maximum of 3 helpers.
+- Your [hooks](#hooks) also apply to the tool calls of a helper.
+- If you stop the task, the helper stops too.
+- Cloud models and custom-server models get this tool. The small embedded models do not: they have too little context to use it well.
 
 ## Hooks
 
@@ -470,7 +482,7 @@ None of `agent.ts`, `permissions.ts`, `toolRegistry.ts`, or the tools import any
 
 ## What's not built yet
 
-These are real gaps, not hedging. Not built yet: a VS Code extension, Tree-sitter/LSP symbol intelligence, subagents, and sandboxed execution. The Mac build supports Apple Silicon only; it has no Intel/x64 build. The Windows build supports x64 only; it has no ARM64 build. Neither installer is code-signed yet. Because of this, both trigger a one-time OS warning on first launch (see [Download the beta](#download-the-beta)), and Mac auto-updates can download an update but cannot always apply it in place. Automated tests, against a fake bundle, cover the free-tier router's dashboard window and its automatic fallback path. These two features have not yet had a manual check under a real packaged build, on either platform. We state this here, rather than assume it works without checking.
+These are real gaps, not hedging. Not built yet: a VS Code extension, Tree-sitter/LSP symbol intelligence, helpers that can change files (the current helpers are read-only), and sandboxed execution. The Mac build supports Apple Silicon only; it has no Intel/x64 build. The Windows build supports x64 only; it has no ARM64 build. Neither installer is code-signed yet. Because of this, both trigger a one-time OS warning on first launch (see [Download the beta](#download-the-beta)), and Mac auto-updates can download an update but cannot always apply it in place. Automated tests, against a fake bundle, cover the free-tier router's dashboard window and its automatic fallback path. These two features have not yet had a manual check under a real packaged build, on either platform. We state this here, rather than assume it works without checking.
 
 The architecture is built, on purpose, to extend into all of this without a rework. The provider interface, the tool interface, the permission engine, and the typed event stream form the boundary that makes this possible.
 
