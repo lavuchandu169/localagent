@@ -36,6 +36,8 @@ export interface ToolContext {
    * points (neither wires Electron's stored credentials), which is exactly
    * "no account connected" as far as this feature is concerned. */
   getGithubToken?: () => Promise<string | null>;
+  /** Runs a read-only helper with a fresh context and returns its final answer. Provided by AgentSession; only delegate_task uses it. */
+  runSubagent?: (task: string) => Promise<{ ok: true; text: string; toolCalls: number } | { ok: false; error: string }>;
 }
 
 export interface Tool<TInput = any, TOutput = any> {

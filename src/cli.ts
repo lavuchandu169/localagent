@@ -168,7 +168,7 @@ async function main() {
     workspaceRoot,
     model,
     provider,
-    tools: defaultToolRegistry(undefined, { taskList: !(provider instanceof EmbeddedLlamaProvider) }),
+    tools: defaultToolRegistry(undefined, { taskList: !(provider instanceof EmbeddedLlamaProvider), delegate: !(provider instanceof EmbeddedLlamaProvider) }),
     permissionMode: mode,
     getHooks: () => loadHooks(path.join(os.homedir(), ".localagent", "hooks.json")),
     onApprovalNeeded: async (call: ToolCall) => {

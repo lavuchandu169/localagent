@@ -16,7 +16,7 @@ import type {
   ToolCall,
 } from "./types.js";
 import { ProviderChatError } from "./types.js";
-import { ToolRegistry } from "./toolRegistry.js";
+import { readOnlyToolRegistry, ToolRegistry } from "./toolRegistry.js";
 import { PermissionEngine } from "./permissions.js";
 import { extractFilenameCandidates } from "./filenameCandidates.js";
 import {
@@ -116,6 +116,15 @@ export interface AgentSessionOptions {
    * points leave it undefined. */
   getGithubToken?: () => Promise<string | null>;
 }
+
+/** How many helpers one task may start. Each helper makes its own model calls, so this bounds the cost. */
+export const MAX_DELEGATIONS_PER_TASK = 3;
+const SUBAGENT_MAX_TURNS = 12;
+
+export const SUBAGENT_SYSTEM_PROMPT = `You are a research helper for a coding agent. You were given one question about a local repository.
+You can only read and search files: read_file, list_directory, find_files, grep. You cannot change files or run commands.
+Find the answer with those tools, then reply with your findings as plain text: what you found, with file paths and the relevant lines or names.
+State only what the files show. If you could not find something, say so. Be complete but brief: your reply is all the agent will see.`;
 
 export const DEFAULT_SYSTEM_PROMPT = `You are a careful autonomous coding agent operating on a local repository.
 You have tools that read files directly from disk and write real changes to
@@ -512,6 +521,60 @@ export class AgentSession {
     // loaded from the PREVIOUS workspace, even though it's genuinely
     // different content the user has never seen or approved here.
     this.loadedSkillIds.clear();
+  }
+
+  private delegationsThisTask = 0;
+  /** Events from a helper that the main loop passes on once the delegate_task call returns: its token use. */
+  private pendingSubagentEvents: AgentEvent[] = [];
+
+  /**
+   * Runs one delegated question in a separate session with a fresh
+   * context, and returns its final answer. The helper shares this
+   * session's model and hooks. It runs in read-only mode with only the
+   * read and search tools, so it can change nothing, run nothing, ask
+   * for nothing, and start no helper of its own.
+   */
+  private async runSubagent(task: string): Promise<{ ok: true; text: string; toolCalls: number } | { ok: false; error: string }> {
+    if (this.delegationsThisTask >= MAX_DELEGATIONS_PER_TASK) {
+      return { ok: false, error: `The limit of ${MAX_DELEGATIONS_PER_TASK} helpers for one task is reached. Continue with what you have.` };
+    }
+    this.delegationsThisTask++;
+    const helper = new AgentSession({
+      workspaceRoot: this.opts.workspaceRoot,
+      hasWorkspace: this.opts.hasWorkspace,
+      model: this.opts.model,
+      provider: this.opts.provider,
+      tools: readOnlyToolRegistry(),
+      permissionMode: "PLAN",
+      systemPrompt: SUBAGENT_SYSTEM_PROMPT,
+      maxTurns: SUBAGENT_MAX_TURNS,
+      getHooks: this.opts.getHooks,
+      contextWindowTokens: this.opts.contextWindowTokens,
+    });
+    const signal = this.abortController?.signal;
+    const stopHelper = () => helper.cancel();
+    if (signal?.aborted) return { ok: false, error: "The task was stopped." };
+    signal?.addEventListener("abort", stopHelper);
+    let text = "";
+    let toolCalls = 0;
+    let success = false;
+    let error = "";
+    try {
+      for await (const event of helper.run(task)) {
+        if (event.type === "usage") this.pendingSubagentEvents.push(event);
+        else if (event.type === "tool.start") toolCalls++;
+        else if (event.type === "text") text = event.text;
+        else if (event.type === "error") error = event.message;
+        else if (event.type === "done") success = event.success;
+      }
+    } catch (err: any) {
+      error = err?.message ?? String(err);
+    } finally {
+      signal?.removeEventListener("abort", stopHelper);
+    }
+    if (signal?.aborted) return { ok: false, error: "The task was stopped." };
+    if (!success || !text.trim()) return { ok: false, error: `The helper did not finish: ${error || "it returned no answer"}.` };
+    return { ok: true, text: text.trim(), toolCalls };
   }
 
   /** The user's hooks for the task that is running. Reloaded at the start of each task. */
@@ -966,6 +1029,8 @@ export class AgentSession {
     this.correctiveNudgeAttemptsThisTask = 0;
     this.planProposedThisTask = false;
     this.stopRequested = false;
+    this.delegationsThisTask = 0;
+    this.pendingSubagentEvents = [];
     this.abortController = new AbortController();
     // A hook can be a safety guard, so a hook file that cannot be loaded
     // stops the task before the model or any tool runs.
@@ -1456,16 +1521,24 @@ export class AgentSession {
         }
 
         this.state = "EXECUTING_TOOL";
+        if (call.name === "delegate_task") yield { type: "status", message: "Starting a helper with a fresh context. It can only read and search files." };
         yield { type: "tool.start", call };
         const result = await tool.execute(effectiveCall.arguments, {
           workspaceRoot: this.opts.workspaceRoot,
           getGithubToken: this.opts.getGithubToken,
+          runSubagent: (task) => this.runSubagent(task),
           log: (msg) => {
             /* forwarded via tool.result event below */
             void msg;
           },
         });
+        // A helper's model calls cost tokens like any other: report them.
+        yield* this.pendingSubagentEvents.splice(0);
         yield { type: "tool.result", call, result };
+        if (call.name === "delegate_task" && result.ok) {
+          const steps = (result.output as { toolCalls?: number } | null)?.toolCalls ?? 0;
+          yield { type: "status", message: `The helper finished after ${steps} file ${steps === 1 ? "lookup" : "lookups"}.` };
+        }
         // A write that actually succeeded clears any earlier denial's grace
         // period — the model has now demonstrably completed a real write
         // this task, so a LATER final turn describing yet more files in

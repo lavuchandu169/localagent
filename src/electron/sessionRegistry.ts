@@ -332,8 +332,8 @@ export async function startSession(
             ? "auto"
             : config.provider.size,
     provider,
-    // The small embedded models misuse an extra planning tool; every other provider gets the task list.
-    tools: defaultToolRegistry(deps.getExtraTools ?? (() => []), { taskList: config.provider.kind !== "embedded" }),
+    // The small embedded models misuse extra planning tools; every other provider gets the task list and the helper.
+    tools: defaultToolRegistry(deps.getExtraTools ?? (() => []), { taskList: config.provider.kind !== "embedded", delegate: config.provider.kind !== "embedded" }),
     getGithubToken: deps.getGithubToken,
     permissionMode: config.mode,
     initialMessages: deps.resume?.initialMessages,
