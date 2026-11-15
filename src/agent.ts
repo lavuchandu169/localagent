@@ -39,6 +39,7 @@ import {
   SUMMARY_SYSTEM_PROMPT,
 } from "./compaction.js";
 import { isRememberableCommand } from "./commandRules.js";
+import { runAfterHooks, runBeforeHooks, type Hook } from "./hooks.js";
 import { LOAD_SKILL_FALLBACK_MESSAGE } from "./tools/loadSkill.js";
 import { groupDiffIntoSegments, applyHunkSelection } from "./diffUtil.js";
 import { computeFileDiff } from "./diffCompute.js";
@@ -77,6 +78,8 @@ export interface AgentSessionOptions {
   allowedCommands?: string[];
   /** Called when the user approves a command with "always allow", so the caller can store the rule. */
   onCommandRemembered?: (command: string) => void | Promise<void>;
+  /** Loads the user's hooks (see hooks.ts). Called at the start of every task, so an edited hook file applies to the next task. If it throws, the task does not run. */
+  getHooks?: () => Promise<Hook[]>;
   /** Called the first time this session applies a file change with no prompt, so the caller can clear the workspace's stored command rules. */
   onUnpromptedWrite?: () => void | Promise<void>;
   /** Overrides the provider's own context window for deciding when to compact the history. */
@@ -511,6 +514,9 @@ export class AgentSession {
     this.loadedSkillIds.clear();
   }
 
+  /** The user's hooks for the task that is running. Reloaded at the start of each task. */
+  private hooks: Hook[] = [];
+
   private allowedCommands = new Set<string>();
 
   /** Replaces the always-allowed commands, for example after a workspace change or when a rule is removed in settings. */
@@ -675,6 +681,12 @@ export class AgentSession {
       if (this.readPaths.has(relPath)) continue;
 
       const call: ToolCall = { id: `auto_${relPath}`, name: "read_file", arguments: { path: relPath } };
+      // The agent's own automatic read goes through the user's hooks like any other read.
+      const hookVerdict = await runBeforeHooks(this.hooks, call, this.opts.workspaceRoot, { signal: this.abortController?.signal });
+      if (hookVerdict.blocked) {
+        yield { type: "status", message: `Your hook blocked read_file: ${hookVerdict.message}` };
+        continue;
+      }
       const result = await tool.execute(call.arguments, {
         workspaceRoot: this.opts.workspaceRoot,
         log: () => {},
@@ -903,15 +915,30 @@ export class AgentSession {
       this.projectScriptApprovedThisTask = true;
     }
 
+    // The automatic test run goes through the user's hooks like a command the model asked for.
+    const hookVerdict = await runBeforeHooks(this.hooks, call, this.opts.workspaceRoot, { signal: this.abortController?.signal });
+    if (hookVerdict.blocked) {
+      yield { type: "status", message: `Your hook blocked ${call.name}: ${hookVerdict.message}` };
+      this.messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        name: call.name,
+        content: JSON.stringify({ ok: false, error: `Blocked by the user's hook: ${hookVerdict.message}` }).slice(0, 6000),
+      });
+      return true;
+    }
+
     this.state = "EXECUTING_TOOL";
     yield { type: "tool.start", call };
     const result = await tool.execute(call.arguments, { workspaceRoot: this.opts.workspaceRoot, log: () => {}, getGithubToken: this.opts.getGithubToken });
     yield { type: "tool.result", call, result };
+    const hookNotes = await runAfterHooks(this.hooks, call, result, this.opts.workspaceRoot, { signal: this.abortController?.signal });
+    for (const note of hookNotes) yield { type: "status", message: `Your hook after ${call.name}: ${note}` };
     this.messages.push({
       role: "tool",
       tool_call_id: call.id,
       name: call.name,
-      content: JSON.stringify(result).slice(0, 6000),
+      content: JSON.stringify(hookNotes.length > 0 ? { ...result, hook_output: hookNotes } : result).slice(0, 6000),
     });
     return true;
   }
@@ -940,6 +967,17 @@ export class AgentSession {
     this.planProposedThisTask = false;
     this.stopRequested = false;
     this.abortController = new AbortController();
+    // A hook can be a safety guard, so a hook file that cannot be loaded
+    // stops the task before the model or any tool runs.
+    try {
+      this.hooks = this.opts.getHooks ? await this.opts.getHooks() : [];
+    } catch (err: any) {
+      this.hooks = [];
+      this.state = "FAILED";
+      yield { type: "error", message: `Your hooks could not be loaded, so the task did not run. ${err?.message ?? err}` };
+      yield { type: "done", success: false, summary: "Hooks could not be loaded." };
+      return;
+    }
     yield* this.autoReadNamedFiles(task);
     yield* this.autoLoadSkills(task);
     const maxTurns = this.opts.maxTurns ?? 25;
@@ -1403,6 +1441,20 @@ export class AgentSession {
           }
         }
 
+        // The user's before_tool hooks have the last word on a call that is otherwise about to run.
+        const hookVerdict = await runBeforeHooks(this.hooks, effectiveCall, this.opts.workspaceRoot, { signal: this.abortController?.signal });
+        if (hookVerdict.blocked) {
+          if (tool.permission === "WRITE") this.wroteThisTask = true;
+          yield { type: "status", message: `Your hook blocked ${call.name}: ${hookVerdict.message}` };
+          this.messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            name: call.name,
+            content: JSON.stringify({ ok: false, error: `Blocked by the user's hook: ${hookVerdict.message}` }).slice(0, 6000),
+          });
+          continue;
+        }
+
         this.state = "EXECUTING_TOOL";
         yield { type: "tool.start", call };
         const result = await tool.execute(effectiveCall.arguments, {
@@ -1425,11 +1477,14 @@ export class AgentSession {
           this.writeSucceededSinceLastVerify = true;
         }
 
+        const hookNotes = await runAfterHooks(this.hooks, effectiveCall, result, this.opts.workspaceRoot, { signal: this.abortController?.signal });
+        for (const note of hookNotes) yield { type: "status", message: `Your hook after ${call.name}: ${note}` };
+
         this.messages.push({
           role: "tool",
           tool_call_id: call.id,
           name: call.name,
-          content: JSON.stringify(result).slice(0, 6000),
+          content: JSON.stringify(hookNotes.length > 0 ? { ...result, hook_output: hookNotes } : result).slice(0, 6000),
         });
       }
 

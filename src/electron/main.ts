@@ -416,7 +416,9 @@ app.whenReady().then(async () => {
     () => broadcastToAllWindows("agent:sessions-changed"),
     commandRulesFilePath,
     // The user's own folder, never the workspace: a command's text is sent as the user's request.
-    path.join(os.homedir(), ".localagent", "commands")
+    path.join(os.homedir(), ".localagent", "commands"),
+    // Also the user's own folder: a hook is a command that runs with no prompt.
+    path.join(os.homedir(), ".localagent", "hooks.json")
   );
 
   // Tracks the AbortController for whichever agent:start-session call is
