@@ -1,3 +1,4 @@
+import { loadHooks } from "../hooks.js";
 import { resolveSlashCommand } from "../slashCommands.js";
 import { addAllowedCommand, clearAllowedCommands, listAllowedCommands } from "../commandRules.js";
 import crypto from "node:crypto";
@@ -126,6 +127,8 @@ export interface SessionRegistry {
   commandRulesFilePath?: string;
   /** The user's own folder of custom slash commands (see slashCommands.ts). Undefined means built-in commands only. */
   commandsDir?: string;
+  /** The user's own hook file (see hooks.ts). Undefined means no hooks. */
+  hooksFilePath?: string;
 }
 
 export function createSessionRegistry(
@@ -133,9 +136,10 @@ export function createSessionRegistry(
   cloudSync?: CloudSyncConfig,
   onPendingApprovalsChanged?: () => void,
   commandRulesFilePath?: string,
-  commandsDir?: string
+  commandsDir?: string,
+  hooksFilePath?: string
 ): SessionRegistry {
-  return { sessions: new Map(), sessionsDir, cloudSync, onPendingApprovalsChanged, commandRulesFilePath, commandsDir };
+  return { sessions: new Map(), sessionsDir, cloudSync, onPendingApprovalsChanged, commandRulesFilePath, commandsDir, hooksFilePath };
 }
 
 /** Re-reads every live session's always-allowed commands from the rules file: after a rule is removed in settings, or after a session moves to another workspace. */
@@ -338,6 +342,7 @@ export async function startSession(
     onCommandRemembered: async (command) => {
       if (registry.commandRulesFilePath) await addAllowedCommand(registry.commandRulesFilePath, session.getWorkspaceRoot(), command);
     },
+    getHooks: () => loadHooks(registry.hooksFilePath),
     onUnpromptedWrite: async () => {
       if (!registry.commandRulesFilePath) return;
       await clearAllowedCommands(registry.commandRulesFilePath, session.getWorkspaceRoot());

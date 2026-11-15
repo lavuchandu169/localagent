@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { AgentSession } from "./agent.js";
 import { defaultToolRegistry } from "./toolRegistry.js";
 import { resolveSlashCommand } from "./slashCommands.js";
+import { loadHooks } from "./hooks.js";
 import { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
 import { EmbeddedLlamaProvider } from "./providers/embeddedLlama.js";
 import { AnthropicProvider } from "./providers/anthropicProvider.js";
@@ -169,6 +170,7 @@ async function main() {
     provider,
     tools: defaultToolRegistry(undefined, { taskList: !(provider instanceof EmbeddedLlamaProvider) }),
     permissionMode: mode,
+    getHooks: () => loadHooks(path.join(os.homedir(), ".localagent", "hooks.json")),
     onApprovalNeeded: async (call: ToolCall) => {
       if (!rl) {
         console.error(`[localagent] refused ${call.name}: it needs approval, and --json mode cannot ask. Use --mode ACCEPT_EDITS or AUTO_SAFE to allow more.`);

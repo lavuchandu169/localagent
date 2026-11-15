@@ -35,6 +35,7 @@ Everything in this document is real. It works today. For the list of gaps, see [
 - [Project instructions](#project-instructions)
 - [Long conversations](#long-conversations)
 - [Slash commands](#slash-commands)
+- [Hooks](#hooks)
 - [Always-allowed commands](#always-allowed-commands)
 - [Desktop app](#desktop-app)
   - [Multi-session tabs](#multi-session-tabs)
@@ -226,6 +227,36 @@ Example: with a file `review.md` that contains `Review $ARGUMENTS for bugs. Do n
 - The app reads commands from your home folder only, not from the workspace. A repository that you cloned cannot add a command.
 - A file cannot replace `/help` or `/compact`.
 - A path at the start of a task, such as `/Users/me/a.ts has a bug`, is not a command.
+
+## Hooks
+
+A hook is your own shell command that the agent runs before or after one of its tool calls. Use a hook to block an action that you do not want, or to run a formatter or a linter after an edit. Hooks work in the desktop app and in the CLI.
+
+Put the hooks in the file `~/.localagent/hooks.json`:
+
+```json
+{
+  "hooks": [
+    { "event": "before_tool", "tool": "run_command", "command": "./scripts/check-command.sh" },
+    { "event": "after_tool", "tool": "edit_file", "command": "npx prettier --check ." }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `event` | `before_tool` or `after_tool`. |
+| `tool` | The name of a tool, for example `edit_file`, `run_command`, or `read_file`. Use `*` for all tools. |
+| `command` | The shell command to run. It runs in the workspace folder. |
+
+- A `before_tool` hook runs after the permission check and after your approval, immediately before the tool runs. If the command exits with a code that is not 0, the agent does not run the tool. The agent and you see the text that the command printed.
+- An `after_tool` hook runs after the tool. The agent and you see the text that it printed. It cannot undo the tool call.
+- The command gets the details of the call as JSON on standard input: `event`, `tool`, `arguments`, `workspace`, and, for `after_tool`, `result`. It also gets the environment variables `LOCALAGENT_EVENT`, `LOCALAGENT_TOOL`, and `LOCALAGENT_WORKSPACE`.
+- A hook has 15 seconds. A `before_tool` hook that takes longer, or that cannot start, blocks the tool call.
+- The agent also runs the hooks for the tool calls that it makes automatically: the read of a file that you named in the task, and the test command after an edit.
+- The agent reads the file again at the start of each task. If the file is not valid, the task does not run and you see the cause. This is deliberate: a hook can be a safety check, and the agent must not continue without it.
+- The agent reads hooks from your home folder only, not from the workspace. A repository that you cloned cannot add a hook.
+- The maximum is 20 hooks.
 
 ## Always-allowed commands
 
@@ -438,7 +469,7 @@ None of `agent.ts`, `permissions.ts`, `toolRegistry.ts`, or the tools import any
 
 ## What's not built yet
 
-These are real gaps, not hedging. Not built yet: a VS Code extension, Tree-sitter/LSP symbol intelligence, subagents, agent hooks, and sandboxed execution. The Mac build supports Apple Silicon only; it has no Intel/x64 build. The Windows build supports x64 only; it has no ARM64 build. Neither installer is code-signed yet. Because of this, both trigger a one-time OS warning on first launch (see [Download the beta](#download-the-beta)), and Mac auto-updates can download an update but cannot always apply it in place. Automated tests, against a fake bundle, cover the free-tier router's dashboard window and its automatic fallback path. These two features have not yet had a manual check under a real packaged build, on either platform. We state this here, rather than assume it works without checking.
+These are real gaps, not hedging. Not built yet: a VS Code extension, Tree-sitter/LSP symbol intelligence, subagents, and sandboxed execution. The Mac build supports Apple Silicon only; it has no Intel/x64 build. The Windows build supports x64 only; it has no ARM64 build. Neither installer is code-signed yet. Because of this, both trigger a one-time OS warning on first launch (see [Download the beta](#download-the-beta)), and Mac auto-updates can download an update but cannot always apply it in place. Automated tests, against a fake bundle, cover the free-tier router's dashboard window and its automatic fallback path. These two features have not yet had a manual check under a real packaged build, on either platform. We state this here, rather than assume it works without checking.
 
 The architecture is built, on purpose, to extend into all of this without a rework. The provider interface, the tool interface, the permission engine, and the typed event stream form the boundary that makes this possible.
 
