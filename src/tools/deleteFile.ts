@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Tool, ToolContext } from "../types.js";
-import { isProtectedPath } from "../protected.js";
+import { isProtectedPath, isUserConfigPath } from "../protected.js";
 import { resolveWithinWorkspace } from "../workspacePath.js";
 
 interface Input {
@@ -32,6 +32,9 @@ export const deleteFileTool: Tool<Input, { path: string; deletedDirectory: boole
       return { ok: false, output: null, error: resolved.error };
     }
     const abs = resolved.abs;
+    if (await isUserConfigPath(abs, { orContains: true })) {
+      return { ok: false, output: null, error: `Refusing to delete ${input.path}: it is, or it contains, your localagent config folder, which the agent must not change.` };
+    }
     // Same symlink-escape defense as edit_file/read_file (final review
     // Important #4): isProtectedPath above only ever saw the REQUESTED
     // string, never where a symlink actually resolves to — re-check

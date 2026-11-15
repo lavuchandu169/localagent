@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Tool, ToolContext } from "../types.js";
-import { isProtectedPath } from "../protected.js";
+import { isProtectedPath, isUserConfigPath } from "../protected.js";
 import { resolveWithinWorkspace } from "../workspacePath.js";
 
 interface Input {
@@ -34,6 +34,9 @@ export const editFileTool: Tool<Input, { path: string; bytesWritten: number; cre
       return { ok: false, output: null, error: resolved.error };
     }
     const abs = resolved.abs;
+    if (await isUserConfigPath(abs)) {
+      return { ok: false, output: null, error: `Refusing to write ${input.path}: it is in your localagent config folder, which the agent must not change.` };
+    }
     // Final review Important #4, confirmed live: a symlink named "cfg"
     // pointing at .git/config bypassed the isProtectedPath check above
     // entirely (it only ever looked at the requested string "cfg", never

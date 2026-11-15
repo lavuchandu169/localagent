@@ -1,3 +1,6 @@
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 // Security audit finding M5: APFS (macOS) and NTFS (Windows) are
 // case-insensitive by default, so a path like ".GIT/hooks/pre-commit" or
 // ".ENV" bypassed every one of these regexes even though it resolves to
@@ -29,6 +32,28 @@ const PROTECTED_PATTERNS = [
 
 export function isProtectedPath(relPath: string): boolean {
   return PROTECTED_PATTERNS.some((r) => r.test(relPath));
+}
+
+/**
+ * True for a resolved absolute path inside the user's own config folder
+ * (~/.localagent). That folder holds the hook file and the custom
+ * commands: a hook is a shell command that runs with no prompt, and a
+ * command's text is sent as the user's request. The agent's file tools
+ * must never write there, which matters when the workspace is the home
+ * folder itself or a folder above it. A project's own `.localagent`
+ * folder is a different place and is not covered.
+ *
+ * `orContains` also matches a folder that contains the config folder,
+ * for a recursive delete.
+ */
+export async function isUserConfigPath(absPath: string, options: { orContains?: boolean } = {}): Promise<boolean> {
+  const configDir = path.join(os.homedir(), ".localagent");
+  const real = await fs.realpath(configDir).catch(() => configDir);
+  // macOS and Windows file systems ignore letter case by default.
+  const fold = (p: string) => (process.platform === "darwin" || process.platform === "win32" ? p.toLowerCase() : p);
+  const within = (child: string, parent: string) => child === parent || child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
+  const candidate = fold(path.resolve(absPath));
+  return [fold(real), fold(configDir)].some((dir) => within(candidate, dir) || (options.orContains === true && within(dir, candidate)));
 }
 
 // keepPrefix: true means the pattern's first capture group is a prefix to

@@ -256,6 +256,7 @@ Put the hooks in the file `~/.localagent/hooks.json`:
 - The agent also runs the hooks for the tool calls that it makes automatically: the read of a file that you named in the task, and the test command after an edit.
 - The agent reads the file again at the start of each task. If the file is not valid, the task does not run and you see the cause. This is deliberate: a hook can be a safety check, and the agent must not continue without it.
 - The agent reads hooks from your home folder only, not from the workspace. A repository that you cloned cannot add a hook.
+- The agent's file tools cannot write or delete in `~/.localagent`. This is also true when you open your home folder as the workspace.
 - The maximum is 20 hooks.
 
 ## Always-allowed commands

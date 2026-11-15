@@ -92,7 +92,16 @@ function runHook(hook: Hook, payload: Record<string, unknown>, workspaceRoot: st
       cwd: workspaceRoot,
       shell: true,
       detached: process.platform !== "win32",
-      env: { ...process.env, LOCALAGENT_EVENT: hook.event, LOCALAGENT_TOOL: String(payload.tool), LOCALAGENT_WORKSPACE: workspaceRoot },
+      env: {
+        ...process.env,
+        LOCALAGENT_EVENT: hook.event,
+        LOCALAGENT_TOOL: String(payload.tool),
+        LOCALAGENT_WORKSPACE: workspaceRoot,
+        // On Windows, cmd.exe looks in the current folder before PATH. The current
+        // folder is the workspace, so a program planted there could run in place
+        // of the one the hook names. This tells cmd.exe to skip the current folder.
+        ...(process.platform === "win32" ? { NoDefaultCurrentDirectoryInExePath: "1" } : {}),
+      },
     });
     const kill = () => {
       try {
