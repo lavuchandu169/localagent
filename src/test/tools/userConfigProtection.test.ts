@@ -17,7 +17,7 @@ const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "localage
 process.env.HOME = home;
 process.env.USERPROFILE = home;
 
-const { isUserConfigPath } = await import("../../protected.js");
+const { isUserConfigPath, registerProtectedConfigRoot } = await import("../../protected.js");
 const { editFileTool } = await import("../../tools/editFile.js");
 const { deleteFileTool } = await import("../../tools/deleteFile.js");
 const { loadHooks } = await import("../../hooks.js");
@@ -84,6 +84,40 @@ try {
     check("a project's own .localagent folder can still be written", r.ok === true);
     const d = await deleteFileTool.execute({ path: ".localagent/skills/demo/SKILL.md" }, projectCtx);
     check("and deleted from", d.ok === true);
+  }
+  console.log("\nThe app's own data folder:");
+  {
+    const appData = path.join(home, "Library", "Application Support", "localagent");
+    await fs.mkdir(appData, { recursive: true });
+    await fs.writeFile(path.join(appData, "command-rules.json"), "{}");
+    check("it is not protected until the app registers it", !(await isUserConfigPath(path.join(appData, "command-rules.json"))));
+    registerProtectedConfigRoot(appData);
+    check("once registered, a file in it is protected", await isUserConfigPath(path.join(appData, "command-rules.json")));
+    const r = await editFileTool.execute({ path: "Library/Application Support/localagent/command-rules.json", content: '{"version":1,"workspaces":{"/":["node x.js"]}}' }, homeCtx);
+    check("edit_file refuses to write the stored command rules", r.ok === false && (await fs.readFile(path.join(appData, "command-rules.json"), "utf8")) === "{}");
+    const d = await deleteFileTool.execute({ path: "Library", recursive: true }, homeCtx);
+    check("delete_file refuses a folder that contains it", d.ok === false);
+  }
+
+  console.log("\nA home folder reached through a symlink, with no config folder yet:");
+  {
+    const realHome = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "localagent-real-home-")));
+    const linkParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "localagent-link-parent-")));
+    const linkedHome = path.join(linkParent, "home-link");
+    await fs.symlink(realHome, linkedHome);
+    process.env.HOME = linkedHome;
+    process.env.USERPROFILE = linkedHome;
+    try {
+      check("a path under the real folder is recognised although ~/.localagent does not exist yet", await isUserConfigPath(path.join(realHome, ".localagent", "hooks.json")));
+      const r = await editFileTool.execute({ path: ".localagent/hooks.json", content: '{"hooks":[]}' }, { workspaceRoot: realHome, log: () => {} });
+      const created = await fs.access(path.join(realHome, ".localagent", "hooks.json")).then(() => true, () => false);
+      check("edit_file cannot create the hook file through the real path", r.ok === false && !created);
+    } finally {
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      await fs.rm(realHome, { recursive: true, force: true });
+      await fs.rm(linkParent, { recursive: true, force: true });
+    }
   }
 } finally {
   await fs.rm(home, { recursive: true, force: true });

@@ -34,26 +34,62 @@ export function isProtectedPath(relPath: string): boolean {
   return PROTECTED_PATTERNS.some((r) => r.test(relPath));
 }
 
+const extraConfigRoots = new Set<string>();
+
 /**
- * True for a resolved absolute path inside the user's own config folder
- * (~/.localagent). That folder holds the hook file and the custom
- * commands: a hook is a shell command that runs with no prompt, and a
- * command's text is sent as the user's request. The agent's file tools
- * must never write there, which matters when the workspace is the home
- * folder itself or a folder above it. A project's own `.localagent`
- * folder is a different place and is not covered.
+ * Adds a folder that the agent's file tools must never write: the
+ * desktop app registers its own data folder, which holds the stored
+ * command rules and the other settings files.
+ */
+export function registerProtectedConfigRoot(dir: string): void {
+  extraConfigRoots.add(path.resolve(dir));
+}
+
+/**
+ * Resolves symlinks in a path that may not exist yet: the nearest
+ * existing ancestor is resolved, and the missing part is added back.
+ * The file tools resolve their target the same way, so both sides of
+ * the comparison below agree even when the folder is still to be made.
+ */
+async function resolveThroughExistingAncestor(p: string): Promise<string> {
+  const missing: string[] = [];
+  let current = path.resolve(p);
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(current), ...missing);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(p);
+      missing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * True for an absolute path inside a folder that holds the user's or
+ * the app's own configuration: ~/.localagent (the hook file and the
+ * custom commands) and any folder the app registered. A hook is a shell
+ * command that runs with no prompt, a command's text is sent as the
+ * user's request, and a stored command rule runs without asking. The
+ * agent's file tools must never write there, which matters when the
+ * workspace is the home folder itself or a folder above it. A project's
+ * own `.localagent` folder is a different place and is not covered.
  *
- * `orContains` also matches a folder that contains the config folder,
+ * `orContains` also matches a folder that contains a protected folder,
  * for a recursive delete.
  */
 export async function isUserConfigPath(absPath: string, options: { orContains?: boolean } = {}): Promise<boolean> {
-  const configDir = path.join(os.homedir(), ".localagent");
-  const real = await fs.realpath(configDir).catch(() => configDir);
   // macOS and Windows file systems ignore letter case by default.
   const fold = (p: string) => (process.platform === "darwin" || process.platform === "win32" ? p.toLowerCase() : p);
   const within = (child: string, parent: string) => child === parent || child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
-  const candidate = fold(path.resolve(absPath));
-  return [fold(real), fold(configDir)].some((dir) => within(candidate, dir) || (options.orContains === true && within(dir, candidate)));
+  const candidates = [fold(path.resolve(absPath)), fold(await resolveThroughExistingAncestor(absPath))];
+  for (const root of [path.join(os.homedir(), ".localagent"), ...extraConfigRoots]) {
+    for (const dir of [fold(root), fold(await resolveThroughExistingAncestor(root))]) {
+      if (candidates.some((c) => within(c, dir) || (options.orContains === true && within(dir, c)))) return true;
+    }
+  }
+  return false;
 }
 
 // keepPrefix: true means the pattern's first capture group is a prefix to

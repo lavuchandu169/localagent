@@ -1,3 +1,4 @@
+import { registerProtectedConfigRoot } from "../protected.js";
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, session } from "electron";
 // electron-updater is CommonJS; Node's ESM/CJS interop fails to statically
 // detect `autoUpdater` as a named export from it (confirmed live — a plain
@@ -167,6 +168,8 @@ app.whenReady().then(async () => {
     callback(false);
   });
 
+  // The agent's file tools must not write the app's own settings, also when the workspace is the home folder.
+  registerProtectedConfigRoot(app.getPath("userData"));
   const authFilePath = path.join(app.getPath("userData"), "auth.json");
   const commandRulesFilePath = path.join(app.getPath("userData"), "command-rules.json");
   const githubAuthFilePath = path.join(app.getPath("userData"), "github-auth.json");
