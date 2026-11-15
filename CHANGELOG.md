@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.180 — 2026-11-15
+
+- Merge branch 'subagents'
+
 ## v0.1.0-beta.179 — 2026-11-15
 
 - Merge remote-tracking branch 'origin/main'
