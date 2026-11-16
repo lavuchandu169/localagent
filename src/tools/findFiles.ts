@@ -103,7 +103,25 @@ export function compileGlob(glob: string): { test(relPath: string): boolean } {
   };
 }
 
-export const findFilesTool: Tool<Input, { files: string[] }> = {
+const MAX_SIMILAR_RESULTS = 20;
+
+/**
+ * Wider patterns to try when a pattern matched nothing: the same name
+ * with any extension, then any file whose name holds the first word of
+ * the pattern. All of them match in any folder.
+ */
+export function looserPatterns(pattern: string): string[] {
+  const name = (expandBraces(pattern)[0] ?? pattern).split("/").pop() ?? "";
+  const out: string[] = [];
+  const extension = /\.[A-Za-z0-9]+$/.exec(name);
+  const stem = extension ? name.slice(0, extension.index) : name;
+  if (extension && /[A-Za-z0-9]/.test(stem)) out.push(`${stem}.*`);
+  const word = stem.split(/[^A-Za-z0-9]+/).find((part) => part.length >= 3);
+  if (word) out.push(`*${word}*`);
+  return out.filter((looser) => looser !== pattern);
+}
+
+export const findFilesTool: Tool<Input, { files: string[]; similar?: string[]; note?: string }> = {
   name: "find_files",
   description:
     "Find files by name pattern anywhere in the workspace, at any depth. Examples: \"*.test.ts\", \"src/**/*.tsx\", \"**/package.json\". Returns paths only; use grep to search file contents.",
@@ -133,43 +151,66 @@ export const findFilesTool: Tool<Input, { files: string[] }> = {
       return { ok: false, output: null, error: `Invalid pattern: ${err.message}` };
     }
 
-    const files: string[] = [];
-    let visited = 0;
-    let truncated = false;
     // Paths are matched relative to the starting folder and reported
     // relative to the workspace, the same convention list_directory uses.
-    const walk = async (dir: string): Promise<void> => {
-      let entries;
-      try {
-        entries = await fs.readdir(dir, { withFileTypes: true });
-      } catch {
-        return; // an unreadable folder is skipped, not fatal
-      }
-      entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-      for (const e of entries) {
-        if (truncated) return;
-        if (++visited > MAX_VISITED_ENTRIES) {
-          truncated = true;
-          return;
+    let visited = 0;
+    let truncated = false;
+    const collect = async (test: (relPath: string) => boolean, limit: number): Promise<string[]> => {
+      const found: string[] = [];
+      const walk = async (dir: string): Promise<void> => {
+        let entries;
+        try {
+          entries = await fs.readdir(dir, { withFileTypes: true });
+        } catch {
+          return; // an unreadable folder is skipped, not fatal
         }
-        const abs = path.join(dir, e.name);
-        // A symlink is neither descended into nor reported: it can point outside the workspace.
-        if (e.isSymbolicLink()) continue;
-        if (e.isDirectory()) {
-          if (!IGNORE.has(e.name)) await walk(abs);
-        } else if (e.isFile()) {
-          const relToStart = path.relative(resolved.abs, abs).split(path.sep).join("/");
-          if (!matcher.test(relToStart)) continue;
-          if (files.length >= MAX_FIND_RESULTS) {
+        entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+        for (const e of entries) {
+          if (truncated) return;
+          if (++visited > MAX_VISITED_ENTRIES) {
             truncated = true;
             return;
           }
-          files.push(path.relative(resolvedRoot.abs, abs).split(path.sep).join("/"));
+          const abs = path.join(dir, e.name);
+          // A symlink is neither descended into nor reported: it can point outside the workspace.
+          if (e.isSymbolicLink()) continue;
+          if (e.isDirectory()) {
+            if (!IGNORE.has(e.name)) await walk(abs);
+          } else if (e.isFile()) {
+            const relToStart = path.relative(resolved.abs, abs).split(path.sep).join("/");
+            if (!test(relToStart)) continue;
+            if (found.length >= limit) {
+              truncated = true;
+              return;
+            }
+            found.push(path.relative(resolvedRoot.abs, abs).split(path.sep).join("/"));
+          }
         }
-      }
+      };
+      await walk(resolved.abs);
+      return found.sort();
     };
-    await walk(resolved.abs);
-    files.sort();
+
+    const files = await collect((rel) => matcher.test(rel), MAX_FIND_RESULTS);
+    if (files.length === 0 && !truncated) {
+      // A model often guesses the wrong extension or the wrong naming
+      // style ("*.test.ts" in a JavaScript project). An empty list alone
+      // made real models stop or invent a path, so name the near matches.
+      const similar: string[] = [];
+      for (const looser of looserPatterns(pattern)) {
+        const loose = compileGlob(looser);
+        visited = 0;
+        const more = await collect((rel) => loose.test(rel), MAX_SIMILAR_RESULTS);
+        truncated = false;
+        for (const file of more) if (!similar.includes(file) && similar.length < MAX_SIMILAR_RESULTS) similar.push(file);
+        if (similar.length > 0) break;
+      }
+      const note =
+        similar.length > 0
+          ? `No file matches "${pattern}". The files in "similar" have names that are close.`
+          : `No file matches "${pattern}". Try a shorter pattern, or use list_directory to see the files.`;
+      return { ok: true, output: { files, ...(similar.length > 0 ? { similar } : {}), note } };
+    }
     return { ok: true, output: { files }, ...(truncated ? { truncated: true } : {}) };
   },
 };

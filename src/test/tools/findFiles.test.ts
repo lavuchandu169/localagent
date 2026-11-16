@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { findFilesTool, compileGlob, MAX_FIND_RESULTS } from "../../tools/findFiles.js";
+import { findFilesTool, compileGlob, looserPatterns, MAX_FIND_RESULTS } from "../../tools/findFiles.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -120,6 +120,38 @@ try {
 } finally {
   await fs.rm(root, { recursive: true, force: true });
   await fs.rm(outside, { recursive: true, force: true });
+}
+
+console.log("\nfind_files names close matches when nothing matches:");
+{
+  check("a wrong extension is tried with any extension, then by its first word", JSON.stringify(looserPatterns("*.test.ts")) === JSON.stringify(["*.test.*", "*test*"]));
+  check("a folder in the pattern is dropped", JSON.stringify(looserPatterns("src/**/login.spec.ts")) === JSON.stringify(["login.spec.*", "*login*"]));
+  check("a pattern with no word gives nothing to try", looserPatterns("*.*").length === 0 && looserPatterns("*").length === 0);
+
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-find-similar-"));
+  try {
+    await fs.mkdir(path.join(root, "src", "auth", "deep"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "auth", "deep", "login.test.js"), "");
+    await fs.writeFile(path.join(root, "src", "auth", "login.js"), "");
+    await fs.writeFile(path.join(root, "notes.md"), "");
+    const run = async (pattern: string) => (await findFilesTool.execute({ pattern }, { workspaceRoot: root } as any)) as any;
+
+    const wrongExtension = await run("*.test.ts");
+    check("a wrong extension returns no files", wrongExtension.ok === true && wrongExtension.output.files.length === 0);
+    check("and names the file with the other extension", JSON.stringify(wrongExtension.output.similar) === JSON.stringify(["src/auth/deep/login.test.js"]));
+    check("and says that nothing matched", String(wrongExtension.output.note).includes('No file matches "*.test.ts"'));
+
+    const wrongStyle = await run("**/login.spec.ts");
+    check("a wrong naming style falls back to the word in the name", JSON.stringify(wrongStyle.output.similar) === JSON.stringify(["src/auth/deep/login.test.js", "src/auth/login.js"]));
+
+    const nothing = await run("zzzunknown.rb");
+    check("with no close match there is a note and no similar list", nothing.output.similar === undefined && String(nothing.output.note).includes("list_directory"));
+
+    const hit = await run("*.md");
+    check("a pattern that matches returns only the files", JSON.stringify(hit.output) === JSON.stringify({ files: ["notes.md"] }));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
