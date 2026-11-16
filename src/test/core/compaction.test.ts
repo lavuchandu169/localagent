@@ -6,6 +6,7 @@ import {
   planCompaction,
   renderTranscript,
   buildCompactedHistory,
+  notesIn,
   MIN_MESSAGES_TO_COMPACT,
   SUMMARY_MARKER,
   SUMMARY_SYSTEM_PROMPT,
@@ -29,6 +30,8 @@ function check(name: string, cond: boolean) {
 const system: ChatMessage = { role: "system", content: "You are an agent." };
 const user = (content: string): ChatMessage => ({ role: "user", content });
 const assistant = (content: string): ChatMessage => ({ role: "assistant", content });
+const isMarked = (m: ChatMessage) => m.content.startsWith(SUMMARY_MARKER);
+
 function toolPair(id: string, name: string, args: Record<string, unknown>, result: string): ChatMessage[] {
   return [
     { role: "assistant", content: "", tool_calls: [{ id, name, arguments: args }] },
@@ -94,12 +97,22 @@ console.log("\nplanCompaction:");
   const recentPlan = planCompaction(recentRequest);
   check("a user message that is already in the tail is not duplicated", recentPlan !== null && recentPlan.userMessages.length === 0 && recentPlan.tail.some((m) => m.content === "latest"));
 
-  const withOldSummary: ChatMessage[] = [system, user(`${SUMMARY_MARKER}\nold notes`), user("real request"), ...Array.from({ length: 12 }, (_, i) => assistant(`m ${i}`))];
-  const oldSummaryPlan = planCompaction(withOldSummary);
-  check(
-    "an earlier generated summary is summarised again, never kept as if the user wrote it",
-    oldSummaryPlan !== null && oldSummaryPlan.userMessages.length === 1 && oldSummaryPlan.userMessages[0]?.content === "real request" && oldSummaryPlan.toSummarize.some((m) => m.content.includes("old notes"))
-  );
+  const oldSummary = buildCompactedHistory({ system, pinned: [], toSummarize: [], carriedNotes: "", userMessages: [], tail: [] }, "MAGIC_PORT is 47113.")[1]!;
+  const withOldSummary: ChatMessage[] = [system, oldSummary, user("real request"), ...Array.from({ length: 12 }, (_, i) => assistant(`m ${i}`))];
+  const oldSummaryPlan = planCompaction(withOldSummary)!;
+  check("the notes inside a summary message are read back without the fixed lines", notesIn(oldSummary) === "MAGIC_PORT is 47113.");
+  check("short earlier notes are carried over, not summarised again", oldSummaryPlan.carriedNotes === "MAGIC_PORT is 47113." && !oldSummaryPlan.toSummarize.some(isMarked));
+  check("an earlier summary is never kept as if the user wrote it", oldSummaryPlan.userMessages.length === 1 && oldSummaryPlan.userMessages[0]?.content === "real request");
+  const again = buildCompactedHistory(oldSummaryPlan, "The orders module has 70 steps.");
+  const notes = again.filter(isMarked);
+  check("the new history has one notes message, with the earlier notes first and the new ones after", notes.length === 1 && notesIn(notes[0]!) === "MAGIC_PORT is 47113.\n\nThe orders module has 70 steps.");
+  const third = buildCompactedHistory(planCompaction([...again.slice(0, 2), ...Array.from({ length: 12 }, (_, i) => assistant(`n ${i}`))])!, "Third.");
+  check("a fact from the first compaction is still there after the third", third.filter(isMarked).length === 1 && third.filter(isMarked)[0]!.content.includes("MAGIC_PORT is 47113."));
+
+  const longNotes = buildCompactedHistory({ system, pinned: [], toSummarize: [], carriedNotes: "", userMessages: [], tail: [] }, "fact. ".repeat(2000))[1]!;
+  const longPlan = planCompaction([system, longNotes, ...Array.from({ length: 12 }, (_, i) => assistant(`m ${i}`))], 8192)!;
+  check("earlier notes that are too long for the window are summarised again", longPlan.carriedNotes === "" && longPlan.toSummarize.some(isMarked));
+  check("they are labelled as earlier notes in the summary request", renderTranscript(longPlan.toSummarize, 100_000).startsWith("EARLIER NOTES: fact."));
 
   const userHeavy: ChatMessage[] = [system, ...Array.from({ length: 10 }, (_, i) => user(`u ${i}`)), ...Array.from({ length: KEEP_RECENT_MESSAGES }, (_, i) => assistant(`m ${i}`))];
   check("a range made only of user messages has nothing to summarise", planCompaction(userHeavy) === null);
