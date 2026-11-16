@@ -1,3 +1,4 @@
+import { recoverToolCallFromText } from "./embeddedLlama.js";
 import type { ChatMessage, ChatRequest, ChatResponse, HealthCheckResult, ModelInfo, ModelProvider, StreamEvent, ToolCall } from "../types.js";
 import { ProviderChatError } from "../types.js";
 import { formatTextAttachment } from "../attachmentFormat.js";
@@ -166,7 +167,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       const res = await postChatCompletions(this.opts.baseUrl, this.headers(), body, request.signal);
       const data: any = await res.json();
       const choice = data.choices?.[0];
-      return fromOpenAIChatMessage(choice?.message ?? {}, data);
+      return recoverTextToolCall(fromOpenAIChatMessage(choice?.message ?? {}, data), request);
     } catch (err) {
       // Performance/correctness finding (code-review-and-quality pass): a
       // failure in fetch() itself (network down, DNS, TLS) or in
@@ -181,11 +182,28 @@ export class OpenAICompatibleProvider implements ModelProvider {
       const body = buildChatBody(request);
       body.stream = true;
       const res = await postChatCompletions(this.opts.baseUrl, this.headers(), body, request.signal);
-      yield* streamOpenAIShapeResponse(res);
+      for await (const event of streamOpenAIShapeResponse(res)) {
+        yield event.type === "done" ? { ...event, response: recoverTextToolCall(event.response, request) } : event;
+      }
     } catch (err) {
       wrapNonProviderError(err);
     }
   }
+}
+
+/**
+ * Some local models write a tool call as text in the reply and the
+ * server passes it on as plain content. Seen live with Qwen2.5-Coder 7B
+ * on llama.cpp's server: every call came back as a json code block, no
+ * tool ran, and the agent could do nothing. The embedded provider
+ * already recovers such calls; this does the same for a custom server.
+ * Only a call to a tool that was offered in this request counts.
+ */
+export function recoverTextToolCall(response: ChatResponse, request: Pick<ChatRequest, "tools">): ChatResponse {
+  if (response.turn.type !== "final" || !request.tools || request.tools.length === 0) return response;
+  const recovered = recoverToolCallFromText(response.turn.content, new Set(request.tools.map((tool) => tool.name)));
+  if (!recovered) return response;
+  return { ...response, turn: { type: "tool_calls", ...recovered, recoveredFromTextFallback: true } };
 }
 
 /** Extracts real token usage from an OpenAI-shape response body, when it

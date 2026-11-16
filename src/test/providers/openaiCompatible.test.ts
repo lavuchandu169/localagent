@@ -1,3 +1,4 @@
+import { recoverTextToolCall } from "../../providers/openaiCompatible.js";
 import { buildChatBody, OpenAICompatibleProvider, fromOpenAIChatMessage } from "../../providers/openaiCompatible.js";
 import type { ChatMessage } from "../../types.js";
 import { ProviderChatError } from "../../types.js";
@@ -305,6 +306,39 @@ console.log("\nOpenAICompatibleProvider.chatStream wraps a non-HTTP failure the 
   } finally {
     globalThis.fetch = realFetch;
   }
+}
+
+console.log("\nA tool call that a local model wrote as text (seen with Qwen2.5-Coder 7B on llama.cpp's server):");
+{
+  const tools = [
+    { name: "list_directory", description: "d", inputSchema: {} },
+    { name: "find_files", description: "d", inputSchema: {} },
+  ];
+  const final = (content: string) => ({ turn: { type: "final" as const, content }, usage: { inputTokens: 5, outputTokens: 7 } });
+  const fence = "```";
+
+  const block = recoverTextToolCall(final(`${fence}json\n{\n  "name": "list_directory",\n  "arguments": {\n    "path": "."\n  }\n}\n${fence}`), { tools });
+  check("a call in a json code block becomes a real tool call", block.turn.type === "tool_calls" && block.turn.toolCalls[0]?.name === "list_directory" && block.turn.toolCalls[0]?.arguments.path === ".");
+  check("it is marked as recovered, and the token use is kept", block.turn.type === "tool_calls" && block.turn.recoveredFromTextFallback === true && block.usage?.outputTokens === 7);
+
+  const braces = recoverTextToolCall(final('I will list the folder first. Please wait...\n\n{{"name": "list_directory", "arguments": {"path": "."}}}'), { tools });
+  check("a call in doubled braces after some prose is recovered", braces.turn.type === "tool_calls" && braces.turn.toolCalls[0]?.name === "list_directory");
+  check("the prose before it is kept", braces.turn.type === "tool_calls" && !!braces.turn.content?.includes("I will list the folder first"));
+
+  const prose = recoverTextToolCall(final(`Let's call find_files.\n${fence}json\n{"name": "find_files", "arguments": {"pattern": "**/payment*.js"}}\n${fence}`), { tools });
+  check("a call after an explanation is recovered", prose.turn.type === "tool_calls" && prose.turn.toolCalls[0]?.arguments.pattern === "**/payment*.js");
+
+  const unknown = recoverTextToolCall(final('{"name": "format_disk", "arguments": {"path": "/"}}'), { tools });
+  check("JSON that names a tool that was not offered stays a plain answer", unknown.turn.type === "final");
+
+  const noTools = recoverTextToolCall(final('{"name": "list_directory", "arguments": {"path": "."}}'), {});
+  check("with no tools offered nothing is recovered", noTools.turn.type === "final");
+
+  const answer = final("The retry limit is 4 attempts.");
+  check("an ordinary answer is returned unchanged", recoverTextToolCall(answer, { tools }) === answer);
+
+  const real = { turn: { type: "tool_calls" as const, toolCalls: [{ id: "a", name: "find_files", arguments: {} }] } };
+  check("a real tool call from the server is returned unchanged", recoverTextToolCall(real, { tools }) === real);
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);

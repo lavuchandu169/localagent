@@ -206,7 +206,7 @@ function isToolCallShape(parsed: unknown): parsed is { name: string; arguments: 
  * fenced block, rawMatch is the WHOLE fence (including the ``` markers),
  * not just the inner JSON — otherwise the fence markers themselves would
  * get treated as "surrounding prose" and leak into the kept text. */
-function tryParseFallbackToolCall(response: string): { name: string; arguments: Record<string, unknown>; rawMatch: string } | null {
+export function tryParseFallbackToolCall(response: string): { name: string; arguments: Record<string, unknown>; rawMatch: string } | null {
   const trimmed = response.trim();
   // Every fenced block is searched, the last one first. Only the first
   // block was searched before, and a real 7B model lost three edits in a
@@ -239,6 +239,9 @@ function parseToolCallIn(searchText: string): { call: { name: string; arguments:
     // its own repair alone; one with both mistakes together needs both
     // repairs composed.
     const attempts = [candidate, repairTripleQuotedStrings(candidate), repairUnescapedQuotes(candidate), repairUnescapedQuotes(repairTripleQuotedStrings(candidate))];
+    // A model that copies a prompt template can double the outer braces: {{"name": ...}}.
+    const inner = /^\{\s*\{[\s\S]*\}\s*\}$/.test(candidate) ? candidate.slice(1, -1).trim() : null;
+    if (inner) attempts.push(inner, repairUnescapedQuotes(inner));
     let parsed: unknown;
     for (const attempt of attempts) {
       try {
@@ -253,6 +256,23 @@ function parseToolCallIn(searchText: string): { call: { name: string; arguments:
   return null;
 }
 
+/**
+ * Turns a plain-text reply into a tool call when the text holds one.
+ * Returns null when it does not. With allowedNames, only a call to one
+ * of those tools counts: a custom server's model can write any JSON.
+ */
+export function recoverToolCallFromText(text: string, allowedNames?: ReadonlySet<string>): { toolCalls: ToolCall[]; content: string | undefined } | null {
+  const fallback = tryParseFallbackToolCall(text);
+  if (!fallback) return null;
+  if (allowedNames && !allowedNames.has(fallback.name)) return null;
+  // rawMatch is the exact text of the call. What is left around it is
+  // real explanation from the model, so it is kept.
+  const matchIndex = text.indexOf(fallback.rawMatch);
+  const content =
+    matchIndex === -1 ? undefined : [text.slice(0, matchIndex).trim(), text.slice(matchIndex + fallback.rawMatch.length).trim()].filter(Boolean).join("\n\n") || undefined;
+  return { toolCalls: [{ id: "call_0", name: fallback.name, arguments: fallback.arguments }], content };
+}
+
 export function fromLlamaResult(result: LlamaGenerateResult): ChatResponse {
   if (result.functionCalls && result.functionCalls.length > 0) {
     const toolCalls: ToolCall[] = result.functionCalls.map((fc, i) => ({
@@ -263,25 +283,8 @@ export function fromLlamaResult(result: LlamaGenerateResult): ChatResponse {
     return { turn: { type: "tool_calls", toolCalls, content: result.response || undefined }, raw: result };
   }
 
-  const fallback = tryParseFallbackToolCall(result.response);
-  if (fallback) {
-    const toolCalls: ToolCall[] = [{ id: "call_0", name: fallback.name, arguments: fallback.arguments }];
-    // Correctness audit finding (provider Medium #2): rawMatch is the
-    // exact JSON substring tryParseFallbackToolCall found inside
-    // result.response — whatever's left after removing it is real
-    // explanatory text the model wrote around its (mis-flagged) tool
-    // call, not something to silently discard. indexOf (not the regex
-    // match position) because rawMatch may have come from inside a
-    // fenced block, whose own position within the UNTRIMMED response
-    // differs from its position within the extracted fence content.
-    const matchIndex = result.response.indexOf(fallback.rawMatch);
-    const content =
-      matchIndex === -1
-        ? undefined
-        : [result.response.slice(0, matchIndex).trim(), result.response.slice(matchIndex + fallback.rawMatch.length).trim()].filter(Boolean).join("\n\n") ||
-          undefined;
-    return { turn: { type: "tool_calls", toolCalls, content, recoveredFromTextFallback: true }, raw: result };
-  }
+  const recovered = recoverToolCallFromText(result.response);
+  if (recovered) return { turn: { type: "tool_calls", ...recovered, recoveredFromTextFallback: true }, raw: result };
 
   return { turn: { type: "final", content: result.response }, raw: result };
 }
