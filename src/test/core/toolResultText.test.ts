@@ -84,6 +84,14 @@ try {
   check("a small-context model is shown a result that fits its limit", forSmall.length <= 6144);
   check("that result is complete JSON with the note in it", JSON.parse(forSmall).output.note.includes("offset"));
   check("a model with an unknown context is shown more than the old 6,000 characters", forLarge.length > 12_000);
+
+  // A file named in the task is read by the agent itself, before the model's first turn.
+  const autoProvider = new MockProvider([{ turn: { type: "final", content: "done" } }]);
+  autoProvider.contextWindowTokens = 8192;
+  const autoSession = new AgentSession({ workspaceRoot: root, model: "mock", provider: autoProvider, tools: defaultToolRegistry(), permissionMode: "PLAN" });
+  for await (const event of autoSession.run("explain big.js")) void event;
+  const autoRead = autoSession.getMessages().find((m) => m.role === "tool" && m.name === "read_file")?.content ?? "";
+  check("the agent's own automatic read is sized the same way", autoRead.length > 0 && autoRead.length <= 6144 && JSON.parse(autoRead).output.note.includes("offset"));
 } finally {
   await fs.rm(root, { recursive: true, force: true });
 }
