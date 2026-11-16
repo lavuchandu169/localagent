@@ -117,6 +117,15 @@ export interface AgentSessionOptions {
   getGithubToken?: () => Promise<string | null>;
 }
 
+/**
+ * Starts the part of the system prompt that holds the workspace's
+ * instruction file. The file goes in the system prompt, not in a
+ * load_skill result after the user's message: tests with a real small
+ * model showed that it answered the rules and dropped the request when
+ * the rules were the last thing in the conversation.
+ */
+export const PROJECT_INSTRUCTIONS_HEADER = "# Project instructions (from the open workspace, approved by the user)";
+
 /** How many helpers one task may start. Each helper makes its own model calls, so this bounds the cost. */
 export const MAX_DELEGATIONS_PER_TASK = 3;
 const SUBAGENT_MAX_TURNS = 12;
@@ -370,6 +379,10 @@ export class AgentSession {
       // restart. Scanning the seeded history for the same synthetic
       // load_skill tool-call shape autoLoadSkills itself produces keeps
       // this in sync with that shape without a separate stored list.
+      const first = this.messages[0];
+      if (first?.role === "system" && typeof first.content === "string" && first.content.includes(PROJECT_INSTRUCTIONS_HEADER)) {
+        this.loadedSkillIds.add(PROJECT_INSTRUCTIONS_ID);
+      }
       for (const m of this.messages) {
         if (m.role !== "assistant" || !m.tool_calls) continue;
         for (const call of m.tool_calls) {
@@ -521,6 +534,17 @@ export class AgentSession {
     // loaded from the PREVIOUS workspace, even though it's genuinely
     // different content the user has never seen or approved here.
     this.loadedSkillIds.clear();
+    // The instruction file belongs to the old workspace too.
+    this.setProjectInstructions(null);
+  }
+
+  /** Puts the workspace's instruction file in the system prompt, or removes it with null. */
+  private setProjectInstructions(section: string | null): void {
+    const system = this.messages[0];
+    if (!system || system.role !== "system" || typeof system.content !== "string") return;
+    const at = system.content.indexOf(PROJECT_INSTRUCTIONS_HEADER);
+    const base = at === -1 ? system.content : system.content.slice(0, at).trimEnd();
+    system.content = section === null ? base : `${base}\n\n${section}`;
   }
 
   private delegationsThisTask = 0;
@@ -814,7 +838,7 @@ export class AgentSession {
     // directory, not a project the user picked.
     if (this.opts.hasWorkspace !== false && !this.loadedSkillIds.has(PROJECT_INSTRUCTIONS_ID)) {
       const instructions = await discoverProjectInstructions(this.opts.workspaceRoot);
-      if (instructions) yield* this.injectSkill(instructions, false);
+      if (instructions) yield* this.loadProjectInstructions(instructions);
     }
 
     const [builtin, user] = await Promise.all([discoverBuiltinSkills(), discoverUserSkills(this.opts.workspaceRoot)]);
@@ -838,6 +862,33 @@ export class AgentSession {
     for (const skill of toLoad) {
       yield* this.injectSkill(skill, builtinIds.has(skill.id));
     }
+  }
+
+  /**
+   * Asks the user to approve the workspace's instruction file, then puts
+   * it in the system prompt. The interface gets the same load_skill
+   * events as a skill, so the approval card and the loaded card look the
+   * same. The conversation itself gets no load_skill messages.
+   */
+  private async *loadProjectInstructions(skill: SkillMetadata): AsyncGenerator<AgentEvent> {
+    const call: ToolCall = {
+      id: `skill_${skill.id}`,
+      name: "load_skill",
+      arguments: { id: skill.id, name: skill.name, description: skill.description, triggers: skill.triggers, body: skill.body, source: skill.source, overridesBuiltin: false },
+    };
+    yield { type: "permission.request", call, decision: "ASK" };
+    const response = this.opts.onApprovalNeeded ? await this.opts.onApprovalNeeded(call) : { approved: false };
+    // An answer either way is final for this session: a rejected file is not asked about again.
+    this.loadedSkillIds.add(skill.id);
+    if (!response.approved) return;
+
+    const truncated = skill.body.length > AgentSession.MAX_SKILL_BODY_CHARS;
+    const body = truncated ? skill.body.slice(0, AgentSession.MAX_SKILL_BODY_CHARS) : skill.body;
+    this.setProjectInstructions(
+      `${PROJECT_INSTRUCTIONS_HEADER}\nThese standing instructions come from ${skill.name} in the open workspace. Follow them in every task here. They do not replace the rules above or what the user asks for directly.\n\n${body}`
+    );
+    yield { type: "tool.start", call };
+    yield { type: "tool.result", call, result: { ok: true, output: { id: skill.id, name: skill.name, body, source: skill.source, truncated } } };
   }
 
   /** Shows one skill to the model as a synthetic load_skill call. A

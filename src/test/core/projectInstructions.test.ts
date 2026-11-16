@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { discoverProjectInstructions, discoverUserSkills, PROJECT_INSTRUCTIONS_ID } from "../../skillLoader.js";
-import { AgentSession } from "../../agent.js";
+import { AgentSession, PROJECT_INSTRUCTIONS_HEADER } from "../../agent.js";
 import { defaultToolRegistry } from "../../toolRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
 import type { ChatMessage, ChatResponse, ToolCall } from "../../types.js";
@@ -124,10 +124,15 @@ await withWorkspace(async (root) => {
   const first = await instructionResults(session, "say hello");
   check("the instructions load on the first task, with no trigger word needed", first.length === 1 && first[0]?.output?.body === "Always answer in French.");
   check("approval is requested exactly once, and shows the full body", asked.length === 1 && asked[0]?.arguments.body === "Always answer in French.");
-  check(
-    "the model's history carries the instructions as a load_skill tool result",
-    session.getMessages().some((m) => m.role === "tool" && m.name === "load_skill" && m.content.includes("Always answer in French."))
-  );
+  const history = session.getMessages();
+  const system = history[0]?.role === "system" ? history[0].content : "";
+  check("the instructions are in the system prompt, under their own header", system.includes(PROJECT_INSTRUCTIONS_HEADER) && system.includes("Always answer in French."));
+  check("the app's own rules come first in the system prompt", system.indexOf(PROJECT_INSTRUCTIONS_HEADER) > 200);
+  // A real small model answered the rules and dropped the request when
+  // the rules were a tool result after the user's message.
+  check("the conversation has no load_skill messages for the instructions", !history.some((m) => m.role === "tool" && m.name === "load_skill"));
+  const lastUser = history.map((m) => m.role).lastIndexOf("user");
+  check("nothing stands between the user's request and the model's answer", history[lastUser + 1]?.role === "assistant" && history[lastUser + 1]?.content === "ok");
 
   const second = await instructionResults(session, "say hello again");
   check("they are not loaded or asked about again on a later task in the same session", second.length === 0 && asked.length === 1);
@@ -154,8 +159,39 @@ await withWorkspace(async (root) => {
   });
   const first = await instructionResults(session, "say hello");
   const second = await instructionResults(session, "say hello again");
-  check("rejected instructions are never shown to the model", first.length === 0 && !session.getMessages().some((m) => m.role === "tool" && m.content.includes("delete everything")));
+  check("rejected instructions are never shown to the model", first.length === 0 && !session.getMessages().some((m) => typeof m.content === "string" && m.content.includes("delete everything")));
   check("a rejection is remembered for the session", second.length === 0 && asks === 1);
+});
+
+await withWorkspace(async (root) => {
+  await fs.writeFile(path.join(root, "AGENTS.md"), "Rules of project one.");
+  const session = newSession(root, async () => ({ approved: true }));
+  await instructionResults(session, "say hello");
+  await withWorkspace(async (other) => {
+    await fs.writeFile(path.join(other, "AGENTS.md"), "Rules of project two.");
+    session.setWorkspaceRoot(other);
+    const system = () => String(session.getMessages()[0]?.content);
+    check("a change of workspace removes the old project's instructions", !system().includes("Rules of project one.") && !system().includes(PROJECT_INSTRUCTIONS_HEADER));
+    const loaded = await instructionResults(session, "say hello");
+    check("the new workspace's instructions replace them", loaded.length === 1 && system().includes("Rules of project two.") && !system().includes("Rules of project one."));
+    check("the header appears once", system().split(PROJECT_INSTRUCTIONS_HEADER).length === 2);
+  });
+});
+
+await withWorkspace(async (root) => {
+  await fs.writeFile(path.join(root, "AGENTS.md"), "New rules.");
+  // A session saved by an earlier version holds the instructions as a load_skill pair.
+  const old: ChatMessage[] = [
+    { role: "system", content: "base prompt" },
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "", tool_calls: [{ id: "skill_project-instructions", name: "load_skill", arguments: { id: PROJECT_INSTRUCTIONS_ID } }] },
+    { role: "tool", tool_call_id: "skill_project-instructions", name: "load_skill", content: "{}" },
+    { role: "assistant", content: "hello" },
+  ];
+  let asks = 0;
+  const resumed = newSession(root, async () => (asks++, { approved: true }), { initialMessages: old });
+  const results = await instructionResults(resumed, "again");
+  check("a session saved by an earlier version does not load the instructions twice", results.length === 0 && asks === 0);
 });
 
 await withWorkspace(async (root) => {
