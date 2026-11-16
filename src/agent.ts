@@ -38,6 +38,7 @@ import {
   renderTranscript,
   SUMMARY_SYSTEM_PROMPT,
 } from "./compaction.js";
+import { toolResultBudgetChars, toolResultText } from "./toolResultText.js";
 import { isRememberableCommand } from "./commandRules.js";
 import { runAfterHooks, runBeforeHooks, type Hook } from "./hooks.js";
 import { LOAD_SKILL_FALLBACK_MESSAGE } from "./tools/loadSkill.js";
@@ -345,6 +346,10 @@ export class AgentSession {
   private writeSucceededSinceLastVerify = false;
   /** How many corrective nudges (see the "final" branch in run()) have fired this task — reset to 0 at the start of every run() call. Capped at MAX_CORRECTIVE_NUDGE_ATTEMPTS so a model that ignores every attempt doesn't loop forever; verified live that a single nudge isn't always enough for a smaller/more reluctant model, which can apologize in prose right back instead of complying the first time but still comply on a later attempt. */
   private correctiveNudgeAttemptsThisTask = 0;
+  /** One retry of an empty reply for each task. */
+  private emptyReplyRetriedThisTask = false;
+  /** Tool calls that the model itself made in this task and that ran. */
+  private modelToolCallsThisTask = 0;
   /** Whether THIS task's first-turn plan has already been proposed — reset at the start of every run() call. Gates only turn 1; once a task's plan has been shown (and approved), later turns in that same task run normally. */
   private planProposedThisTask = false;
 
@@ -417,7 +422,7 @@ export class AgentSession {
       if (estimateTokens(this.messages, this.opts.tools.toSchema()) <= window * COMPACTION_THRESHOLD) return false;
       if (this.compactionFailedAtLength >= 0 && this.messages.length < this.compactionFailedAtLength + 4) return false;
     }
-    const plan = planCompaction(this.messages);
+    const plan = planCompaction(this.messages, window);
     if (!plan) return false;
 
     yield { type: "status", message: "Compacting earlier conversation to free up context..." };
@@ -545,6 +550,11 @@ export class AgentSession {
     const at = system.content.indexOf(PROJECT_INSTRUCTIONS_HEADER);
     const base = at === -1 ? system.content : system.content.slice(0, at).trimEnd();
     system.content = section === null ? base : `${base}\n\n${section}`;
+  }
+
+  /** How many characters of one tool result this session's model is shown. */
+  private resultBudgetChars(): number {
+    return toolResultBudgetChars(this.opts.contextWindowTokens ?? this.opts.provider.contextWindowTokens);
   }
 
   private delegationsThisTask = 0;
@@ -776,6 +786,7 @@ export class AgentSession {
       }
       const result = await tool.execute(call.arguments, {
         workspaceRoot: this.opts.workspaceRoot,
+        maxResultChars: this.resultBudgetChars(),
         log: () => {},
       });
       if (!result.ok) continue;
@@ -790,7 +801,7 @@ export class AgentSession {
         role: "tool",
         tool_call_id: call.id,
         name: "read_file",
-        content: JSON.stringify(result).slice(0, 6000),
+        content: toolResultText(result, this.resultBudgetChars()),
       });
     }
   }
@@ -1037,14 +1048,14 @@ export class AgentSession {
         role: "tool",
         tool_call_id: call.id,
         name: call.name,
-        content: JSON.stringify({ ok: false, error: `Blocked by the user's hook: ${hookVerdict.message}` }).slice(0, 6000),
+        content: toolResultText({ ok: false, error: `Blocked by the user's hook: ${hookVerdict.message}` }, this.resultBudgetChars()),
       });
       return true;
     }
 
     this.state = "EXECUTING_TOOL";
     yield { type: "tool.start", call };
-    const result = await tool.execute(call.arguments, { workspaceRoot: this.opts.workspaceRoot, log: () => {}, getGithubToken: this.opts.getGithubToken });
+    const result = await tool.execute(call.arguments, { workspaceRoot: this.opts.workspaceRoot, maxResultChars: this.resultBudgetChars(), log: () => {}, getGithubToken: this.opts.getGithubToken });
     yield { type: "tool.result", call, result };
     const hookNotes = await runAfterHooks(this.hooks, call, result, this.opts.workspaceRoot, { signal: this.abortController?.signal });
     for (const note of hookNotes) yield { type: "status", message: `Your hook after ${call.name}: ${note}` };
@@ -1052,7 +1063,7 @@ export class AgentSession {
       role: "tool",
       tool_call_id: call.id,
       name: call.name,
-      content: JSON.stringify(hookNotes.length > 0 ? { ...result, hook_output: hookNotes } : result).slice(0, 6000),
+      content: toolResultText(hookNotes.length > 0 ? { ...result, hook_output: hookNotes } : result, this.resultBudgetChars()),
     });
     return true;
   }
@@ -1078,6 +1089,8 @@ export class AgentSession {
     this.anyWriteSucceededThisTask = false;
     this.writeSucceededSinceLastVerify = false;
     this.correctiveNudgeAttemptsThisTask = 0;
+    this.emptyReplyRetriedThisTask = false;
+    this.modelToolCallsThisTask = 0;
     this.planProposedThisTask = false;
     this.stopRequested = false;
     this.delegationsThisTask = 0;
@@ -1252,6 +1265,37 @@ export class AgentSession {
         // the model never even tried to write — if it tried and got
         // denied, that's a real policy decision to respect, not this
         // failure mode.
+        // An empty reply is not an answer. A real small model returned
+        // one when its context was full, and the task was reported as a
+        // success with nothing shown. Free some context and ask once
+        // more; a second empty reply ends the task with a clear message.
+        if (response.turn.content.trim() === "") {
+          if (!this.emptyReplyRetriedThisTask) {
+            this.emptyReplyRetriedThisTask = true;
+            yield { type: "status", message: "The model gave an empty reply. Trying once more." };
+            yield* this.compactIfNeeded(true);
+            if (this.cancelled || this.stopRequested) return;
+            this.turn++;
+            this.state = "THINKING";
+            continue;
+          }
+          this.state = "COMPLETED";
+          if (this.modelToolCallsThisTask > 0) {
+            // The work was done with tools; only the closing message is missing.
+            const closing = "The work is done, but the model gave no closing message. Check the steps above.";
+            this.messages.push({ role: "assistant", content: closing });
+            yield { type: "text", text: closing };
+            yield { type: "done", success: true, summary: closing };
+          } else {
+            yield {
+              type: "done",
+              success: false,
+              summary: "The model returned an empty reply two times. The conversation can be too long for this model. Start a new session, or use /compact, and ask again.",
+            };
+          }
+          return;
+        }
+
         if (
           this.correctiveNudgeAttemptsThisTask < MAX_CORRECTIVE_NUDGE_ATTEMPTS &&
           !this.wroteThisTask &&
@@ -1566,16 +1610,18 @@ export class AgentSession {
             role: "tool",
             tool_call_id: call.id,
             name: call.name,
-            content: JSON.stringify({ ok: false, error: `Blocked by the user's hook: ${hookVerdict.message}` }).slice(0, 6000),
+            content: toolResultText({ ok: false, error: `Blocked by the user's hook: ${hookVerdict.message}` }, this.resultBudgetChars()),
           });
           continue;
         }
 
         this.state = "EXECUTING_TOOL";
         if (call.name === "delegate_task") yield { type: "status", message: "Starting a helper with a fresh context. It can only read and search files." };
+        this.modelToolCallsThisTask++;
         yield { type: "tool.start", call };
         const result = await tool.execute(effectiveCall.arguments, {
           workspaceRoot: this.opts.workspaceRoot,
+          maxResultChars: this.resultBudgetChars(),
           getGithubToken: this.opts.getGithubToken,
           runSubagent: (task) => this.runSubagent(task),
           log: (msg) => {
@@ -1608,7 +1654,7 @@ export class AgentSession {
           role: "tool",
           tool_call_id: call.id,
           name: call.name,
-          content: JSON.stringify(hookNotes.length > 0 ? { ...result, hook_output: hookNotes } : result).slice(0, 6000),
+          content: toolResultText(hookNotes.length > 0 ? { ...result, hook_output: hookNotes } : result, this.resultBudgetChars()),
         });
       }
 

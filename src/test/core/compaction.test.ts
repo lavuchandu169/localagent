@@ -259,5 +259,29 @@ await withWorkspace(async (root) => {
   check("after compaction removes a file's content, editing that file asks for approval again", asked.includes("edit_file"));
 });
 
+console.log("\nplanCompaction with a context window looks at size:");
+{
+  const bigRead = (id: string) => toolPair(id, "read_file", { path: `${id}.js` }, "x".repeat(6000));
+  // Two tasks, each with one large file read: too few messages to compact by count.
+  const short: ChatMessage[] = [system, user("task one"), ...bigRead("one"), assistant("answer one"), user("task two"), ...bigRead("two")];
+  check("by count alone this history is too short", planCompaction(short) === null);
+  const plan = planCompaction(short, 8192);
+  check("with a small window it is compacted, because the old messages are large", plan !== null);
+  check(
+    "the current request and its file read stay word for word",
+    JSON.stringify(plan?.tail.map((m) => m.role)) === JSON.stringify(["assistant", "user", "assistant", "tool"]) && plan?.tail[1]?.content === "task two" && plan?.tail[3]?.content.length === 6000
+  );
+  check("the old file read is what gets summarised", !!plan?.toSummarize.some((m) => m.role === "tool" && m.content.length === 6000));
+  check("the old request stays word for word", plan?.userMessages.length === 1 && plan.userMessages[0]?.content === "task one");
+  check("the kept part does not start with a tool result that lost its call", plan?.tail[0]?.role !== "tool");
+  check("the same history is left alone with a large window", planCompaction(short, 200_000) === null);
+
+  const onlyCurrent: ChatMessage[] = [system, user("task"), ...bigRead("a"), ...bigRead("b"), ...bigRead("c")];
+  check("a window filled by the current request alone has nothing older to summarise", planCompaction(onlyCurrent, 8192) === null);
+
+  const smallOld: ChatMessage[] = [system, user("hi"), assistant("hello"), user("task"), ...bigRead("a")];
+  check("a few small old messages are still not worth a summary call", planCompaction(smallOld, 8192) === null);
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

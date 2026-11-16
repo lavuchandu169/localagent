@@ -20,9 +20,40 @@ interface Output {
   /** Only set when offset/limit was used — the actual 1-indexed line range `content` covers (limit may have been clamped to the file's real length). */
   startLine?: number;
   endLine?: number;
+  /** Set when the content is only part of the file: says which lines these are and how to get the next ones. */
+  note?: string;
 }
 
 const MAX_CONTENT_CHARS = 20000;
+/** Characters kept free in a result for everything that is not the file content. */
+const RESULT_OVERHEAD_CHARS = 400;
+
+/** How many characters of file content, counted as JSON text, one result can hold for this session's model. */
+function contentCap(ctx: ToolContext): number {
+  return Math.max(500, Math.min(MAX_CONTENT_CHARS, (ctx.maxResultChars ?? Infinity) - RESULT_OVERHEAD_CHARS));
+}
+
+/** JSON escapes make text longer in the conversation than it is in the file. */
+function jsonLength(text: string): number {
+  return JSON.stringify(text).length - 2;
+}
+
+/** How many of the lines, from the first, fit in the cap. */
+function linesThatFit(lines: string[], cap: number): number {
+  let size = 0;
+  let count = 0;
+  for (const line of lines) {
+    const added = jsonLength(line) + (count > 0 ? 2 : 0); // a line break is two characters in JSON
+    if (size + added > cap) break;
+    size += added;
+    count++;
+  }
+  return count;
+}
+
+function partNote(startLine: number, endLine: number, totalLines: number): string {
+  return `This is only lines ${startLine} to ${endLine} of ${totalLines}. The file is longer. To read the next part, call read_file with offset ${endLine + 1}.`;
+}
 const DEFAULT_LINE_LIMIT = 500;
 const MAX_LINE_LIMIT = 2000;
 
@@ -120,11 +151,19 @@ export const readFileTool: Tool<Input, Output> = {
       const redactedContent = redactSecrets(content);
 
       if (input.offset === undefined && input.limit === undefined) {
-        const truncated = redactedContent.length > MAX_CONTENT_CHARS;
+        const cap = contentCap(ctx);
+        if (jsonLength(redactedContent) <= cap) return { ok: true, output: { path: rel, content: redactedContent, totalLines }, truncated: false };
+        // Cut at the end of a line, and say which lines these are, so the model can ask for the next ones.
+        const allLines = redactedContent.split("\n");
+        const count = linesThatFit(allLines, cap);
+        // One line longer than the whole limit: show the start of it.
+        const content = count > 0 ? allLines.slice(0, count).join("\n") : redactedContent.slice(0, Math.floor(cap / 2));
+        const endLine = Math.max(1, count);
         return {
           ok: true,
-          output: { path: rel, content: truncated ? redactedContent.slice(0, MAX_CONTENT_CHARS) : redactedContent, totalLines },
-          truncated,
+          // The note comes before the content: a small model gives most weight to what it reads first.
+          output: { path: rel, note: partNote(1, endLine, totalLines), totalLines, startLine: 1, endLine, content },
+          truncated: true,
         };
       }
 
@@ -132,12 +171,15 @@ export const readFileTool: Tool<Input, Output> = {
       const redactedLines = redactedRawLines.length > 0 && redactedRawLines[redactedRawLines.length - 1] === "" ? redactedRawLines.slice(0, -1) : redactedRawLines;
       const startLine = Math.max(1, input.offset ?? 1);
       const limit = Math.max(1, Math.min(MAX_LINE_LIMIT, input.limit ?? DEFAULT_LINE_LIMIT));
-      const endLine = Math.min(totalLines, startLine + limit - 1);
-      const selected = redactedLines.slice(startLine - 1, endLine).join("\n");
+      const wanted = redactedLines.slice(startLine - 1, Math.min(totalLines, startLine + limit - 1));
+      // The requested range can be more than this model is shown: return the lines that fit, and say where they stop.
+      const count = wanted.length === 0 ? 0 : Math.max(1, linesThatFit(wanted, contentCap(ctx)));
+      const endLine = wanted.length === 0 ? Math.min(totalLines, startLine + limit - 1) : startLine + count - 1;
+      const cutBySize = count < wanted.length;
       const truncated = endLine < totalLines;
       return {
         ok: true,
-        output: { path: rel, content: selected, totalLines, startLine, endLine },
+        output: { path: rel, ...(cutBySize ? { note: partNote(startLine, endLine, totalLines) } : {}), totalLines, startLine, endLine, content: wanted.slice(0, count).join("\n") },
         truncated,
       };
     } catch (err: any) {
