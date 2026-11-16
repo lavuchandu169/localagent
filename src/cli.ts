@@ -65,6 +65,16 @@ export async function reportRun(events: AsyncIterable<AgentEvent>, opts: { json:
   return success;
 }
 
+/** The message for a failure that nothing in the CLI caught. A failed download has a URL and an HTTP status. */
+export function describeUnhandledFailure(reason: unknown): string {
+  const err = reason as { message?: string; statusCode?: number; url?: string } | null;
+  const message = err?.message ?? String(reason);
+  if (typeof err?.url === "string" && typeof err?.statusCode === "number") {
+    return `The model download stopped (HTTP ${err.statusCode}). The part that was downloaded is kept. Run the same command again to continue.`;
+  }
+  return `localagent stopped with an error: ${message.split("\n")[0]}`;
+}
+
 /** Exported for direct unit testing (test-engineer finding, full-project audit: this file had no coverage at all) — pure and side-effect-free, so no entry-point guard is needed around the export itself, only around main()'s auto-invocation below. */
 export function parseArgs(argv: string[]) {
   const args: Record<string, string> = {};
@@ -197,6 +207,14 @@ async function main() {
 // doc comment for why a naive string comparison is wrong on Windows), so
 // this only runs true when cli.ts is actually the invoked entry point.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  // A model download can fail in the download library with nothing
+  // waiting for the result (seen live: the download link of a 4 GB file
+  // expired at 94%, HTTP 403). Node then stops the process with a long
+  // stack trace. Say what occurred and what to do.
+  process.on("unhandledRejection", (reason) => {
+    console.error(`\n${describeUnhandledFailure(reason)}\n`);
+    process.exit(1);
+  });
   main().catch((err) => {
     console.error(err);
     process.exit(1);

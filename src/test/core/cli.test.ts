@@ -2,7 +2,7 @@
 // full-project audit). parseArgs is now exported and main()'s
 // auto-invocation is guarded behind an entry-point check specifically so
 // this import doesn't also run the whole CLI.
-import { parseArgs, reportRun } from "../../cli.js";
+import { parseArgs, reportRun, describeUnhandledFailure } from "../../cli.js";
 import { AgentSession } from "../../agent.js";
 import { defaultToolRegistry } from "../../toolRegistry.js";
 import { MockProvider, type MockScriptEntry } from "../../providers/mockProvider.js";
@@ -121,6 +121,15 @@ console.log("\nreportRun in text mode:");
 {
   const r = await headless([{ throws: new Error("provider down") }], false);
   check("an error goes to stderr and the run returns false", r.err.some((l) => /provider down/.test(l)) && r.success === false);
+}
+
+console.log("\ndescribeUnhandledFailure:");
+{
+  const download = describeUnhandledFailure({ message: "Url: https://example.com/a.gguf, Status code: 403", statusCode: 403, url: "https://example.com/a.gguf" });
+  check("a failed download says so, with the status and what to do", download.includes("download stopped (HTTP 403)") && download.includes("Run the same command again"));
+  check("it does not print the long signed URL", !download.includes("example.com"));
+  check("any other error gives its first line", describeUnhandledFailure(new Error("boom\n  at stack")) === "localagent stopped with an error: boom");
+  check("a value that is not an error is still described", describeUnhandledFailure("plain text").includes("plain text"));
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
