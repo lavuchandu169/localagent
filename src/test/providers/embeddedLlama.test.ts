@@ -353,5 +353,43 @@ console.log("\nmaybeSamplePerf (local-model live tokens/sec + context-usage thro
   check("zero new tokens since the last sample reports a zero rate, not a division artifact", result.sample?.tokensPerSecond === 0);
 }
 
+console.log("\nA tool call written as text after a code block (seen with a real 7B model):");
+{
+  const fence = "```";
+  const reply = [
+    "Here is the corrected content of `test/math.test.js`:",
+    "",
+    `${fence}js`,
+    "const assert = require('node:assert');",
+    "assert.strictEqual(sum(200, 300), 500);",
+    fence,
+    "",
+    "Now, let's call `edit_file` to update the file.",
+    "",
+    `${fence}json`,
+    '{"name": "edit_file", "arguments": {"path": "test/math.test.js", "content": "const x = {a: 1};\\n"}}',
+    fence,
+    "",
+    "After updating the file, we can run the test again.",
+  ].join("\n");
+  const r = fromLlamaResult({ response: reply } as any);
+  const call = r.turn.type === "tool_calls" ? r.turn.toolCalls[0] : undefined;
+  check("the call in the second block is recovered", call?.name === "edit_file" && call.arguments.path === "test/math.test.js" && call.arguments.content === "const x = {a: 1};\n");
+  check("it is marked as recovered from text", r.turn.type === "tool_calls" && r.turn.recoveredFromTextFallback === true);
+  const kept = r.turn.type === "tool_calls" ? (r.turn.content ?? "") : "";
+  check("the text around it is kept, with the first code block and without the call", kept.includes("const assert = require") && kept.includes("After updating the file") && !kept.includes('"name": "edit_file"'));
+
+  const twoCalls = [`${fence}json`, '{"name": "read_file", "arguments": {"path": "a.js"}}', fence, "then", `${fence}json`, '{"name": "read_file", "arguments": {"path": "b.js"}}', fence].join("\n");
+  const last = fromLlamaResult({ response: twoCalls } as any);
+  check("with a call in two blocks, the last one is used", last.turn.type === "tool_calls" && last.turn.toolCalls[0]?.arguments.path === "b.js");
+
+  const codeOnly = [`Use this:`, `${fence}js`, "const settings = { name: 'x', value: 1 };", fence].join("\n");
+  check("a code block with no tool call stays a plain answer", fromLlamaResult({ response: codeOnly } as any).turn.type === "final");
+
+  const outside = [`${fence}js`, "let a = 1;", fence, '{"name": "read_file", "arguments": {"path": "c.js"}}'].join("\n");
+  const afterBlock = fromLlamaResult({ response: outside } as any);
+  check("a call written outside the code blocks is also recovered", afterBlock.turn.type === "tool_calls" && afterBlock.turn.toolCalls[0]?.arguments.path === "c.js");
+}
+
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

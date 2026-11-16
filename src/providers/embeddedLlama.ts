@@ -208,9 +208,28 @@ function isToolCallShape(parsed: unknown): parsed is { name: string; arguments: 
  * get treated as "surrounding prose" and leak into the kept text. */
 function tryParseFallbackToolCall(response: string): { name: string; arguments: Record<string, unknown>; rawMatch: string } | null {
   const trimmed = response.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  const searchText = fenced ? fenced[1]! : trimmed;
+  // Every fenced block is searched, the last one first. Only the first
+  // block was searched before, and a real 7B model lost three edits in a
+  // row that way: it showed the new file in a ```js block and then put
+  // the edit_file call in a ```json block after it.
+  const fences = [...trimmed.matchAll(/```[A-Za-z0-9_-]*\s*([\s\S]*?)\s*```/g)];
+  for (let f = fences.length - 1; f >= 0; f--) {
+    const found = parseToolCallIn(fences[f]![1]!);
+    if (found) return { ...found.call, rawMatch: fences[f]![0] };
+  }
+  // With no call in a fenced block, look in the text outside the blocks.
+  if (fences.length > 0) {
+    let outside = trimmed;
+    for (const fence of fences) outside = outside.replace(fence[0], "");
+    const found = parseToolCallIn(outside);
+    return found ? { ...found.call, rawMatch: found.raw } : null;
+  }
+  const found = parseToolCallIn(trimmed);
+  return found ? { ...found.call, rawMatch: found.raw } : null;
+}
 
+/** The last object in the text that is shaped like a tool call, with the exact text it was parsed from. */
+function parseToolCallIn(searchText: string): { call: { name: string; arguments: Record<string, unknown> }; raw: string } | null {
   const candidates = findJsonObjectCandidates(searchText);
   for (let i = candidates.length - 1; i >= 0; i--) {
     const candidate = candidates[i]!;
@@ -229,7 +248,7 @@ function tryParseFallbackToolCall(response: string): { name: string; arguments: 
         parsed = undefined;
       }
     }
-    if (parsed !== undefined && isToolCallShape(parsed)) return { ...parsed, rawMatch: fenced ? fenced[0] : candidate };
+    if (parsed !== undefined && isToolCallShape(parsed)) return { call: { name: parsed.name, arguments: parsed.arguments }, raw: candidate };
   }
   return null;
 }
