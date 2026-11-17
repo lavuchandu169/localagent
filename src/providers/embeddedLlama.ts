@@ -273,6 +273,42 @@ export function recoverToolCallFromText(text: string, allowedNames?: ReadonlySet
   return { toolCalls: [{ id: "call_0", name: fallback.name, arguments: fallback.arguments }], content };
 }
 
+export const DOWNLOAD_ATTEMPTS = 3;
+
+/** A failed HTTP request of the download library: it has the status and the URL. */
+export function isDownloadHttpFailure(err: unknown): err is { statusCode: number; url: string } {
+  return typeof (err as any)?.statusCode === "number" && typeof (err as any)?.url === "string";
+}
+
+/** A status that a new attempt can get past: an expired link (403), a timeout, a rate limit, a server error. Not 404: the model is not there. */
+function isRetryableDownloadStatus(status: number): boolean {
+  return status === 403 || status === 408 || status === 429 || status >= 500;
+}
+
+/**
+ * Runs a model download, and runs it again when it stops with an HTTP
+ * error that a new attempt can get past. Seen live: the signed link of
+ * a 4 GB file expired at 94% (HTTP 403). A new attempt gets a new link
+ * and continues from the part that is already on disk. The last
+ * failure is given as a short message, without the long signed URL.
+ */
+export async function downloadWithRetry<T>(download: () => Promise<T>, opts: { signal?: AbortSignal; attempts?: number } = {}): Promise<T> {
+  const attempts = opts.attempts ?? DOWNLOAD_ATTEMPTS;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await download();
+    } catch (err) {
+      if (opts.signal?.aborted || !isDownloadHttpFailure(err)) throw err;
+      if (attempt < attempts && isRetryableDownloadStatus(err.statusCode)) continue;
+      throw new Error(
+        err.statusCode === 404
+          ? "The model file was not found at the download address (HTTP 404). Check the model name."
+          : `The model download stopped (HTTP ${err.statusCode}) after ${attempt} attempt${attempt === 1 ? "" : "s"}. Try again: the download continues from the part that is already saved.`
+      );
+    }
+  }
+}
+
 export function fromLlamaResult(result: LlamaGenerateResult): ChatResponse {
   if (result.functionCalls && result.functionCalls.length > 0) {
     const toolCalls: ToolCall[] = result.functionCalls.map((fc, i) => ({
@@ -417,11 +453,15 @@ export class EmbeddedLlamaProvider implements ModelProvider {
   private async loadChat(): Promise<import("node-llama-cpp").LlamaChat> {
     const { getLlama, resolveModelFile, LlamaChat } = await import("node-llama-cpp");
     const uri = isEmbeddedModelId(this.opts.size) ? EMBEDDED_MODELS[this.opts.size].uri : this.opts.size;
-    const modelPath = await resolveModelFile(uri, {
-      cli: false,
-      onProgress: this.opts.onDownloadProgress,
-      signal: this.opts.signal,
-    });
+    const modelPath = await downloadWithRetry(
+      () =>
+        resolveModelFile(uri, {
+          cli: false,
+          onProgress: this.opts.onDownloadProgress,
+          signal: this.opts.signal,
+        }),
+      { signal: this.opts.signal }
+    );
     const llama = await getLlama();
     this.llama = llama;
     // gpuLayers defaults to "auto", which sizes its VRAM-fitting math against

@@ -7,7 +7,7 @@ import { defaultToolRegistry } from "./toolRegistry.js";
 import { resolveSlashCommand } from "./slashCommands.js";
 import { loadHooks } from "./hooks.js";
 import { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
-import { EmbeddedLlamaProvider } from "./providers/embeddedLlama.js";
+import { EmbeddedLlamaProvider, isDownloadHttpFailure } from "./providers/embeddedLlama.js";
 import { AnthropicProvider } from "./providers/anthropicProvider.js";
 import { isEmbeddedModelId, describeEmbeddedModel, EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, type EmbeddedModelId } from "./models.js";
 import type { AgentEvent, ModelProvider, PermissionMode, ToolCall } from "./types.js";
@@ -210,8 +210,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // A model download can fail in the download library with nothing
   // waiting for the result (seen live: the download link of a 4 GB file
   // expired at 94%, HTTP 403). Node then stops the process with a long
-  // stack trace. Say what occurred and what to do.
+  // stack trace.
   process.on("unhandledRejection", (reason) => {
+    // One part of a download that failed: the download call itself also
+    // fails, and the provider tries again or reports it. Do not stop here.
+    if (isDownloadHttpFailure(reason)) return;
     console.error(`\n${describeUnhandledFailure(reason)}\n`);
     process.exit(1);
   });

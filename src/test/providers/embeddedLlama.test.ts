@@ -1,5 +1,5 @@
 // src/test/embeddedLlama.test.ts
-import { EmbeddedLlamaProvider, describeGpuStatus, fromLlamaResult, maybeSamplePerf, type PerfSamplerState } from "../../providers/embeddedLlama.js";
+import { EmbeddedLlamaProvider, describeGpuStatus, downloadWithRetry, DOWNLOAD_ATTEMPTS, fromLlamaResult, maybeSamplePerf, type PerfSamplerState } from "../../providers/embeddedLlama.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -389,6 +389,42 @@ console.log("\nA tool call written as text after a code block (seen with a real 
   const outside = [`${fence}js`, "let a = 1;", fence, '{"name": "read_file", "arguments": {"path": "c.js"}}'].join("\n");
   const afterBlock = fromLlamaResult({ response: outside } as any);
   check("a call written outside the code blocks is also recovered", afterBlock.turn.type === "tool_calls" && afterBlock.turn.toolCalls[0]?.arguments.path === "c.js");
+}
+
+console.log("\ndownloadWithRetry (a signed link expired at 94% of a 4 GB file, seen live):");
+{
+  const httpFailure = (statusCode: number) => Object.assign(new Error(`Url: https://cdn.example/very/long/signed?token=abc, Status code: ${statusCode}`), { statusCode, url: "https://cdn.example/very/long/signed?token=abc" });
+  const failing = (codes: number[], result = "model.gguf") => {
+    let calls = 0;
+    return { run: async () => { const code = codes[calls++]; if (code) throw httpFailure(code); return result; }, calls: () => calls };
+  };
+  const message = async (p: Promise<unknown>) => p.then(() => "", (err) => String(err.message));
+
+  const expired = failing([403]);
+  check("an expired link is tried again and the download finishes", (await downloadWithRetry(expired.run)) === "model.gguf" && expired.calls() === 2);
+
+  const always = failing([403, 403, 403, 403]);
+  const text = await message(downloadWithRetry(always.run));
+  check("it stops after the attempt limit", always.calls() === DOWNLOAD_ATTEMPTS);
+  check("the message is short and says what to do", text.includes("download stopped (HTTP 403)") && text.includes("Try again"));
+  check("the message does not hold the signed URL", !text.includes("cdn.example") && !text.includes("token"));
+
+  const missing = failing([404, 404]);
+  const notFound = await message(downloadWithRetry(missing.run));
+  check("a missing model is not tried again", missing.calls() === 1 && notFound.includes("not found"));
+
+  const serverError = failing([503, 500]);
+  check("a server error is tried again", (await downloadWithRetry(serverError.run)) === "model.gguf" && serverError.calls() === 3);
+
+  let otherCalls = 0;
+  const other = await message(downloadWithRetry(async () => { otherCalls++; throw new Error("disk full"); }));
+  check("an error that is not an HTTP failure is passed on at once", other === "disk full" && otherCalls === 1);
+
+  const controller = new AbortController();
+  controller.abort();
+  const stopped = failing([403, 403]);
+  await message(downloadWithRetry(stopped.run, { signal: controller.signal }));
+  check("a download that the user stopped is not tried again", stopped.calls() === 1);
 }
 
 console.log(failures === 0 ? "\nAll tests passed." : `\n${failures} test(s) failed.`);
