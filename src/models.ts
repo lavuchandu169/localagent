@@ -47,14 +47,14 @@ export const EMBEDDED_MODELS: Record<EmbeddedModelId, EmbeddedModelInfo> = {
     name: "Qwen2.5-Coder 1.5B Instruct",
     quant: "Q4_K_M",
     category: "coding",
-    sizeNote: "fastest, lowest memory — default — can be unreliable on complex, multi-file changes",
+    sizeNote: "~1GB download, fastest, lowest memory — frequently makes wrong edits, best for questions only",
   },
   "qwen-coder-3b": {
     uri: "hf:Qwen/Qwen2.5-Coder-3B-Instruct-GGUF:Q4_K_M",
     name: "Qwen2.5-Coder 3B Instruct",
     quant: "Q4_K_M",
     category: "coding",
-    sizeNote: "better quality, more memory — can be unreliable on complex, multi-file changes",
+    sizeNote: "~2GB download, good speed and quality — default — can be unreliable on complex, multi-file changes",
   },
   "qwen-coder-7b": {
     uri: "hf:Qwen/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M",
@@ -149,7 +149,15 @@ export const EMBEDDED_MODELS: Record<EmbeddedModelId, EmbeddedModelInfo> = {
   },
 };
 
-export const DEFAULT_EMBEDDED_MODEL: EmbeddedModelId = "qwen-coder-1.5b";
+/**
+ * The model that is used when nothing else chooses one: the CLI with no
+ * --model, and a new tab before the app has looked at the hardware.
+ * This was the 1.5B model. In tests with the real models, the 1.5B
+ * model failed a plain bug fix (it broke the test file), and the 3B
+ * model did the bug fix, a file search, a count and a project-rules
+ * task correctly. The 3B model is about 2 GB, the 1.5B about 1 GB.
+ */
+export const DEFAULT_EMBEDDED_MODEL: EmbeddedModelId = "qwen-coder-3b";
 
 /**
  * The embedded models that are too small for dependable file edits.
@@ -169,7 +177,7 @@ export function isEmbeddedModelId(value: string): value is EmbeddedModelId {
   return Object.hasOwn(EMBEDDED_MODELS, value);
 }
 
-/** Full display label, e.g. "Qwen2.5-Coder 1.5B Instruct (Q4_K_M) — fastest, lowest memory — default". Used wherever the running model needs to be shown in full (the active-session badge, CLI startup logging). */
+/** Full display label, e.g. "Qwen2.5-Coder 3B Instruct (Q4_K_M) — ~2GB download, good speed and quality — default". Used wherever the running model needs to be shown in full (the active-session badge, CLI startup logging). */
 export function describeEmbeddedModel(id: EmbeddedModelId): string {
   const info = EMBEDDED_MODELS[id];
   return `${info.name} (${info.quant}) — ${info.sizeNote}`;

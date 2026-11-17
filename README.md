@@ -114,7 +114,7 @@ npm test
 
 ```bash
 # Embedded mode — no server, no other app. Downloads and caches a GGUF
-# model on first run (default: Qwen2.5-Coder-1.5B-Instruct, ~1GB) into
+# model on first run (default: Qwen2.5-Coder-3B-Instruct, ~2GB) into
 # node-llama-cpp's default models directory, ~/.node-llama-cpp/models —
 # delete that folder to clear the cache, or pre-seed it before going air-gapped.
 node dist/cli.js "explain how add() works in math.js" \
@@ -139,7 +139,7 @@ node dist/cli.js "explain how add() works in math.js" \
 |---|---|
 | `--workspace <dir>` | The repo root the agent's file tools work in |
 | `--base-url <url>` | Use an OpenAI-compatible server, instead of the embedded model |
-| `--model <name>` | A server model id, with `--base-url`. Otherwise, one of the 10 embedded model ids (default `qwen-coder-1.5b`). Run with no arguments to see the full list. |
+| `--model <name>` | A server model id, with `--base-url`. Otherwise, one of the 10 embedded model ids (default `qwen-coder-3b`). Run with no arguments to see the full list. |
 | `--provider anthropic` | Use the real Claude API. Needs `ANTHROPIC_API_KEY`. |
 | `--mode <mode>` | The permission mode. See the table below. |
 | `--json` | For scripts and CI. Refer to "Use in scripts" below. |
@@ -171,8 +171,8 @@ Every embedded model is GGUF format, `Q4_K_M` quantization, resolved through `no
 
 | Id | Name | Purpose | Note |
 |---|---|---|---|
-| `qwen-coder-1.5b` | Qwen2.5-Coder 1.5B Instruct | Coding | fastest, lowest memory — default — can be unreliable on complex, multi-file changes |
-| `qwen-coder-3b` | Qwen2.5-Coder 3B Instruct | Coding | better quality, more memory — can be unreliable on complex, multi-file changes |
+| `qwen-coder-1.5b` | Qwen2.5-Coder 1.5B Instruct | Coding | ~1GB download, fastest, lowest memory — frequently makes wrong edits, best for questions only |
+| `qwen-coder-3b` | Qwen2.5-Coder 3B Instruct | Coding | ~2GB download, good speed and quality — default — can be unreliable on complex, multi-file changes |
 | `qwen-coder-7b` | Qwen2.5-Coder 7B Instruct | Coding | best quality, needs a capable machine |
 | `qwen-3b` | Qwen2.5 3B Instruct | Chat | fast, general-purpose |
 | `llama-3.2-3b` | Llama 3.2 3B Instruct | Chat | fast, general-purpose |

@@ -6,7 +6,7 @@ import { AgentSession, emptyReplyNudge, announcesActionWithoutDoingIt, partialRe
 import { defaultToolRegistry } from "../../toolRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
 import type { AgentEvent, ChatResponse } from "../../types.js";
-import { smallModelEditWarning } from "../../models.js";
+import { smallModelEditWarning, DEFAULT_EMBEDDED_MODEL, EMBEDDED_MODELS } from "../../models.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -178,6 +178,8 @@ try {
   console.log("\nA very small model that is about to change files:");
   {
     check("the two smallest embedded models have a warning", !!smallModelEditWarning("qwen-coder-1.5b")?.includes("Qwen2.5-Coder 1.5B") && !!smallModelEditWarning("qwen-coder-0.5b"));
+    check("the default model is not one that is too small for edits", smallModelEditWarning(DEFAULT_EMBEDDED_MODEL) === null && EMBEDDED_MODELS[DEFAULT_EMBEDDED_MODEL].sizeNote.includes("default"));
+    check("only the default model is labelled as the default", Object.values(EMBEDDED_MODELS).filter((m) => /— default —/.test(m.sizeNote)).length === 1);
     check("larger and other models have none", smallModelEditWarning("qwen-coder-3b") === null && smallModelEditWarning("qwen-coder-7b") === null && smallModelEditWarning("claude-sonnet-5") === null);
     const run = async (model: string, tasks: string[]) => {
       const provider = new MockProvider(tasks.map(() => final("ok")));

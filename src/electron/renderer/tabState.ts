@@ -2,6 +2,7 @@ import type { AgentEvent, PermissionMode } from "../../types.js";
 import { isEphemeralStreamEvent } from "../../types.js";
 import type { PickedAttachment } from "../attachments.js"; // same import renderer.ts already uses
 import type { ProviderConfig } from "../sessionRegistry.js";
+import { DEFAULT_EMBEDDED_MODEL } from "../../models.js";
 
 export const MAX_OPEN_TABS = 6;
 
@@ -74,7 +75,7 @@ export function filterAttachmentsForProvider(
 
 /** The provider/mode/planFirst a brand-new, never-configured tab starts from — also what resetToSetup restores a tab to once its session is deleted. A function (not a shared const) so every tab gets its own object and no caller can mutate another tab's provider by accident. */
 export function defaultTabConfig(): { provider: ProviderConfig; mode: PermissionMode; planFirst: boolean } {
-  return { provider: { kind: "embedded", size: "qwen-coder-1.5b" }, mode: "DEFAULT", planFirst: false };
+  return { provider: { kind: "embedded", size: DEFAULT_EMBEDDED_MODEL }, mode: "DEFAULT", planFirst: false };
 }
 
 export interface TabRegistry {
