@@ -132,6 +132,8 @@ interface Options {
  */
 export class OpenAICompatibleProvider implements ModelProvider {
   id = "openai-compatible";
+  recoversTextToolCalls = true;
+
   constructor(private opts: Options) {}
 
   private headers() {

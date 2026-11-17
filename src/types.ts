@@ -145,6 +145,8 @@ export interface ModelProvider {
   id: string;
   /** How many tokens this provider's model can take in one request, when the provider knows. The agent compacts its history before reaching it (see compaction.ts). */
   contextWindowTokens?: number;
+  /** True when this provider turns a tool call that the model wrote as plain text into a real call. The agent then shows the model that text form when it asks again for a call. */
+  recoversTextToolCalls?: boolean;
   listModels(): Promise<ModelInfo[]>;
   healthCheck(): Promise<HealthCheckResult>;
   chat(request: ChatRequest): Promise<ChatResponse>;

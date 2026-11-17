@@ -39,6 +39,7 @@ import {
   SUMMARY_SYSTEM_PROMPT,
 } from "./compaction.js";
 import { toolResultBudgetChars, toolResultText } from "./toolResultText.js";
+import { importCandidates, isTestFile, MAX_FILES_UNDER_TEST } from "./testImports.js";
 import { isRememberableCommand } from "./commandRules.js";
 import { runAfterHooks, runBeforeHooks, type Hook } from "./hooks.js";
 import { LOAD_SKILL_FALLBACK_MESSAGE } from "./tools/loadSkill.js";
@@ -141,6 +142,16 @@ export function projectInstructionsIntro(fileName: string): string {
   );
 }
 
+/**
+ * Sent after an empty reply, before the one retry. It repeats the
+ * request: a real 1.5B model, told only to continue, answered that it
+ * did not know what was asked.
+ */
+export function emptyReplyNudge(task: string): string {
+  const request = task.length > 1500 ? `${task.slice(0, 1500)}...` : task;
+  return `Your last reply was empty. You have the files above. Now do this request: ${request}\nCall a tool for the next step, or give your answer.`;
+}
+
 /** How many helpers one task may start. Each helper makes its own model calls, so this bounds the cost. */
 export const MAX_DELEGATIONS_PER_TASK = 3;
 const SUBAGENT_MAX_TURNS = 12;
@@ -226,8 +237,21 @@ function taskImpliesCreation(task: string): boolean {
 
 /** Whether a response's text contains a real fenced code block — the tell-tale sign the model wrote out file content instead of calling edit_file. Checks both fence styles (``` and ~~~); a model doesn't reliably pick one over the other. */
 function containsFencedCode(content: string): boolean {
-  return (content.match(/```/g)?.length ?? 0) >= 2 || (content.match(/~~~/g)?.length ?? 0) >= 2;
+  // A block that only shows a shell command is not file content. A real
+  // 7B model made its edit, then wrote "```bash\nnode test/x.js\n```" to
+  // say what it would run next, and was told twice more to call edit_file.
+  for (const fence of ["```", "~~~"]) {
+    const parts = content.split(fence);
+    // Odd-numbered parts are inside a block: the first line is the language.
+    for (let i = 1; i < parts.length - 1; i += 2) {
+      const language = (parts[i]!.split("\n")[0] ?? "").trim().toLowerCase();
+      if (!SHELL_FENCE_LANGUAGES.has(language)) return true;
+    }
+  }
+  return false;
 }
+
+const SHELL_FENCE_LANGUAGES = new Set(["bash", "sh", "shell", "zsh", "console", "terminal", "powershell", "cmd"]);
 
 /** A single nudge wasn't always enough to get a smaller/more reluctant
  * model to actually call edit_file instead of apologizing in prose again
@@ -240,7 +264,23 @@ const MAX_CORRECTIVE_NUDGE_ATTEMPTS = 3;
 /** Escalates in directness with each attempt — a flat, identically-worded
  * repeat didn't read as urgent (or even as a correction at all) to a
  * model that just ignored the first one. */
-function correctiveNudgeMessage(attemptNumber: number): string {
+function correctiveNudgeMessage(attemptNumber: number, showTextForm = false): string {
+  return correctiveNudgeText(attemptNumber) + (showTextForm ? TEXT_TOOL_CALL_FORM : "");
+}
+
+/**
+ * Added to the nudge for a provider that reads a tool call from plain
+ * text. A real 7B model knew the correct edit and wrote it three times
+ * as `edit_file path="..." content="..."` in a bash block, a form that
+ * nothing can run. Shown the JSON form, it has one it can copy. Never
+ * added for a provider with real tool calls only: there the JSON would
+ * be plain text that no one runs.
+ */
+const TEXT_TOOL_CALL_FORM =
+  "\n\nWrite the call as JSON in exactly this form, with no other text in your reply:\n" +
+  '{"name": "edit_file", "arguments": {"path": "<path of the file>", "content": "<the full new content of the file>"}}';
+
+function correctiveNudgeText(attemptNumber: number): string {
   if (attemptNumber === 1) {
     return (
       "You wrote file content in your reply but never called edit_file, so nothing was actually created or changed. " +
@@ -364,6 +404,8 @@ export class AgentSession {
   private emptyReplyRetriedThisTask = false;
   /** Tool calls that the model itself made in this task and that ran. */
   private modelToolCallsThisTask = 0;
+  /** True when the most recent run_command of this task failed. */
+  private lastCommandFailedThisTask = false;
   /** Whether THIS task's first-turn plan has already been proposed — reset at the start of every run() call. Gates only turn 1; once a task's plan has been shown (and approved), later turns in that same task run normally. */
   private planProposedThisTask = false;
 
@@ -788,7 +830,11 @@ export class AgentSession {
     const tool = this.opts.tools.get("read_file");
     if (!tool) return;
 
-    for (const relPath of extractFilenameCandidates(task)) {
+    // The files to read: each file the task names and, after a test
+    // file, the local files that the test imports (see testImports.ts).
+    const queue: { relPath: string; underTest: boolean }[] = extractFilenameCandidates(task).map((relPath) => ({ relPath, underTest: false }));
+    for (let q = 0; q < queue.length; q++) {
+      const { relPath, underTest } = queue[q]!;
       if (this.readPaths.has(relPath)) continue;
 
       const call: ToolCall = { id: `auto_${relPath}`, name: "read_file", arguments: { path: relPath } };
@@ -800,10 +846,29 @@ export class AgentSession {
       }
       const result = await tool.execute(call.arguments, {
         workspaceRoot: this.opts.workspaceRoot,
-        maxResultChars: this.resultBudgetChars(),
+        // A file under test shares the room with the test file that was read before it.
+        maxResultChars: underTest ? Math.floor(this.resultBudgetChars() / 2) : this.resultBudgetChars(),
         log: () => {},
       });
       if (!result.ok) continue;
+
+      if (!underTest && isTestFile(relPath) && typeof result.output?.content === "string") {
+        let added = 0;
+        for (const tries of importCandidates(relPath, result.output.content)) {
+          if (added >= MAX_FILES_UNDER_TEST) break;
+          for (const candidate of tries) {
+            const resolved = await resolveWithinWorkspace(this.opts.workspaceRoot, candidate);
+            if (!resolved.ok) continue;
+            const isFile = await fs.stat(resolved.abs).then((stat) => stat.isFile(), () => false);
+            if (!isFile) continue;
+            if (!this.readPaths.has(candidate) && !queue.some((item) => item.relPath === candidate)) {
+              queue.push({ relPath: candidate, underTest: true });
+              added++;
+            }
+            break;
+          }
+        }
+      }
 
       this.readPaths.add(relPath);
       yield { type: "permission.request", call, decision: "ALLOW" };
@@ -1071,6 +1136,7 @@ export class AgentSession {
     yield { type: "tool.start", call };
     const result = await tool.execute(call.arguments, { workspaceRoot: this.opts.workspaceRoot, maxResultChars: this.resultBudgetChars(), log: () => {}, getGithubToken: this.opts.getGithubToken });
     yield { type: "tool.result", call, result };
+    if (call.name === "run_command") this.lastCommandFailedThisTask = !result.ok;
     const hookNotes = await runAfterHooks(this.hooks, call, result, this.opts.workspaceRoot, { signal: this.abortController?.signal });
     for (const note of hookNotes) yield { type: "status", message: `Your hook after ${call.name}: ${note}` };
     this.messages.push({
@@ -1105,6 +1171,7 @@ export class AgentSession {
     this.correctiveNudgeAttemptsThisTask = 0;
     this.emptyReplyRetriedThisTask = false;
     this.modelToolCallsThisTask = 0;
+    this.lastCommandFailedThisTask = false;
     this.planProposedThisTask = false;
     this.stopRequested = false;
     this.delegationsThisTask = 0;
@@ -1289,12 +1356,23 @@ export class AgentSession {
             yield { type: "status", message: "The model gave an empty reply. Trying once more." };
             yield* this.compactIfNeeded(true);
             if (this.cancelled || this.stopRequested) return;
+            // The same history gives the same empty reply from a local
+            // model (seen with a real 1.5B model after two file reads),
+            // so the retry says what to do next.
+            this.messages.push({ role: "user", content: emptyReplyNudge(task) });
             this.turn++;
             this.state = "THINKING";
             continue;
           }
           this.state = "COMPLETED";
-          if (this.modelToolCallsThisTask > 0) {
+          if (this.modelToolCallsThisTask > 0 && this.lastCommandFailedThisTask) {
+            // Seen with a real 1.5B model: a wrong edit, a failed test run, then silence.
+            yield {
+              type: "done",
+              success: false,
+              summary: "The model stopped without an answer, and the last command it ran failed. Check the steps above: the task is probably not done.",
+            };
+          } else if (this.modelToolCallsThisTask > 0) {
             // The work was done with tools; only the closing message is missing.
             const closing = "The work is done, but the model gave no closing message. Check the steps above.";
             this.messages.push({ role: "assistant", content: closing });
@@ -1318,7 +1396,7 @@ export class AgentSession {
         ) {
           this.correctiveNudgeAttemptsThisTask++;
           this.messages.push({ role: "assistant", content: response.turn.content });
-          this.messages.push({ role: "user", content: correctiveNudgeMessage(this.correctiveNudgeAttemptsThisTask) });
+          this.messages.push({ role: "user", content: correctiveNudgeMessage(this.correctiveNudgeAttemptsThisTask, this.opts.provider.recoversTextToolCalls === true) });
           yield {
             type: "status",
             message: `Turn produced code without writing it — nudging the model to call edit_file instead (attempt ${this.correctiveNudgeAttemptsThisTask}/${MAX_CORRECTIVE_NUDGE_ATTEMPTS}).`,
@@ -1646,6 +1724,7 @@ export class AgentSession {
         // A helper's model calls cost tokens like any other: report them.
         yield* this.pendingSubagentEvents.splice(0);
         yield { type: "tool.result", call, result };
+        if (call.name === "run_command") this.lastCommandFailedThisTask = !result.ok;
         if (call.name === "delegate_task" && result.ok) {
           const steps = (result.output as { toolCalls?: number } | null)?.toolCalls ?? 0;
           yield { type: "status", message: `The helper finished after ${steps} file ${steps === 1 ? "lookup" : "lookups"}.` };
