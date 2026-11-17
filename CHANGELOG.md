@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.182 — 2026-11-17
+
+- Try a stopped model download again, and report it in plain words
+
 ## v0.1.0-beta.181 — 2026-11-17
 
 - Frame project instructions as background, not as a task
