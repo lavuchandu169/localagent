@@ -197,6 +197,18 @@ export function announcesActionWithoutDoingIt(content: string): boolean {
   return /\b(let's|let me|i will|i'll|i am going to|i'm going to|now i|next,? i)\b[^.!?]*\b(read|check|look|search|run|call|find|open|list|use|update|edit|fix|execute|try)\b/i.test(lastSentence);
 }
 
+/**
+ * True when a reply ends with a JSON block that names one of the tools
+ * but was not run as a call (for example the arguments are missing).
+ * Seen with a real 7B model: it wrote {"name": "list_directory"} in a
+ * code block and the task ended as a success with nothing done.
+ */
+export function endsWithUnrunToolCall(content: string, toolNames: string[]): boolean {
+  const tail = content.trim().slice(-400);
+  if (!/[}\]]\s*(```)?\s*$/.test(tail)) return false;
+  return toolNames.some((name) => new RegExp(`"name"\\s*:\\s*"${name.replace(/[^\w]/g, "")}"`).test(tail));
+}
+
 /** How many helpers one task may start. Each helper makes its own model calls, so this bounds the cost. */
 export const MAX_DELEGATIONS_PER_TASK = 3;
 const SUBAGENT_MAX_TURNS = 12;
@@ -1462,7 +1474,7 @@ export class AgentSession {
 
         // A reply that ends by saying what it will do next, with no tool
         // call, is not an answer. The model is asked to continue, a few times at most for each task.
-        if (this.announcedActionNudgesThisTask < MAX_ANNOUNCED_ACTION_NUDGES && announcesActionWithoutDoingIt(response.turn.content)) {
+        if (this.announcedActionNudgesThisTask < MAX_ANNOUNCED_ACTION_NUDGES && (announcesActionWithoutDoingIt(response.turn.content) || endsWithUnrunToolCall(response.turn.content, this.opts.tools.toSchema().map((t) => t.name)))) {
           this.announcedActionNudgesThisTask++;
           this.messages.push({ role: "assistant", content: response.turn.content });
           this.messages.push({ role: "user", content: ANNOUNCED_ACTION_NUDGE + (this.opts.provider.recoversTextToolCalls === true ? ANY_TOOL_TEXT_FORM : "") });

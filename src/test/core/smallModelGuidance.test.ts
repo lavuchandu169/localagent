@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { importCandidates, isTestFile } from "../../testImports.js";
-import { AgentSession, emptyReplyNudge, announcesActionWithoutDoingIt, partialReadReminder, ANNOUNCED_ACTION_NUDGE } from "../../agent.js";
+import { AgentSession, emptyReplyNudge, announcesActionWithoutDoingIt, endsWithUnrunToolCall, partialReadReminder, ANNOUNCED_ACTION_NUDGE } from "../../agent.js";
 import { defaultToolRegistry } from "../../toolRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
 import type { AgentEvent, ChatResponse } from "../../types.js";
@@ -40,6 +40,15 @@ console.log("\nimportCandidates:");
 
   check("an import that leaves the workspace is ignored", importCandidates("a.test.js", 'require("../outside.js")').length === 0);
   check("an import of another test file is ignored", importCandidates("test/a.test.js", 'require("./b.test.js")').length === 0);
+}
+
+console.log("\nendsWithUnrunToolCall:");
+{
+  const names = ["list_directory", "read_file"];
+  check("a fenced call with no arguments is matched", endsWithUnrunToolCall('Let us start.\n\n```json\n{"name": "list_directory"}\n```', names));
+  check("a bare call at the end is matched", endsWithUnrunToolCall('{"name": "read_file", "arguments": {}}', names));
+  check("an answer with no JSON is not matched", !endsWithUnrunToolCall("The limit is 4 attempts.", names));
+  check("JSON that names no tool is not matched", !endsWithUnrunToolCall('```json\n{"name": "Bob"}\n```', names));
 }
 
 console.log("\nannouncesActionWithoutDoingIt (endings seen with real models):");
