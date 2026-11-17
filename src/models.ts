@@ -151,6 +151,20 @@ export const EMBEDDED_MODELS: Record<EmbeddedModelId, EmbeddedModelInfo> = {
 
 export const DEFAULT_EMBEDDED_MODEL: EmbeddedModelId = "qwen-coder-1.5b";
 
+/**
+ * The embedded models that are too small for dependable file edits.
+ * Tested live: the 1.5B model, asked to fix a bug that a failing test
+ * showed, changed the test file and broke it, with the source file in
+ * front of it. The 7B model fixed the bug.
+ */
+const TOO_SMALL_FOR_EDITS: ReadonlySet<string> = new Set<EmbeddedModelId>(["qwen-coder-0.5b", "qwen-coder-1.5b"]);
+
+/** A warning for a task that changes files with a model that is too small for that, or null. */
+export function smallModelEditWarning(model: string): string | null {
+  if (!TOO_SMALL_FOR_EDITS.has(model) || !isEmbeddedModelId(model)) return null;
+  return `${EMBEDDED_MODELS[model].name} is a very small model and frequently makes wrong edits. Examine each change before you accept it. For work that changes files, a larger model gives better results.`;
+}
+
 export function isEmbeddedModelId(value: string): value is EmbeddedModelId {
   return Object.hasOwn(EMBEDDED_MODELS, value);
 }

@@ -90,7 +90,10 @@ console.log("\nplanCompaction:");
     const rebuilt = buildCompactedHistory(plan, "SUMMARY TEXT");
     check("the rebuilt history starts with the system prompt, then the pinned skill", rebuilt[0] === system && rebuilt[2]?.content === "RULES");
     check("the summary follows as a user message", rebuilt[3]?.role === "user" && rebuilt[3].content.includes("SUMMARY TEXT"));
-    check("the user's own messages follow the summary, unchanged", rebuilt[4]?.content === "first task" && rebuilt[5]?.content === "second task");
+    check(
+      "the user's own messages and the model's short answer follow the summary, unchanged and in order",
+      rebuilt[4]?.content === "first task" && rebuilt[5]?.role === "assistant" && rebuilt[5]?.content === "done with first" && rebuilt[6]?.content === "second task"
+    );
     check("the summary is framed as generated notes, not as something the user said", /not written by the user/i.test(rebuilt[3]?.content ?? "") && /not instructions/i.test(rebuilt[3]?.content ?? ""));
     check("the summary message carries the marker", rebuilt[3]?.content.startsWith(SUMMARY_MARKER) === true);
     check("the rebuilt history is shorter", rebuilt.length < history.length);
@@ -276,6 +279,35 @@ await withWorkspace(async (root) => {
   check("after compaction removes a file's content, editing that file asks for approval again", asked.includes("edit_file"));
 });
 
+console.log("\nWhat a summary keeps word for word:");
+{
+  const long = "z".repeat(700);
+  const history: ChatMessage[] = [
+    system,
+    user("task one"),
+    ...toolPair("k1", "read_file", { path: "one.js" }, "ONE CONTENT"),
+    user(`${APP_NOTE_PREFIX} You have lines 1 to 100 of one.js.`),
+    assistant("The port is 47113."),
+    user("task two"),
+    assistant("Second answer."),
+    assistant("Third answer."),
+    user("task three"),
+    assistant(long),
+    ...Array.from({ length: 8 }, (_, i) => assistant(`recent ${i}`)),
+  ];
+  const plan = planCompaction(history)!;
+  const rebuilt = buildCompactedHistory(plan, "SUMMARY");
+  const texts = rebuilt.map((m) => m.content);
+  check("a short answer of the model stays word for word after the summary", texts.includes("The port is 47113."));
+  check("it stays in its place between the user's messages", texts.indexOf("task one") < texts.indexOf("The port is 47113.") && texts.indexOf("The port is 47113.") < texts.indexOf("task two"));
+  check("two answers that become neighbours are one message", texts.includes("Second answer.\n\nThird answer."));
+  check("a long answer is not kept word for word", !texts.includes(long));
+  check("a note from the app is dropped with the file it was about", !texts.some((t) => t.startsWith(APP_NOTE_PREFIX)));
+  check("the file content is gone", !texts.some((t) => t.includes("ONE CONTENT")));
+  const roles = rebuilt.slice(1).map((m) => m.role);
+  check("no two assistant messages of the kept part are neighbours", !roles.slice(0, roles.indexOf("assistant", roles.lastIndexOf("user"))).some((r, i, all) => r === "assistant" && all[i + 1] === "assistant"));
+}
+
 console.log("\npruneOldToolResults:");
 {
   const big = "x".repeat(6000);
@@ -305,6 +337,9 @@ console.log("\npruneOldToolResults:");
   const withNote: ChatMessage[] = [system, user("task one"), ...toolPair("n1", "read_file", { path: "old.js" }, big), assistant("a"), user("task two"), ...toolPair("n2", "read_file", { path: "now.js" }, big), user(`${APP_NOTE_PREFIX} You have lines 1 to 100.`)];
   const afterNote = pruneOldToolResults(withNote);
   check("a note from the app after a read is not taken as a new request", afterNote.removed === 1 && !isRemovedResult(afterNote.messages.find((m) => m.tool_call_id === "n2")!) && isRemovedResult(afterNote.messages.find((m) => m.tool_call_id === "n1")!));
+  const staleNotes: ChatMessage[] = [system, user("task one"), ...toolPair("o1", "read_file", { path: "old.js" }, big), user(`${APP_NOTE_PREFIX} about old.js`), assistant("a"), user("task two"), ...toolPair("o2", "read_file", { path: "now.js" }, big), user(`${APP_NOTE_PREFIX} about now.js`)];
+  const noStale = pruneOldToolResults(staleNotes).messages.map((m) => m.content);
+  check("the note of an earlier request goes with its file, and the note of the current request stays", !noStale.includes(`${APP_NOTE_PREFIX} about old.js`) && noStale.includes(`${APP_NOTE_PREFIX} about now.js`));
   check("a stub of a file read keeps the path and the start of the file's text", (() => {
     const result = JSON.stringify({ ok: true, output: { path: "src/a.js", note: "n".repeat(400), content: `FIRST LINE\n${big}` } });
     const stub = pruneOldToolResults([system, user("one"), ...toolPair("s1", "read_file", { path: "src/a.js" }, result), user("two")]).messages.find((m) => m.tool_call_id === "s1")!;

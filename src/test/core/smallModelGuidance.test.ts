@@ -6,6 +6,7 @@ import { AgentSession, emptyReplyNudge, announcesActionWithoutDoingIt, partialRe
 import { defaultToolRegistry } from "../../toolRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
 import type { AgentEvent, ChatResponse } from "../../types.js";
+import { smallModelEditWarning } from "../../models.js";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -66,6 +67,9 @@ console.log("\npartialReadReminder:");
   const part = partialReadReminder("src/big.js", { truncated: true, output: { startLine: 1, endLine: 103, totalLines: 352 } });
   check("a partial read gives a note with the lines and the next offset", !!part && part.includes("lines 1 to 103 of src/big.js") && part.includes("352 lines") && part.includes("offset 104"));
   check("it lets the model answer from the part, and tells it not to send the user to read the file", !!part && part.includes("answer it") && part.includes("do not ask the user"));
+  const counted = partialReadReminder("src/big.js", { truncated: true, output: { startLine: 1, endLine: 103, totalLines: 352, wholeFile: { functions: 70, classes: 2 } } });
+  check("with the app's count of the whole file, the note gives the numbers", !!counted && counted.includes("70 function definitions and 2 class definitions") && counted.includes("do not count the part you see"));
+  check("with no count there are no numbers in the note", !!part && !part.includes("function definitions"));
   check("the note says that it is from the app, not the user", !!part && part.startsWith("[Automatic note from the app, not from the user.]"));
   check("a whole file gives no note", partialReadReminder("a.js", { truncated: false, output: { totalLines: 3 } }) === null);
 }
@@ -169,6 +173,23 @@ try {
     check("the model's earlier answers are still there word for word", history.some((m) => m.content === "one has values") && history.some((m) => m.content === "two has values"));
     check("the file of the current request is still there, though the app's note comes after it", history.some((m) => m.role === "tool" && m.content.includes("third0") && m.content.length > 3000));
     check("an old file is a short stub", history.some((m) => m.role === "tool" && m.content.includes("first0") && m.content.length < 700));
+  }
+
+  console.log("\nA very small model that is about to change files:");
+  {
+    check("the two smallest embedded models have a warning", !!smallModelEditWarning("qwen-coder-1.5b")?.includes("Qwen2.5-Coder 1.5B") && !!smallModelEditWarning("qwen-coder-0.5b"));
+    check("larger and other models have none", smallModelEditWarning("qwen-coder-3b") === null && smallModelEditWarning("qwen-coder-7b") === null && smallModelEditWarning("claude-sonnet-5") === null);
+    const run = async (model: string, tasks: string[]) => {
+      const provider = new MockProvider(tasks.map(() => final("ok")));
+      const s = new AgentSession({ workspaceRoot: root, model, provider, tools: defaultToolRegistry(), permissionMode: "PLAN" });
+      const warnings: string[] = [];
+      for (const task of tasks) for (const e of await collect(s, task)) if (e.type === "status" && e.message.includes("very small model")) warnings.push(e.message);
+      return warnings.length;
+    };
+    check("the warning is shown for a task that changes files", (await run("qwen-coder-1.5b", ["fix the bug in src/math.js"])) === 1);
+    check("it is shown one time in a session", (await run("qwen-coder-1.5b", ["fix the bug in src/math.js", "now update src/extra.js"])) === 1);
+    check("a question gets no warning", (await run("qwen-coder-1.5b", ["how does this project work?"])) === 0);
+    check("a larger model gets no warning", (await run("qwen-coder-7b", ["fix the bug in src/math.js"])) === 0);
   }
 
   console.log("\nThe retry after an empty reply:");

@@ -58,7 +58,16 @@ export interface CompactionPlan {
   carriedNotes: string;
   /** The user's own messages in the summarised range, kept word for word so their requests never pass through the summary. Also present in toSummarize, as context for it. */
   userMessages: ChatMessage[];
+  /** userMessages and the model's short answers of the summarised range, in order: what the new history keeps word for word. */
+  keptVerbatim?: ChatMessage[];
   tail: ChatMessage[];
+}
+
+/** A model's answer to the user that is short enough to keep word for word. */
+export const SHORT_ANSWER_CHARS = 600;
+
+function isShortAnswer(m: ChatMessage): boolean {
+  return m.role === "assistant" && !m.tool_calls && m.content.trim().length > 0 && m.content.length <= SHORT_ANSWER_CHARS;
 }
 
 /** First words of every note that the app itself puts in the conversation in the user role. */
@@ -76,6 +85,11 @@ export function lastRequestIndex(messages: ChatMessage[]): number {
     if (m.role === "user" && !m.content.startsWith(APP_NOTE_PREFIX) && !m.content.startsWith(SUMMARY_MARKER)) return i;
   }
   return -1;
+}
+
+/** True for a note that the app itself put in the conversation. */
+export function isAppNote(m: ChatMessage): boolean {
+  return m.role === "user" && m.content.startsWith(APP_NOTE_PREFIX);
 }
 
 const NOTES_END = "[End of notes.";
@@ -134,7 +148,8 @@ export function planCompaction(messages: ChatMessage[], contextWindowTokens?: nu
       while (i + 1 < cut && messages[i + 1]!.role === "tool" && ids.has(messages[i + 1]!.tool_call_id ?? "")) {
         pinned.push(messages[++i]!);
       }
-    } else {
+    } else if (!isAppNote(m)) {
+      // A note from the app is about a file whose content goes away here.
       toSummarize.push(m);
     }
   }
@@ -147,10 +162,15 @@ export function planCompaction(messages: ChatMessage[], contextWindowTokens?: nu
   if (carry) for (const m of earlier) toSummarize.splice(toSummarize.indexOf(m), 1);
   const userMessages = toSummarize.filter((m) => m.role === "user" && !isSummary(m));
   const notUser = toSummarize.filter((m) => !userMessages.includes(m));
+  // The user's messages and the model's own short answers, in their
+  // order. A real 7B model's summary of four tasks named only the last
+  // file, and a value that the model had told the user was lost. An
+  // answer that stays word for word cannot be lost that way.
+  const keptVerbatim = toSummarize.filter((m) => userMessages.includes(m) || isShortAnswer(m));
   const largeEnough = !!contextWindowTokens && notUser.length > 0 && estimateTokens(notUser) >= contextWindowTokens * LARGE_OLD_SHARE;
   if (notUser.length < MIN_MESSAGES_TO_COMPACT && !largeEnough) return null;
 
-  return { system: start === 1 ? messages[0] : undefined, pinned, toSummarize, carriedNotes: carry ? earlierNotes : "", userMessages, tail: messages.slice(cut) };
+  return { system: start === 1 ? messages[0] : undefined, pinned, toSummarize, carriedNotes: carry ? earlierNotes : "", userMessages, keptVerbatim, tail: messages.slice(cut) };
 }
 
 function shorten(text: string, max: number): string {
@@ -170,6 +190,17 @@ export function renderTranscript(messages: ChatMessage[], maxChars: number): str
   return `[The earliest part of the conversation is omitted.]\n${text.slice(text.length - maxChars)}`;
 }
 
+/** Two answers that are now next to each other become one message, so the roles still alternate where they did. */
+function mergeAdjacentAnswers(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const m of messages) {
+    const last = out[out.length - 1];
+    if (last && last.role === "assistant" && m.role === "assistant") out[out.length - 1] = { ...last, content: `${last.content}\n\n${m.content}` };
+    else out.push(m);
+  }
+  return out;
+}
+
 export function buildCompactedHistory(plan: CompactionPlan, summary: string): ChatMessage[] {
   const summaryMessage: ChatMessage = {
     role: "user",
@@ -184,7 +215,7 @@ export function buildCompactedHistory(plan: CompactionPlan, summary: string): Ch
     ...(plan.system ? [plan.system] : []),
     ...plan.pinned,
     summaryMessage,
-    ...plan.userMessages,
+    ...mergeAdjacentAnswers(plan.keptVerbatim ?? plan.userMessages),
     ...plan.tail,
   ];
 }
@@ -231,7 +262,14 @@ function startOfResult(content: string): { path?: string; start: string } {
 export function pruneOldToolResults(messages: ChatMessage[]): { messages: ChatMessage[]; removed: number } {
   const lastUser = lastRequestIndex(messages);
   let removed = 0;
-  const out = messages.map((m, i) => {
+  // A note from the app about a file of an earlier request is of no use
+  // when that file's content is removed. Four such notes filled enough
+  // of a small context to force a summary.
+  const staleNote = (m: ChatMessage, i: number) => i < lastUser && isAppNote(m);
+  const droppedNotes = messages.filter(staleNote).length;
+  const out = messages.filter((m, i) => !staleNote(m, i)).map((m, _i, kept) => {
+    const i = messages.indexOf(m);
+    void kept;
     if (i >= lastUser || m.role !== "tool" || m.name === "load_skill" || m.content.length < PRUNE_MIN_CHARS || isRemovedResult(m)) return m;
     removed++;
     const stub = {
@@ -241,7 +279,7 @@ export function pruneOldToolResults(messages: ChatMessage[]): { messages: ChatMe
     };
     return { ...m, content: JSON.stringify(stub) };
   });
-  return { messages: removed > 0 ? out : messages, removed };
+  return { messages: removed > 0 || droppedNotes > 0 ? out : messages, removed };
 }
 
 /** Paths of the read_file calls whose results are still visible in a history. */

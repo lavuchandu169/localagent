@@ -40,6 +40,7 @@ import {
   renderTranscript,
   SUMMARY_SYSTEM_PROMPT,
 } from "./compaction.js";
+import { smallModelEditWarning } from "./models.js";
 import { toolResultBudgetChars, toolResultText } from "./toolResultText.js";
 import { importCandidates, isTestFile, MAX_FILES_UNDER_TEST } from "./testImports.js";
 import { isRememberableCommand } from "./commandRules.js";
@@ -163,11 +164,12 @@ export function emptyReplyNudge(task: string): string {
 export function partialReadReminder(relPath: string, result: { truncated?: boolean; output?: any }): string | null {
   const output = result.output;
   if (!result.truncated || !output || typeof output.endLine !== "number" || typeof output.totalLines !== "number") return null;
+  const whole = output.wholeFile && typeof output.wholeFile.functions === "number" && typeof output.wholeFile.classes === "number" ? output.wholeFile : null;
   return (
     `${APP_NOTE_PREFIX} You have lines ${output.startLine ?? 1} to ${output.endLine} of ${relPath}, which has ${output.totalLines} lines. ` +
-    "If the request can be answered from this part, answer it. " +
-    `If it needs the whole file (a count, a full list), call read_file yourself with offset ${output.endLine + 1} for the next part: do not ask the user to do that. ` +
-    "A number that you give from only this part must be called a part, not the total."
+    (whole ? `The app counted the whole file: it has ${whole.functions} function definitions and ${whole.classes} class definitions. Give these numbers when you are asked how many there are; do not count the part you see. ` : "") +
+    "If the request can be answered from this part or from these numbers, answer it. " +
+    `If it needs more of the file, call read_file yourself with offset ${output.endLine + 1} for the next part: do not ask the user to do that.`
   );
 }
 
@@ -447,6 +449,7 @@ export class AgentSession {
   private emptyReplyRetriedThisTask = false;
   /** Tool calls that the model itself made in this task and that ran. */
   private modelToolCallsThisTask = 0;
+  private smallModelWarningShown = false;
   /** Pushes in this task after the model announced a step and stopped. */
   private announcedActionNudgesThisTask = 0;
   /** True when the most recent run_command of this task failed. */
@@ -1248,6 +1251,14 @@ export class AgentSession {
       yield { type: "error", message: `Your hooks could not be loaded, so the task did not run. ${err?.message ?? err}` };
       yield { type: "done", success: false, summary: "Hooks could not be loaded." };
       return;
+    }
+    // One time in a session: a very small embedded model is about to change files.
+    if (!this.smallModelWarningShown && taskImpliesCreation(task)) {
+      const warning = smallModelEditWarning(this.opts.model);
+      if (warning) {
+        this.smallModelWarningShown = true;
+        yield { type: "status", message: warning };
+      }
     }
     yield* this.autoReadNamedFiles(task);
     yield* this.autoLoadSkills(task);
