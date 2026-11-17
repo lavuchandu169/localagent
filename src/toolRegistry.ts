@@ -6,6 +6,7 @@ import { editFileTool } from "./tools/editFile.js";
 import { deleteFileTool } from "./tools/deleteFile.js";
 import { runCommandTool } from "./tools/runCommand.js";
 import { fetchUrlTool } from "./tools/fetchUrl.js";
+import { webSearchTool } from "./tools/webSearch.js";
 import { findFilesTool } from "./tools/findFiles.js";
 import { updateTodosTool } from "./tools/updateTodos.js";
 import { delegateTaskTool } from "./tools/delegateTask.js";
@@ -57,8 +58,8 @@ export class ToolRegistry {
 
 export function defaultToolRegistry(
   getExtraTools: () => Tool[] = () => [],
-  /** taskList adds update_todos and delegate adds delegate_task. Both are off by default: an extra always-available tool misleads small local models (see the load_skill note below), so callers turn them on only for a capable model. */
-  options: { taskList?: boolean; delegate?: boolean } = {}
+  /** taskList adds update_todos, delegate adds delegate_task and webSearch adds web_search. All three are off by default: an extra always-available tool misleads small local models (see the load_skill note below), so callers turn them on only for a capable model. */
+  options: { taskList?: boolean; delegate?: boolean; webSearch?: boolean } = {}
 ): ToolRegistry {
   // Deliberately NOT registered here: a "load_skill" tool. Live-tested
   // regression (see toolRegistry.test.ts and tools/loadSkill.ts) — a 3B
@@ -69,7 +70,7 @@ export function defaultToolRegistry(
   // agent.ts's own dispatch-level fallback (its "unknown tool" branch),
   // never as a listed, choosable tool.
   return new ToolRegistry(
-    [readFileTool, listDirectoryTool, findFilesTool, grepTool, editFileTool, deleteFileTool, runCommandTool, fetchUrlTool, ...(options.taskList ? [updateTodosTool] : []), ...(options.delegate ? [delegateTaskTool] : [])],
+    [readFileTool, listDirectoryTool, findFilesTool, grepTool, editFileTool, deleteFileTool, runCommandTool, fetchUrlTool, ...(options.taskList ? [updateTodosTool] : []), ...(options.delegate ? [delegateTaskTool] : []), ...(options.webSearch ? [webSearchTool] : [])],
     getExtraTools
   );
 }

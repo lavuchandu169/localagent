@@ -24,6 +24,11 @@ try {
     return (mock.receivedRequests[0]?.tools ?? []).map((t) => t.name);
   };
 
+  console.log("Which sessions get the web search tool:");
+  check("an embedded local model is not offered web_search", !(await offered({ kind: "embedded", size: "qwen-coder-3b" })).includes("web_search"));
+  check("a cloud model is offered web_search", (await offered({ kind: "anthropic", apiKey: "k" })).includes("web_search"));
+  check("a custom server model is offered web_search", (await offered({ kind: "openai-compatible", baseUrl: "http://127.0.0.1:1/v1", model: "m" })).includes("web_search"));
+
   console.log("Which sessions get the task list tool:");
   check("an embedded local model is not offered update_todos", !(await offered({ kind: "embedded", size: "qwen-coder-1.5b" })).includes("update_todos"));
   check("a custom server model is offered update_todos", (await offered({ kind: "openai-compatible", baseUrl: "http://127.0.0.1:1/v1", model: "m" })).includes("update_todos"));
