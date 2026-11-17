@@ -152,6 +152,45 @@ export function emptyReplyNudge(task: string): string {
   return `Your last reply was empty. You have the files above. Now do this request: ${request}\nCall a tool for the next step, or give your answer.`;
 }
 
+/**
+ * A line for the conversation after the agent's own read of a file that
+ * did not fit. Real models ignored the same facts inside the tool
+ * result, before and after the content, and counted a third of a file
+ * as the whole.
+ */
+export function partialReadReminder(relPath: string, result: { truncated?: boolean; output?: any }): string | null {
+  const output = result.output;
+  if (!result.truncated || !output || typeof output.endLine !== "number" || typeof output.totalLines !== "number") return null;
+  return (
+    `[Automatic note from the app, not from the user.] You have only lines ${output.startLine ?? 1} to ${output.endLine} of ${relPath}, which has ${output.totalLines} lines. ` +
+    `Before you count, list or describe the whole file, read the rest with read_file and offset ${output.endLine + 1}. If you answer from this part, say that it is only a part.`
+  );
+}
+
+/** The text form of a call to any tool, for a provider that reads calls from text. A real 1.5B model, asked to continue, answered that it could not call tools. */
+const ANY_TOOL_TEXT_FORM =
+  "\n\nYou can call a tool. Write the call as JSON in exactly this form, with no other text in your reply:\n" +
+  '{"name": "<name of the tool>", "arguments": {"<argument>": "<value>"}}';
+
+/** A real 7B model needed a push for each further part of a long file. */
+export const MAX_ANNOUNCED_ACTION_NUDGES = 3;
+
+export const ANNOUNCED_ACTION_NUDGE = "You said what you would do next, but you did not do it. Do it now: call the tool. If you already have what you need, give your answer.";
+
+/**
+ * True when a reply ends by announcing a step with a tool and stops
+ * there. Seen many times with real local models: "I'll use find_files
+ * again to search...", "Let's read the rest of the file first.", and
+ * the task ended with that. Only the end of the reply counts, so an
+ * answer that mentions an earlier step is not matched.
+ */
+export function announcesActionWithoutDoingIt(content: string): boolean {
+  const end = content.trim().slice(-300);
+  const lastSentence = end.split(/(?<=[.!?:])\s+|\n+/).filter((part) => part.trim().length > 0).slice(-2).join(" ");
+  if (/\?\s*$/.test(lastSentence)) return false; // a question to the user is a real ending
+  return /\b(let's|let me|i will|i'll|i am going to|i'm going to|now i|next,? i)\b[^.!?]*\b(read|check|look|search|run|call|find|open|list|use|update|edit|fix|execute|try)\b/i.test(lastSentence);
+}
+
 /** How many helpers one task may start. Each helper makes its own model calls, so this bounds the cost. */
 export const MAX_DELEGATIONS_PER_TASK = 3;
 const SUBAGENT_MAX_TURNS = 12;
@@ -404,6 +443,8 @@ export class AgentSession {
   private emptyReplyRetriedThisTask = false;
   /** Tool calls that the model itself made in this task and that ran. */
   private modelToolCallsThisTask = 0;
+  /** Pushes in this task after the model announced a step and stopped. */
+  private announcedActionNudgesThisTask = 0;
   /** True when the most recent run_command of this task failed. */
   private lastCommandFailedThisTask = false;
   /** Whether THIS task's first-turn plan has already been proposed — reset at the start of every run() call. Gates only turn 1; once a task's plan has been shown (and approved), later turns in that same task run normally. */
@@ -882,6 +923,8 @@ export class AgentSession {
         name: "read_file",
         content: toolResultText(result, this.resultBudgetChars()),
       });
+      const partial = partialReadReminder(relPath, result);
+      if (partial) this.messages.push({ role: "user", content: partial });
     }
   }
 
@@ -1172,6 +1215,7 @@ export class AgentSession {
     this.emptyReplyRetriedThisTask = false;
     this.modelToolCallsThisTask = 0;
     this.lastCommandFailedThisTask = false;
+    this.announcedActionNudgesThisTask = 0;
     this.planProposedThisTask = false;
     this.stopRequested = false;
     this.delegationsThisTask = 0;
@@ -1386,6 +1430,18 @@ export class AgentSession {
             };
           }
           return;
+        }
+
+        // A reply that ends by saying what it will do next, with no tool
+        // call, is not an answer. The model is asked to continue, a few times at most for each task.
+        if (this.announcedActionNudgesThisTask < MAX_ANNOUNCED_ACTION_NUDGES && announcesActionWithoutDoingIt(response.turn.content)) {
+          this.announcedActionNudgesThisTask++;
+          this.messages.push({ role: "assistant", content: response.turn.content });
+          this.messages.push({ role: "user", content: ANNOUNCED_ACTION_NUDGE + (this.opts.provider.recoversTextToolCalls === true ? ANY_TOOL_TEXT_FORM : "") });
+          yield { type: "status", message: "The model said what it would do next but did not do it. Asking it to continue." };
+          this.turn++;
+          this.state = "THINKING";
+          continue;
         }
 
         if (

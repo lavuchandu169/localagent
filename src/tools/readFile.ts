@@ -22,11 +22,13 @@ interface Output {
   endLine?: number;
   /** Set when the content is only part of the file: says which lines these are and how to get the next ones. */
   note?: string;
+  /** Set with note, after the content: says which lines are missing. */
+  notShown?: string;
 }
 
 const MAX_CONTENT_CHARS = 20000;
 /** Characters kept free in a result for everything that is not the file content. */
-const RESULT_OVERHEAD_CHARS = 400;
+const RESULT_OVERHEAD_CHARS = 700;
 
 /** How many characters of file content, counted as JSON text, one result can hold for this session's model. */
 function contentCap(ctx: ToolContext): number {
@@ -49,6 +51,15 @@ function linesThatFit(lines: string[], cap: number): number {
     count++;
   }
   return count;
+}
+
+/**
+ * Comes after the content. Real models read the note before the content
+ * and still counted the functions in a third of a file as the total, so
+ * the last thing they read now says what is missing.
+ */
+function restNote(endLine: number, totalLines: number): string {
+  return `Lines ${endLine + 1} to ${totalLines} are NOT shown above (${totalLines - endLine} more lines). Do not count, list or summarise the whole file from this part. Read the rest first, or say that you saw only lines 1 to ${endLine}.`;
 }
 
 function partNote(startLine: number, endLine: number, totalLines: number): string {
@@ -162,7 +173,7 @@ export const readFileTool: Tool<Input, Output> = {
         return {
           ok: true,
           // The note comes before the content: a small model gives most weight to what it reads first.
-          output: { path: rel, note: partNote(1, endLine, totalLines), totalLines, startLine: 1, endLine, content },
+          output: { path: rel, note: partNote(1, endLine, totalLines), totalLines, startLine: 1, endLine, content, notShown: restNote(endLine, totalLines) },
           truncated: true,
         };
       }
@@ -179,7 +190,15 @@ export const readFileTool: Tool<Input, Output> = {
       const truncated = endLine < totalLines;
       return {
         ok: true,
-        output: { path: rel, ...(cutBySize ? { note: partNote(startLine, endLine, totalLines) } : {}), totalLines, startLine, endLine, content: wanted.slice(0, count).join("\n") },
+        output: {
+          path: rel,
+          ...(cutBySize ? { note: partNote(startLine, endLine, totalLines) } : {}),
+          totalLines,
+          startLine,
+          endLine,
+          content: wanted.slice(0, count).join("\n"),
+          ...(cutBySize ? { notShown: restNote(endLine, totalLines) } : {}),
+        },
         truncated,
       };
     } catch (err: any) {

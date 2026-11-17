@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { importCandidates, isTestFile } from "../../testImports.js";
-import { AgentSession, emptyReplyNudge } from "../../agent.js";
+import { AgentSession, emptyReplyNudge, announcesActionWithoutDoingIt, partialReadReminder, ANNOUNCED_ACTION_NUDGE } from "../../agent.js";
 import { defaultToolRegistry } from "../../toolRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
 import type { AgentEvent, ChatResponse } from "../../types.js";
@@ -39,6 +39,34 @@ console.log("\nimportCandidates:");
 
   check("an import that leaves the workspace is ignored", importCandidates("a.test.js", 'require("../outside.js")').length === 0);
   check("an import of another test file is ignored", importCandidates("test/a.test.js", 'require("./b.test.js")').length === 0);
+}
+
+console.log("\nannouncesActionWithoutDoingIt (endings seen with real models):");
+{
+  const yes = [
+    "The closest file is login.test.js, but it is not an exact match.\n\nTo find the correct test file, I'll use the `find_files` function with the pattern `**/login.test.ts`.",
+    "I apologize for the oversight. Let's read the rest of the file first.",
+    "Now, let's call `edit_file` to update the file.",
+    "The test is still failing. Let me check the implementation of the sum function in src/math.js.",
+  ];
+  check("a reply that ends with a step it will take is matched", yes.every(announcesActionWithoutDoingIt));
+  const no = [
+    "The retry limit is 4 attempts with a 250 ms base delay.",
+    "I read the file and fixed the bug. The test passes now.",
+    "First I will explain the design. The module has three parts: a parser, a planner and a runner. Each part is small.",
+    "I can do that in two ways. Which one do you want me to use?",
+    "Let me know if you want more detail.",
+    "",
+  ];
+  check("an answer, a question to the user, or an offer is not matched", !no.some(announcesActionWithoutDoingIt));
+}
+
+console.log("\npartialReadReminder:");
+{
+  const part = partialReadReminder("src/big.js", { truncated: true, output: { startLine: 1, endLine: 103, totalLines: 352 } });
+  check("a partial read gives a note with the lines and the next offset", !!part && part.includes("lines 1 to 103 of src/big.js") && part.includes("352 lines") && part.includes("offset 104"));
+  check("the note says that it is from the app, not the user", !!part && part.startsWith("[Automatic note from the app, not from the user.]"));
+  check("a whole file gives no note", partialReadReminder("a.js", { truncated: false, output: { totalLines: 3 } }) === null);
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "localagent-small-model-"));
@@ -95,6 +123,34 @@ try {
     const { session: s } = session([final(`I will run the test next.\n${fence}bash\nnode test/math.test.js\n${fence}`)]);
     const events = await collect(s, "fix the bug in src/math.js");
     check("a block with only a shell command does not cause a nudge", !events.some((e) => e.type === "status" && e.message.includes("nudging")));
+  }
+
+  console.log("\nA reply that announces a step and stops:");
+  {
+    const { session: s } = session([final("Let me check the implementation in src/math.js."), final("The bug is a minus sign."), final("unused")]);
+    const events = await collect(s, "why does sum give the wrong result?");
+    const done = events.find((e) => e.type === "done") as any;
+    check("the model is asked to continue, and its next reply is the answer", done?.summary === "The bug is a minus sign." && s.getMessages().some((m) => m.role === "user" && m.content === ANNOUNCED_ACTION_NUDGE));
+    const { session: local } = session([final("Let me check the implementation in src/math.js."), final("done")], { recoversTextToolCalls: true });
+    await collect(local, "why does sum give the wrong result?");
+    check("a provider that reads calls from text is also shown the form of a call", local.getMessages().some((m) => m.content.startsWith(ANNOUNCED_ACTION_NUDGE) && m.content.includes('{"name": "<name of the tool>"')));
+  }
+  {
+    const { session: s } = session([final("Let me check the file."), final("I'll look at it now."), final("Let me read it."), final("I will open it now."), final("unused")]);
+    const events = await collect(s, "why does sum give the wrong result?");
+    const pushes = s.getMessages().filter((m) => m.content.startsWith(ANNOUNCED_ACTION_NUDGE)).length;
+    check("it is asked three times at most for each task, then the reply stands", pushes === 3 && (events.find((e) => e.type === "done") as any)?.summary === "I will open it now.");
+  }
+
+  console.log("\nA large file named in the task:");
+  {
+    await fs.writeFile(path.join(root, "src", "big.js"), Array.from({ length: 900 }, (_, i) => `const value${i} = ${i};`).join("\n"));
+    const { session: s } = session([final("ok")], { contextWindowTokens: 8192 });
+    await collect(s, "how many values are in src/big.js?");
+    const history = s.getMessages();
+    const read = history.findIndex((m) => m.role === "tool" && m.name === "read_file");
+    check("the partial read is followed by the app's note in the conversation", read !== -1 && history[read + 1]?.role === "user" && history[read + 1]!.content.includes("of src/big.js, which has 900 lines"));
+    check("the result itself ends with what is not shown", JSON.parse(history[read]!.content).output.notShown.includes("are NOT shown above"));
   }
 
   console.log("\nThe retry after an empty reply:");
