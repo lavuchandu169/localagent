@@ -61,6 +61,23 @@ export interface CompactionPlan {
   tail: ChatMessage[];
 }
 
+/** First words of every note that the app itself puts in the conversation in the user role. */
+export const APP_NOTE_PREFIX = "[Automatic note from the app, not from the user.]";
+
+/**
+ * Index of the user's last own message: the start of the current
+ * request. Notes from the app and generated summaries have the user
+ * role too, but they are not requests. Counting one as a request made
+ * the file that was just read look old, and it was removed.
+ */
+export function lastRequestIndex(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role === "user" && !m.content.startsWith(APP_NOTE_PREFIX) && !m.content.startsWith(SUMMARY_MARKER)) return i;
+  }
+  return -1;
+}
+
 const NOTES_END = "[End of notes.";
 
 function isSummary(m: ChatMessage): boolean {
@@ -99,7 +116,7 @@ export function planCompaction(messages: ChatMessage[], contextWindowTokens?: nu
 
   if (contextWindowTokens) {
     // Keep fewer recent messages when they are too large, but never cut into the current request.
-    const lastUser = messages.map((m) => m.role).lastIndexOf("user");
+    const lastUser = lastRequestIndex(messages);
     const tailBudget = contextWindowTokens * TAIL_WINDOW_SHARE;
     while (cut < lastUser && estimateTokens(messages.slice(cut)) > tailBudget) {
       cut++;
@@ -183,6 +200,24 @@ export function isRemovedResult(m: ChatMessage): boolean {
 }
 
 /**
+ * What a stub keeps of a result. For a file read that is the path and
+ * the start of the file's text, not the start of the JSON: a partial
+ * read begins with notes and an outline, and the file's first lines
+ * are what the model is asked about later.
+ */
+function startOfResult(content: string): { path?: string; start: string } {
+  try {
+    const output = JSON.parse(content)?.output;
+    if (output && typeof output.content === "string") {
+      return { ...(typeof output.path === "string" ? { path: output.path } : {}), start: output.content.slice(0, REMOVED_RESULT_START_CHARS) };
+    }
+  } catch {
+    // Not JSON, or JSON that was cut: keep the raw start.
+  }
+  return { start: content.slice(0, REMOVED_RESULT_START_CHARS) };
+}
+
+/**
  * Replaces the large tool results of earlier requests with a short
  * stub. No model call is needed, so it is immediate. A real 7B model
  * with an 8,192-token window needed a summary call on almost every
@@ -194,7 +229,7 @@ export function isRemovedResult(m: ChatMessage): boolean {
  * start of the result and says how to get the data again.
  */
 export function pruneOldToolResults(messages: ChatMessage[]): { messages: ChatMessage[]; removed: number } {
-  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
+  const lastUser = lastRequestIndex(messages);
   let removed = 0;
   const out = messages.map((m, i) => {
     if (i >= lastUser || m.role !== "tool" || m.name === "load_skill" || m.content.length < PRUNE_MIN_CHARS || isRemovedResult(m)) return m;
@@ -202,7 +237,7 @@ export function pruneOldToolResults(messages: ChatMessage[]): { messages: ChatMe
     const stub = {
       removed: true,
       note: `This old result was removed to save space (${m.content.length} characters). Call the tool again if you need it.`,
-      start: m.content.slice(0, REMOVED_RESULT_START_CHARS),
+      ...startOfResult(m.content),
     };
     return { ...m, content: JSON.stringify(stub) };
   });

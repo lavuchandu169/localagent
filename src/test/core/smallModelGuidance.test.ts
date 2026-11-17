@@ -167,7 +167,7 @@ try {
     check("no summary is asked of the model: one request for each task", provider.receivedRequests.length === 3 && !statuses.some((m) => m.includes("Compacting earlier conversation")));
     const history = s.getMessages();
     check("the model's earlier answers are still there word for word", history.some((m) => m.content === "one has values") && history.some((m) => m.content === "two has values"));
-    check("the current file is still there in full", history.some((m) => m.role === "tool" && m.content.includes("third0") && m.content.length > 3000));
+    check("the file of the current request is still there, though the app's note comes after it", history.some((m) => m.role === "tool" && m.content.includes("third0") && m.content.length > 3000));
     check("an old file is a short stub", history.some((m) => m.role === "tool" && m.content.includes("first0") && m.content.length < 700));
   }
 

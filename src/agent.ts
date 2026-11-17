@@ -36,6 +36,7 @@ import {
   planCompaction,
   readPathsIn,
   pruneOldToolResults,
+  APP_NOTE_PREFIX,
   renderTranscript,
   SUMMARY_SYSTEM_PROMPT,
 } from "./compaction.js";
@@ -163,7 +164,7 @@ export function partialReadReminder(relPath: string, result: { truncated?: boole
   const output = result.output;
   if (!result.truncated || !output || typeof output.endLine !== "number" || typeof output.totalLines !== "number") return null;
   return (
-    `[Automatic note from the app, not from the user.] You have lines ${output.startLine ?? 1} to ${output.endLine} of ${relPath}, which has ${output.totalLines} lines. ` +
+    `${APP_NOTE_PREFIX} You have lines ${output.startLine ?? 1} to ${output.endLine} of ${relPath}, which has ${output.totalLines} lines. ` +
     "If the request can be answered from this part, answer it. " +
     `If it needs the whole file (a count, a full list), call read_file yourself with offset ${output.endLine + 1} for the next part: do not ask the user to do that. ` +
     "A number that you give from only this part must be called a part, not the total."

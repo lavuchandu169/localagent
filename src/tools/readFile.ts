@@ -1,3 +1,4 @@
+import { outlineFile } from "../fileOutline.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Tool, ToolContext } from "../types.js";
@@ -24,11 +25,34 @@ interface Output {
   note?: string;
   /** Set with note, after the content: says which lines are missing. */
   notShown?: string;
+  /** Set with note: counts and names of the definitions in the whole file. */
+  wholeFile?: { lines: number; functions: number; classes: number; definitionsNotShown: string[]; note: string };
 }
 
 const MAX_CONTENT_CHARS = 20000;
 /** Characters kept free in a result for everything that is not the file content. */
 const RESULT_OVERHEAD_CHARS = 700;
+
+/** Room in a partial result for the outline of the whole file. */
+const OUTLINE_CHARS = 1300;
+
+/**
+ * Facts about the whole file, sent with a part of it: how many
+ * definitions it has, and where the first ones are (see fileOutline.ts).
+ */
+function wholeFileFacts(content: string, totalLines: number, shownUntilLine: number): { lines: number; functions: number; classes: number; definitionsNotShown: string[]; note: string } {
+  const outline = outlineFile(content, OUTLINE_CHARS - 400, shownUntilLine + 1);
+  return {
+    lines: totalLines,
+    functions: outline.functions,
+    classes: outline.classes,
+    definitionsNotShown: outline.names,
+    note:
+      `Counted by the app in the whole file, not only in the part shown: ${outline.functions} function definitions and ${outline.classes} class definitions. ` +
+      "Use these numbers for a question about the whole file. definitionsNotShown names what comes after the part shown, with line numbers for read_file's offset." +
+      (outline.namesCut ? " That list is cut; the counts are complete." : ""),
+  };
+}
 
 /** How many characters of file content, counted as JSON text, one result can hold for this session's model. */
 function contentCap(ctx: ToolContext): number {
@@ -162,8 +186,10 @@ export const readFileTool: Tool<Input, Output> = {
       const redactedContent = redactSecrets(content);
 
       if (input.offset === undefined && input.limit === undefined) {
-        const cap = contentCap(ctx);
-        if (jsonLength(redactedContent) <= cap) return { ok: true, output: { path: rel, content: redactedContent, totalLines }, truncated: false };
+        const fullCap = contentCap(ctx);
+        if (jsonLength(redactedContent) <= fullCap) return { ok: true, output: { path: rel, content: redactedContent, totalLines }, truncated: false };
+        // A part of the file: keep room for the outline of the whole file.
+        const cap = Math.max(500, fullCap - OUTLINE_CHARS);
         // Cut at the end of a line, and say which lines these are, so the model can ask for the next ones.
         const allLines = redactedContent.split("\n");
         const count = linesThatFit(allLines, cap);
@@ -173,7 +199,7 @@ export const readFileTool: Tool<Input, Output> = {
         return {
           ok: true,
           // The note comes before the content: a small model gives most weight to what it reads first.
-          output: { path: rel, note: partNote(1, endLine, totalLines), totalLines, startLine: 1, endLine, content, notShown: restNote(endLine, totalLines) },
+          output: { path: rel, note: partNote(1, endLine, totalLines), totalLines, startLine: 1, endLine, wholeFile: wholeFileFacts(redactedContent, totalLines, endLine), content, notShown: restNote(endLine, totalLines) },
           truncated: true,
         };
       }

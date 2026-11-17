@@ -8,6 +8,7 @@ import {
   buildCompactedHistory,
   notesIn,
   pruneOldToolResults,
+  APP_NOTE_PREFIX,
   isRemovedResult,
   readPathsIn,
   MIN_MESSAGES_TO_COMPACT,
@@ -300,6 +301,15 @@ console.log("\npruneOldToolResults:");
   check("the input is not changed", history.find((m) => m.tool_call_id === "r1")!.content.length > 6000);
   check("a second pass removes nothing more", pruneOldToolResults(pruned.messages).removed === 0);
   check("a history with nothing to remove is returned as it is", pruneOldToolResults([system, user("hi"), assistant("hello")]).removed === 0);
+
+  const withNote: ChatMessage[] = [system, user("task one"), ...toolPair("n1", "read_file", { path: "old.js" }, big), assistant("a"), user("task two"), ...toolPair("n2", "read_file", { path: "now.js" }, big), user(`${APP_NOTE_PREFIX} You have lines 1 to 100.`)];
+  const afterNote = pruneOldToolResults(withNote);
+  check("a note from the app after a read is not taken as a new request", afterNote.removed === 1 && !isRemovedResult(afterNote.messages.find((m) => m.tool_call_id === "n2")!) && isRemovedResult(afterNote.messages.find((m) => m.tool_call_id === "n1")!));
+  check("a stub of a file read keeps the path and the start of the file's text", (() => {
+    const result = JSON.stringify({ ok: true, output: { path: "src/a.js", note: "n".repeat(400), content: `FIRST LINE\n${big}` } });
+    const stub = pruneOldToolResults([system, user("one"), ...toolPair("s1", "read_file", { path: "src/a.js" }, result), user("two")]).messages.find((m) => m.tool_call_id === "s1")!;
+    return JSON.parse(stub.content).path === "src/a.js" && JSON.parse(stub.content).start.startsWith("FIRST LINE");
+  })());
 
   const paths = readPathsIn(pruned.messages);
   check("a file whose result was removed no longer counts as read", !paths.has("one.js") && paths.has("small.js") && paths.has("two.js"));
