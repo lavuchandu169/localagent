@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { discoverProjectInstructions, discoverUserSkills, PROJECT_INSTRUCTIONS_ID } from "../../skillLoader.js";
-import { AgentSession, PROJECT_INSTRUCTIONS_HEADER } from "../../agent.js";
+import { AgentSession, PROJECT_INSTRUCTIONS_HEADER, projectInstructionsIntro } from "../../agent.js";
 import { defaultToolRegistry } from "../../toolRegistry.js";
 import { MockProvider } from "../../providers/mockProvider.js";
 import type { ChatMessage, ChatResponse, ToolCall } from "../../types.js";
@@ -127,6 +127,9 @@ await withWorkspace(async (root) => {
   const history = session.getMessages();
   const system = history[0]?.role === "system" ? history[0].content : "";
   check("the instructions are in the system prompt, under their own header", system.includes(PROJECT_INSTRUCTIONS_HEADER) && system.includes("Always answer in French."));
+  // A real 7B model started work on the rules themselves when they were not framed as background.
+  check("the text is framed as background, not as a task", system.includes(projectInstructionsIntro("AGENTS.md")) && projectInstructionsIntro("AGENTS.md").includes("not a task") && projectInstructionsIntro("AGENTS.md").includes("Do only what the user asks"));
+  check("the framing comes before the file's text", system.indexOf("not a task") < system.indexOf("Always answer in French."));
   check("the app's own rules come first in the system prompt", system.indexOf(PROJECT_INSTRUCTIONS_HEADER) > 200);
   // A real small model answered the rules and dropped the request when
   // the rules were a tool result after the user's message.

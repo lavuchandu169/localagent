@@ -127,6 +127,20 @@ export interface AgentSessionOptions {
  */
 export const PROJECT_INSTRUCTIONS_HEADER = "# Project instructions (from the open workspace, approved by the user)";
 
+/**
+ * The lines between the header and the file's text. They say that the
+ * rules are background. Without that, a real 7B model read "Tests run
+ * with ..." in the rules as a job: asked a question about other code,
+ * it edited the tests and installed a package.
+ */
+export function projectInstructionsIntro(fileName: string): string {
+  return (
+    `The text below is background about this project, from ${fileName}. It is not a task and not a request. ` +
+    "Do not start any work because of it. Do only what the user asks in their message, and keep to these rules while you do that. " +
+    "They do not replace the rules above."
+  );
+}
+
 /** How many helpers one task may start. Each helper makes its own model calls, so this bounds the cost. */
 export const MAX_DELEGATIONS_PER_TASK = 3;
 const SUBAGENT_MAX_TURNS = 12;
@@ -896,7 +910,7 @@ export class AgentSession {
     const truncated = skill.body.length > AgentSession.MAX_SKILL_BODY_CHARS;
     const body = truncated ? skill.body.slice(0, AgentSession.MAX_SKILL_BODY_CHARS) : skill.body;
     this.setProjectInstructions(
-      `${PROJECT_INSTRUCTIONS_HEADER}\nThese standing instructions come from ${skill.name} in the open workspace. Follow them in every task here. They do not replace the rules above or what the user asks for directly.\n\n${body}`
+      `${PROJECT_INSTRUCTIONS_HEADER}\n${projectInstructionsIntro(skill.name)}\n\n${body}`
     );
     yield { type: "tool.start", call };
     yield { type: "tool.result", call, result: { ok: true, output: { id: skill.id, name: skill.name, body, source: skill.source, truncated } } };
