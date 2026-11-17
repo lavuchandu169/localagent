@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.185 — 2026-11-17
+
+- Merge branch 'web-search'
+
 ## v0.1.0-beta.184 — 2026-11-17
 
 - Ask the model to continue when it ends with a tool call it did not run
