@@ -3,6 +3,10 @@
 All notable changes to localagent are documented here, newest first. Every
 entry corresponds to a tagged [GitHub Release](https://github.com/lavuchandu169/localagent/releases).
 
+## v0.1.0-beta.181 — 2026-11-17
+
+- Frame project instructions as background, not as a task
+
 ## v0.1.0-beta.180 — 2026-11-15
 
 - Merge branch 'subagents'
