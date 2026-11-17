@@ -172,13 +172,57 @@ export function buildCompactedHistory(plan: CompactionPlan, summary: string): Ch
   ];
 }
 
-/** Paths of the read_file calls that are still visible in a history. */
+/** A tool result shorter than this is not worth removing. */
+export const PRUNE_MIN_CHARS = 600;
+const REMOVED_RESULT_START_CHARS = 300;
+const REMOVED_MARK = '{"removed":true';
+
+/** True for a tool result that pruneOldToolResults replaced. */
+export function isRemovedResult(m: ChatMessage): boolean {
+  return m.role === "tool" && m.content.startsWith(REMOVED_MARK);
+}
+
+/**
+ * Replaces the large tool results of earlier requests with a short
+ * stub. No model call is needed, so it is immediate. A real 7B model
+ * with an 8,192-token window needed a summary call on almost every
+ * turn, and each one took about a minute.
+ *
+ * The results of the current request (everything after the last user
+ * message) stay, and so do loaded skills. The model's own replies stay
+ * word for word, so what it told the user is not lost. A stub keeps the
+ * start of the result and says how to get the data again.
+ */
+export function pruneOldToolResults(messages: ChatMessage[]): { messages: ChatMessage[]; removed: number } {
+  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
+  let removed = 0;
+  const out = messages.map((m, i) => {
+    if (i >= lastUser || m.role !== "tool" || m.name === "load_skill" || m.content.length < PRUNE_MIN_CHARS || isRemovedResult(m)) return m;
+    removed++;
+    const stub = {
+      removed: true,
+      note: `This old result was removed to save space (${m.content.length} characters). Call the tool again if you need it.`,
+      start: m.content.slice(0, REMOVED_RESULT_START_CHARS),
+    };
+    return { ...m, content: JSON.stringify(stub) };
+  });
+  return { messages: removed > 0 ? out : messages, removed };
+}
+
+/** Paths of the read_file calls whose results are still visible in a history. */
 export function readPathsIn(messages: ChatMessage[]): Set<string> {
   const paths = new Set<string>();
-  for (const m of messages) {
+  messages.forEach((m, i) => {
     for (const call of m.tool_calls ?? []) {
-      if (call.name === "read_file" && typeof call.arguments.path === "string") paths.add(call.arguments.path);
+      if (call.name !== "read_file" || typeof call.arguments.path !== "string") continue;
+      // The results follow the assistant message that made the calls.
+      let result: ChatMessage | undefined;
+      for (let j = i + 1; j < messages.length && messages[j]!.role === "tool"; j++) {
+        if (messages[j]!.tool_call_id === call.id) result = messages[j];
+      }
+      if (result && isRemovedResult(result)) continue;
+      paths.add(call.arguments.path);
     }
-  }
+  });
   return paths;
 }

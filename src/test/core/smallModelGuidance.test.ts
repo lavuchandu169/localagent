@@ -65,6 +65,7 @@ console.log("\npartialReadReminder:");
 {
   const part = partialReadReminder("src/big.js", { truncated: true, output: { startLine: 1, endLine: 103, totalLines: 352 } });
   check("a partial read gives a note with the lines and the next offset", !!part && part.includes("lines 1 to 103 of src/big.js") && part.includes("352 lines") && part.includes("offset 104"));
+  check("it lets the model answer from the part, and tells it not to send the user to read the file", !!part && part.includes("answer it") && part.includes("do not ask the user"));
   check("the note says that it is from the app, not the user", !!part && part.startsWith("[Automatic note from the app, not from the user.]"));
   check("a whole file gives no note", partialReadReminder("a.js", { truncated: false, output: { totalLines: 3 } }) === null);
 }
@@ -151,6 +152,23 @@ try {
     const read = history.findIndex((m) => m.role === "tool" && m.name === "read_file");
     check("the partial read is followed by the app's note in the conversation", read !== -1 && history[read + 1]?.role === "user" && history[read + 1]!.content.includes("of src/big.js, which has 900 lines"));
     check("the result itself ends with what is not shown", JSON.parse(history[read]!.content).output.notShown.includes("are NOT shown above"));
+  }
+
+  console.log("\nA small context frees space without a model call:");
+  {
+    await fs.writeFile(path.join(root, "src", "one.js"), Array.from({ length: 300 }, (_, i) => `const first${i} = ${i};`).join("\n"));
+    await fs.writeFile(path.join(root, "src", "two.js"), Array.from({ length: 300 }, (_, i) => `const second${i} = ${i};`).join("\n"));
+    await fs.writeFile(path.join(root, "src", "three.js"), Array.from({ length: 300 }, (_, i) => `const third${i} = ${i};`).join("\n"));
+    const { session: s, provider } = session([final("one has values"), final("two has values"), final("three has values")], { contextWindowTokens: 8192 });
+    await collect(s, "describe src/one.js");
+    const events = [...(await collect(s, "describe src/two.js")), ...(await collect(s, "describe src/three.js"))];
+    const statuses = events.filter((e) => e.type === "status").map((e: any) => e.message as string);
+    check("old tool results are removed when the context fills", statuses.some((m) => /Removed \d old tool results? to free up context/.test(m)));
+    check("no summary is asked of the model: one request for each task", provider.receivedRequests.length === 3 && !statuses.some((m) => m.includes("Compacting earlier conversation")));
+    const history = s.getMessages();
+    check("the model's earlier answers are still there word for word", history.some((m) => m.content === "one has values") && history.some((m) => m.content === "two has values"));
+    check("the current file is still there in full", history.some((m) => m.role === "tool" && m.content.includes("third0") && m.content.length > 3000));
+    check("an old file is a short stub", history.some((m) => m.role === "tool" && m.content.includes("first0") && m.content.length < 700));
   }
 
   console.log("\nThe retry after an empty reply:");

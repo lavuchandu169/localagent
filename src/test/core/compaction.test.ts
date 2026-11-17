@@ -7,6 +7,9 @@ import {
   renderTranscript,
   buildCompactedHistory,
   notesIn,
+  pruneOldToolResults,
+  isRemovedResult,
+  readPathsIn,
   MIN_MESSAGES_TO_COMPACT,
   SUMMARY_MARKER,
   SUMMARY_SYSTEM_PROMPT,
@@ -271,6 +274,36 @@ await withWorkspace(async (root) => {
   const asked = await editAfterReads(root, 1500);
   check("after compaction removes a file's content, editing that file asks for approval again", asked.includes("edit_file"));
 });
+
+console.log("\npruneOldToolResults:");
+{
+  const big = "x".repeat(6000);
+  const history: ChatMessage[] = [
+    system,
+    ...toolPair("skill_a", "load_skill", { id: "a" }, "s".repeat(3000)),
+    user("task one"),
+    ...toolPair("r1", "read_file", { path: "one.js" }, `HEAD-ONE ${big}`),
+    ...toolPair("r2", "read_file", { path: "small.js" }, "tiny"),
+    assistant("answer one: the port is 47113"),
+    user("task two"),
+    ...toolPair("r3", "read_file", { path: "two.js" }, `HEAD-TWO ${big}`),
+  ];
+  const pruned = pruneOldToolResults(history);
+  const byId = (id: string) => pruned.messages.find((m) => m.role === "tool" && m.tool_call_id === id)!;
+  check("only the large result of the earlier request is removed", pruned.removed === 1 && isRemovedResult(byId("r1")));
+  check("the stub keeps the start of the result and says how to get it again", byId("r1").content.includes("HEAD-ONE") && byId("r1").content.includes("Call the tool again") && byId("r1").content.length < 700);
+  check("a small old result stays", byId("r2").content === "tiny");
+  check("the results of the current request stay", byId("r3").content.startsWith("HEAD-TWO") && byId("r3").content.length > 6000);
+  check("a loaded skill stays", byId("skill_a").content.length === 3000);
+  check("the model's own replies and the user's messages stay word for word", pruned.messages.some((m) => m.content === "answer one: the port is 47113") && pruned.messages.filter((m) => m.role === "user").length === 2);
+  check("the number and order of messages do not change, so each result keeps its call", pruned.messages.length === history.length && pruned.messages.every((m, i) => m.role === history[i]!.role));
+  check("the input is not changed", history.find((m) => m.tool_call_id === "r1")!.content.length > 6000);
+  check("a second pass removes nothing more", pruneOldToolResults(pruned.messages).removed === 0);
+  check("a history with nothing to remove is returned as it is", pruneOldToolResults([system, user("hi"), assistant("hello")]).removed === 0);
+
+  const paths = readPathsIn(pruned.messages);
+  check("a file whose result was removed no longer counts as read", !paths.has("one.js") && paths.has("small.js") && paths.has("two.js"));
+}
 
 console.log("\nplanCompaction with a context window looks at size:");
 {

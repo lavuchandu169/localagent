@@ -35,6 +35,7 @@ import {
   estimateTokens,
   planCompaction,
   readPathsIn,
+  pruneOldToolResults,
   renderTranscript,
   SUMMARY_SYSTEM_PROMPT,
 } from "./compaction.js";
@@ -162,8 +163,10 @@ export function partialReadReminder(relPath: string, result: { truncated?: boole
   const output = result.output;
   if (!result.truncated || !output || typeof output.endLine !== "number" || typeof output.totalLines !== "number") return null;
   return (
-    `[Automatic note from the app, not from the user.] You have only lines ${output.startLine ?? 1} to ${output.endLine} of ${relPath}, which has ${output.totalLines} lines. ` +
-    `Before you count, list or describe the whole file, read the rest with read_file and offset ${output.endLine + 1}. If you answer from this part, say that it is only a part.`
+    `[Automatic note from the app, not from the user.] You have lines ${output.startLine ?? 1} to ${output.endLine} of ${relPath}, which has ${output.totalLines} lines. ` +
+    "If the request can be answered from this part, answer it. " +
+    `If it needs the whole file (a count, a full list), call read_file yourself with offset ${output.endLine + 1} for the next part: do not ask the user to do that. ` +
+    "A number that you give from only this part must be called a part, not the total."
   );
 }
 
@@ -519,8 +522,17 @@ export class AgentSession {
       if (estimateTokens(this.messages, this.opts.tools.toSchema()) <= window * COMPACTION_THRESHOLD) return false;
       if (this.compactionFailedAtLength >= 0 && this.messages.length < this.compactionFailedAtLength + 4) return false;
     }
+    // First the step that needs no model call: drop the large tool
+    // results of earlier requests. Often that is enough.
+    const pruned = pruneOldToolResults(this.messages);
+    if (pruned.removed > 0) {
+      this.messages = pruned.messages;
+      this.forgetUnseenReads();
+      yield { type: "status", message: `Removed ${pruned.removed} old tool result${pruned.removed === 1 ? "" : "s"} to free up context.` };
+      if (!force && estimateTokens(this.messages, this.opts.tools.toSchema()) <= window * COMPACTION_THRESHOLD) return true;
+    }
     const plan = planCompaction(this.messages, window);
-    if (!plan) return false;
+    if (!plan) return pruned.removed > 0;
 
     yield { type: "status", message: "Compacting earlier conversation to free up context..." };
     let summary = "";
@@ -547,17 +559,20 @@ export class AgentSession {
     if (!summary) {
       this.compactionFailedAtLength = this.messages.length;
       yield { type: "status", message: "Could not compact the conversation. Continuing with the full history." };
-      return false;
+      return pruned.removed > 0;
     }
 
     this.messages = buildCompactedHistory(plan, summary);
     this.compactionFailedAtLength = -1;
-    // A file whose content was summarised away no longer counts as read,
-    // so the read-before-write check applies to it again.
-    const stillVisible = readPathsIn(this.messages);
-    for (const p of [...this.readPaths]) if (!stillVisible.has(p)) this.readPaths.delete(p);
+    this.forgetUnseenReads();
     yield { type: "status", message: "Compacted earlier conversation to free up context." };
     return true;
+  }
+
+  /** A file whose content is no longer in the history does not count as read, so the read-before-write check applies to it again. */
+  private forgetUnseenReads(): void {
+    const stillVisible = readPathsIn(this.messages);
+    for (const p of [...this.readPaths]) if (!stillVisible.has(p)) this.readPaths.delete(p);
   }
 
   /**
@@ -570,7 +585,8 @@ export class AgentSession {
     const before = this.messages.length;
     const compacted = yield* this.compactIfNeeded(true);
     if (compacted) {
-      yield { type: "done", success: true, summary: `Compacted ${before} messages into ${this.messages.length}.` };
+      const summary = this.messages.length < before ? `Compacted ${before} messages into ${this.messages.length}.` : "Removed old tool results to free up context.";
+      yield { type: "done", success: true, summary };
     } else if (this.cancelled || this.stopRequested) {
       yield { type: "done", success: false, summary: "Stopped." };
     } else if (this.compactionFailedAtLength === this.messages.length) {
