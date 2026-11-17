@@ -269,7 +269,8 @@ export async function startSession(
   const provider = (deps.providerFactory ?? buildProvider)(config.provider, deps.onDownloadProgress, deps.signal);
   const health = await provider.healthCheck();
   if (!health.ok) {
-    throw new Error(`Could not start provider "${provider.id}": ${health.error}`);
+    // Plain words for the user: the provider's internal id ("embedded-llama") says nothing to them.
+    throw new Error(`Could not start the model. ${health.error}`);
   }
 
   const sessionId = deps.resume?.sessionId ?? crypto.randomUUID();

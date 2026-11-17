@@ -79,6 +79,7 @@ import {
   ONBOARDING_SEEN_KEY,
 } from "./onboarding.js";
 import { MODE_LABELS } from "../modeLabels.js";
+import { ipcErrorText } from "./ipcErrorText.js";
 import { EMBEDDED_MODELS, DEFAULT_EMBEDDED_MODEL, describeEmbeddedModel, type EmbeddedModelId, type ModelCategory } from "../../models.js";
 import type { HfSearchResult } from "../modelSearch.js";
 
@@ -1978,7 +1979,7 @@ async function beginSession(tab: TabState, resume?: ResumePayload): Promise<void
       // main.ts's agent:start-session handler already turns that specific
       // case into the plain "Download cancelled." message before it ever
       // reaches the renderer, so this can just show whatever it received.
-      startError.textContent = err?.message ?? String(err);
+      startError.textContent = ipcErrorText(err);
       startSessionBtn.disabled = false;
       startSessionBtn.textContent = "Start session";
       editSettingsBtn.hidden = true;
